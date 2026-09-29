@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codeinsight"
+version = "0.1.0"
+description = "C言語・Pythonを中心としたコードリーディング支援ソフトウェア"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "UNLICENSED" }
+dependencies = [
+    "libclang>=18.1.1",
+    "pathspec>=0.12.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+codeinsight = "codeinsight.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codeinsight"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

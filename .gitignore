@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+
+# 仮想環境
+.venv/
+venv/
+
+# CodeInsightの解析結果データ(既定では ~/.codeinsight に保存されるが、念のため)
+.codeinsight/
