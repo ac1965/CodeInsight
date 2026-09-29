@@ -37,6 +37,8 @@ C言語およびPythonを主要な対象言語とし、静的解析によって�
 * ソースコードと解析結果の相互ナビゲーション
 * 根拠付きのAIコード解説
 
+実践的な検証対象として、以下の開発中リポジトリの解析にも対応する（詳細は [AGENTS.md §2.3](AGENTS.md#23-実プロジェクトでの解析対象検証用) を参照）。現在のスコープはC言語・Pythonのため、[PownForge](https://github.com/ac1965/PownForge)・[narou_dl](https://github.com/ac1965/narou_dl)のPython部分が対象で、Go製の[RiskForge](https://github.com/ac1965/RiskForge)とEmacs Lisp製の[.emacs.d](https://github.com/ac1965/.emacs.d)は将来の言語追加後の対象候補です。
+
 ## アーキテクチャ概要
 
 ```text
