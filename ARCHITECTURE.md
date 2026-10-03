@@ -64,7 +64,11 @@ src/codeinsight/
 ├── presentation/      表示・出力形式
 │   ├── graph_export.py    Mermaid / DOT / JSON への出力
 │   ├── html_viewer.py     自己完結型のローカルHTMLビューアー
-│   └── structure_view.py  ディレクトリ・ファイル・シンボルの階層表示
+│   ├── structure_view.py  ディレクトリ・ファイル・シンボルの階層表示
+│   ├── labels.py          解決状態の表示ラベル（CLI・TUIで共用）
+│   ├── tui_model.py       TUIの状態とキー操作（cursesに依存しない）
+│   ├── tui_view.py        TUIの画面の組み立て（描画命令を返す純粋関数）
+│   └── tui.py             cursesによる入出力（薄い層）
 │
 ├── ai/                AI解説（解析結果を入力に、解説を生成・検証する。解析器の代替にはしない）
 │   ├── config.py          AIConfig（送信の許可・送信先・APIキーの秘匿）、設定の解決（コマンドライン>環境変数>設定ファイル）
@@ -81,7 +85,7 @@ src/codeinsight/
 ├── bootstrap.py       標準の解析アダプターの組み立て（CLI・将来のGUIで共用）
 └── cli/               コマンドラインインターフェース（責務ごとのモジュール。依存は common ← project ← reading、explore・graph・ai_commands は common のみ、parser が全てを束ねる）
     ├── common.py          共通部品（エラー・出力・プロジェクト選択・表示の整形）
-    ├── explore.py         探索・参照（analyze / status / symbols / tree / search / def / refs / callers / trace / path / deps / show / describe / overview / unresolved）
+    ├── explore.py         探索・参照（tui / analyze / status / symbols / tree / search / def / refs / callers / trace / path / deps / show / describe / overview / unresolved）
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── graph.py           グラフ出力（graph）

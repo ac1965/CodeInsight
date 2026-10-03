@@ -26,6 +26,7 @@ from codeinsight.cli.explore import (
     cmd_symbols,
     cmd_trace,
     cmd_tree,
+    cmd_tui,
     cmd_unresolved,
     reference_command,
 )
@@ -142,6 +143,8 @@ def build_parser() -> argparse.ArgumentParser:
     describe.add_argument("name", help="名前または修飾名")
     describe.add_argument("--file")
     describe.add_argument("--members", type=int, default=30, help="表示するメンバ数の上限")
+
+    add("tui", "端末で構造・ソース・呼び出し関係を行き来する（対話的。保存済みの解析結果を読むだけ）", cmd_tui, ("text",))
 
     overview = add("overview", "リポジトリの全体像（言語・主要モジュール・エントリポイント・中心となる関数）", cmd_overview)
     overview.add_argument("--top", type=int, default=10, help="各ランキングの表示件数")

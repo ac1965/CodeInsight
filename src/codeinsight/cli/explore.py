@@ -473,6 +473,22 @@ def cmd_describe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    """端末の中で、構造・ソース・呼び出し関係を行き来する（保存済みの解析結果を読むだけ）。"""
+
+    import sys
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise CliError("tui は端末（対話的な環境）でのみ使えます。", 2)
+    from codeinsight.presentation.tui import run
+    from codeinsight.presentation.tui_model import TuiModel
+
+    repository, project, index, stale = prepare_read(args)
+    navigation = NavigationService(repository)
+    run(TuiModel(navigation, project, index, set(stale)))
+    return 0
+
+
 def cmd_overview(args: argparse.Namespace) -> int:
     repository, project, index, stale = prepare_read(args)
     overview = OverviewService(NavigationService(repository)).build(index, args.top)

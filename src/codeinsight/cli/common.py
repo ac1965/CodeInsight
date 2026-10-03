@@ -15,19 +15,10 @@ from codeinsight.application.navigation_service import DependencyHit, ReferenceH
 from codeinsight.application.search_service import SymbolHit
 from codeinsight.domain import Confidence, FileFreshness, Project, ResolutionStatus, SymbolKind
 from codeinsight.infrastructure import AnalysisRepository, default_db_path
+from codeinsight.presentation.labels import STATIC_NOTE, STATUS_LABEL, status_text  # noqa: F401  (他のCLIモジュールが共通部品として参照する)
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
-
-STATUS_LABEL = {
-    ResolutionStatus.RESOLVED: "解決",
-    ResolutionStatus.UNRESOLVED: "未解決",
-    ResolutionStatus.AMBIGUOUS: "曖昧",
-    ResolutionStatus.EXTERNAL: "外部",
-}
-
-
-STATIC_NOTE = "注意: 静的に確認できた関係であり、実行順序や実際に通る経路を示すものではありません。"
 
 
 class CliError(Exception):
@@ -161,11 +152,6 @@ def dependency_dict(hit: DependencyHit) -> dict:
         "line": d.evidence_location.start_line,
         "note": d.note,
     }
-
-
-def status_text(status: ResolutionStatus, confidence_inferred: bool) -> str:
-    label = STATUS_LABEL[status]
-    return f"{label}(推定)" if status == ResolutionStatus.RESOLVED and confidence_inferred else label
 
 
 class NoteTable:

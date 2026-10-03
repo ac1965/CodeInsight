@@ -14,6 +14,7 @@ class TreeNode:
     path: str | None = None
     line: int | None = None
     status: str | None = None  # 解析に失敗したファイルなどの注記
+    symbol_id: str | None = None  # シンボルのノードのみ（呼び出し関係などをたどるため）
     children: list[TreeNode] = field(default_factory=list)
 
 
@@ -93,7 +94,7 @@ def _attach_symbols(
     nodes: dict[str, TreeNode] = {}
     for symbol in ordered:
         if symbol.kind != SymbolKind.MODULE:  # ファイルノードと重複するため統合
-            nodes[symbol.symbol_id] = TreeNode(symbol.name, symbol.kind.value, path, symbol.start_line)
+            nodes[symbol.symbol_id] = TreeNode(symbol.name, symbol.kind.value, path, symbol.start_line, symbol_id=symbol.symbol_id)
     module_ids = {s.symbol_id for s in ordered if s.kind == SymbolKind.MODULE}
     for symbol in ordered:
         node = nodes.get(symbol.symbol_id)
