@@ -32,7 +32,8 @@ def test_make_reading_produces_the_reading_materials_without_touching_the_target
 
     assert result.returncode == 0, result.stdout + result.stderr
     for name in ("README.md", "overview.txt", "architecture.txt", "boundaries.txt", "externals.txt", "analysis/unresolved.txt", "graphs/call.html", "graphs/arch.mmd"):
-        assert (out / name).is_file(), name
+        logs = "\n".join(f"--- {f.name}\n{f.read_text(errors='replace')}" for f in sorted((out / "logs").glob("*"))) if (out / "logs").is_dir() else ""
+        assert (out / name).is_file(), f"{name}\n{result.stdout}\n{result.stderr}\n{logs}"
     assert list((out / "functions").glob("*.txt")), "主要な関数の読解カードがある"
     index = (out / "README.md").read_text(encoding="utf-8")
     assert "この資料が対応している範囲（言語別）" in index and "実行順序や実際に通る経路を示すものではありません" in index
