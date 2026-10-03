@@ -9,6 +9,7 @@ _EXTENSION_TO_LANGUAGE: dict[str, Language] = {
     ".h": Language.C,
     ".py": Language.PYTHON,
     ".pyi": Language.PYTHON,
+    ".el": Language.ELISP,
 }
 
 

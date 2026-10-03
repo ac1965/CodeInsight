@@ -10,6 +10,7 @@ class Language(enum.Enum):
 
     C = "c"
     PYTHON = "python"
+    ELISP = "elisp"
     UNKNOWN = "unknown"
 
 

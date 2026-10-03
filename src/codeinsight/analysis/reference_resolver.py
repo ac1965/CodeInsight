@@ -81,6 +81,18 @@ class ReferenceResolver:
                 self._by_usr[symbol.usr].append(symbol)
             elif language == Language.PYTHON:
                 self._py_by_qname[symbol.qualified_name].append(symbol)
+        self._el_by_name: dict[str, list[Symbol]] = defaultdict(list)
+        self._el_modules: dict[str, list[Symbol]] = defaultdict(list)
+        self._el_structs: dict[str, list[Symbol]] = defaultdict(list)
+        for symbol in symbols:
+            if self._language_of(symbol.file_id) != Language.ELISP:
+                continue
+            if symbol.kind == SymbolKind.MODULE:
+                self._el_modules[symbol.name].append(symbol)
+            else:
+                self._el_by_name[symbol.name].append(symbol)
+                if symbol.kind == SymbolKind.STRUCT:
+                    self._el_structs[symbol.name].append(symbol)
         self._py_suffix_index: dict[str, list[Symbol]] | None = None
         self._py_modules = {
             qn: [s for s in group if s.kind == SymbolKind.MODULE]
@@ -166,6 +178,21 @@ class ReferenceResolver:
                 self._set(dependency, ResolutionStatus.RESOLVED)
         elif language == Language.PYTHON:
             self._resolve_python_dependency(dependency)
+        elif language == Language.ELISP:
+            self._resolve_elisp_dependency(dependency)
+
+    def _resolve_elisp_dependency(self, dependency: Dependency) -> None:
+        """`(require 'feature)` を、featureと同じ名前のファイルに結び付ける（`(provide)` の内容は確認していない）。"""
+
+        feature = (dependency.target_key or "").removeprefix("el:feature:")
+        modules = self._el_modules.get(feature, [])
+        if len(modules) == 1:
+            dependency.target_file_id = modules[0].file_id
+            self._set(dependency, ResolutionStatus.RESOLVED, dependency.note or "featureとファイル名の一致による解決（provide の内容は確認していない）", Confidence.INFERRED)
+        elif len(modules) > 1:
+            self._set(dependency, ResolutionStatus.AMBIGUOUS, "同名のファイルが複数あり、一意に決まらない")
+        else:
+            self._set(dependency, ResolutionStatus.EXTERNAL, "プロジェクト外（Emacs本体・他のパッケージ）と考えられる")
 
     def _resolve_python_dependency(self, dependency: Dependency) -> None:
         name = dependency.target_key or ""
@@ -221,6 +248,32 @@ class ReferenceResolver:
             self._resolve_c(reference)
         elif language == Language.PYTHON:
             self._resolve_python(reference)
+        elif language == Language.ELISP:
+            self._resolve_elisp(reference)
+
+    def _resolve_elisp(self, reference: Reference) -> None:
+        """Emacs Lisp は名前空間が全体で1つ。名前の一致で解決し、動的な置き換えがありうるため「推定」とする。"""
+
+        name = (reference.target_key or "").split(":", 2)[-1]
+        note = "名前の一致による解決。advice・再定義・マクロ展開で、実際の呼び出し先が異なる可能性がある"
+        if reference.reference_kind == ReferenceKind.VARIABLE_REF:
+            matches = [s for s in self._el_by_name.get(name, []) if s.kind == SymbolKind.GLOBAL_VARIABLE]
+            note = "名前の一致による解決。let・引数による局所束縛や、動的束縛で、別の変数を指す可能性がある"
+        else:
+            matches = [s for s in self._el_by_name.get(name, []) if s.kind in (SymbolKind.FUNCTION, SymbolKind.MACRO)]
+            if not matches:  # cl-defstruct が生成する関数（make-X・copy-X・X-p・アクセサ X-slot）
+                for struct_name, structs in self._el_structs.items():
+                    if name in (f"make-{struct_name}", f"copy-{struct_name}", f"{struct_name}-p") or name.startswith(f"{struct_name}-"):
+                        matches = structs
+                        note = f"cl-defstruct {struct_name} が生成する関数と考えられる（名前からの推定）"
+                        break
+        if len(matches) == 1:
+            self._set(reference, ResolutionStatus.RESOLVED, note, Confidence.INFERRED)
+            reference.target_symbol_id = matches[0].symbol_id
+        elif len(matches) > 1:
+            self._set(reference, ResolutionStatus.AMBIGUOUS, "同名の定義が複数ある（再定義・複数の cl-defmethod・条件付きの定義）")
+        else:
+            self._set(reference, ResolutionStatus.EXTERNAL, "プロジェクト内に定義がない（Emacs本体・他のパッケージ、または動的に定義）")
 
     def _resolve_c(self, reference: Reference) -> None:
         candidates = self._by_usr.get(reference.target_key or "", [])

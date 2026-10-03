@@ -90,7 +90,7 @@ def stale_file_paths(project: Project, index: ProjectIndex) -> list[str]:
     )
 
 
-_LANGUAGE_NAMES = {Language.PYTHON: "Python", Language.C: "C"}
+_LANGUAGE_NAMES = {Language.PYTHON: "Python", Language.C: "C", Language.ELISP: "Emacs Lisp"}
 
 
 def not_covered(index: ProjectIndex, covered: tuple[Language, ...] = (Language.PYTHON,)) -> dict[str, int]:

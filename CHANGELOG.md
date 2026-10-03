@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## Emacs Lispアダプター（未リリース）
+
+* `.el` のシンボル・呼び出し・`require` の依存を抽出（`analysis/elisp_analyzer.py`）。解決は名前の一致による推定として、確定と区別する。
+* 実際のEmacsを基準にした検証: 1,678ファイルで、定義の再現率 99.97%、解析失敗 0件。
+* CodeReading の括弧追跡の考え方を流用（利用者の許可あり）。
+
 ## ライセンス（未リリース）
 
 * GPL-3.0-or-later を採用し、`LICENSE`（GPLv3全文）を追加。`pyproject.toml` の `UNLICENSED` を置き換えた。

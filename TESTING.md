@@ -23,6 +23,7 @@ pytest -v
 | ファイル | 件数 | 対象 | 種別 |
 |---|---|---|---|
 | `test_language_detection.py` | 3 | 拡張子ベースの言語識別 | 単体 |
+| `test_elisp_analyzer.py` | 15 | ElispAnalyzer（文字リテラル、定義の抽出、局所変数・クォートの除外、マクロのテンプレート、括弧不整合の失敗、非UTF-8、推定/曖昧/外部の解決） | 単体・結合 |
 | `test_python_analyzer.py` | 4 | PythonAnalyzer（モジュール/クラス/関数/デコレータ/構文エラー） | 単体 |
 | `test_c_analyzer.py` | 11 | CAnalyzer（関数/構造体/typedef/マクロ/ローカル変数/構文エラー） | 単体 |
 | `test_file_scanner.py` | 6 | FileScanner（走査、既定除外、.gitignore、symlink循環・脱出防止） | 単体 |
