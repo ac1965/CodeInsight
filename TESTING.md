@@ -165,6 +165,24 @@ codeinsight analyze /tmp/gcc-src/libiberty --compile-commands /tmp/gcc-build/lib
 * 呼び出し先の終了の伝播: libiberty で `xmalloc →(L151) xmalloc_failed →(L139) xexit → exit()`（メモリ不足で終了する既知の経路）を示し、`xstrdup`・`buildargv` など呼び出し元にも連鎖が反映される。1関数あたり約0.2秒。
 * 検証していないこと: emacs など別のコードベースでの精度、値や条件を考慮した解析。
 
+### 実験: GCCの静的アナライザ（`-fanalyzer`、SARIF出力）
+
+GCCの経路考慮の静的アナライザを、`risks` の補助にできるかを調べた小さな実験（組み込みはしていない）。対象は gcc の libiberty（`configure` + `bear` で作った記録の70ファイル）。GCC 16.2（Homebrew）で、CodeInsight が正規化したコンパイル引数（相対パス解決・出力/警告オプション除去）に `-fanalyzer -fdiagnostics-format=sarif-file -c -o /dev/null` を足して、`/tmp` の別ディレクトリで実行した。
+
+| 観点 | 結果 |
+| --- | --- |
+| 出力形式 | SARIF 2.1.0（構造化JSON）。ルールID（`-Wanalyzer-null-dereference` など）、位置、メッセージ、問題に至る経路（`codeFlows`） |
+| 自作テスト（4つの欠陥） | null参照・二重解放・解放後の使用は検出。**メモリリークは検出されなかった**（網羅的ではない） |
+| libiberty（70ファイル） | 約17秒（最長4秒）、SARIFが得られなかったファイル 0。検出 9件（null参照 7、境界外 1、非推奨 1） |
+| 精度（3件を実ソースで確認） | `obstack.c`: 失敗ハンドラが戻らないという契約を知らず、誤検出寄り。`getopt.c`: 引数がNULLでないという契約を知らず、誤検出寄り。`strerror.c`: 初期化失敗時の「起こりうる」経路で、断定できない |
+
+評価:
+
+* 条件分岐をまたぐ**経路つきの手がかり**が得られる。これは流れ非依存の近似（自作の `risks`）にはできない。
+* ただし、検出は少なく、誤検出を含む。**断定には使えない**（「手がかり」「推定」として、経路を根拠に示す扱い）。
+* GCCをコンパイルとして対象に対して実行する。`reading-c-build` と同様に、**利用者の明示的な許可（opt-in）が必要**（AGENTS.md §1.1-4）。出力は対象の外に置く。
+* 組み込みの案: `risks --gcc-analyzer`（許可つき）で、アナライザの診断を `gcc-analyzer` というルールの手がかりとして加え、経路を根拠に併記する。GCCが無い環境では何もしない。コンパイル設定が必要なため、`compile_commands.json` がある場合に限る。
+
 ### 実機とCIで見つかった不具合と、再発防止（回帰テスト）
 
 | # | 見つかった場所 | 不具合 | 修正 | 回帰テスト |
