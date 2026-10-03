@@ -64,3 +64,8 @@ def python_doc_dir() -> Path:
 @pytest.fixture
 def c_doc_dir() -> Path:
     return FIXTURES_DIR / "c_doc"
+
+
+@pytest.fixture
+def python_flow_dir() -> Path:
+    return FIXTURES_DIR / "python_flow"

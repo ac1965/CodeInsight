@@ -10,20 +10,25 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from codeinsight.analysis.call_graph import CallNode, Direction
+from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application import (
     AmbiguousSymbolError,
     AnalysisCoordinator,
     AnalysisProgress,
     DescribeService,
+    FlowAnalysisError,
+    FlowService,
     FreshnessService,
     MatchMode,
     NavigationService,
     OverviewService,
     ProjectIndex,
     ProjectManager,
+    RiskService,
     SearchService,
     SymbolNotFoundError,
 )
+from codeinsight.application.risk_service import RULES as RISK_RULES
 from codeinsight.application.graph_builder import GraphBuilder, GraphModel, Traversal
 from codeinsight.application.navigation_service import DependencyHit, ReferenceHit
 from codeinsight.application.search_service import SymbolHit
@@ -816,6 +821,250 @@ def _cmd_overview(args: argparse.Namespace) -> int:
     return 0
 
 
+def _flow_service(args: argparse.Namespace):
+    repository, project, index, stale = _prepare(args)
+    navigation = NavigationService(repository)
+    return project, index, navigation, FlowService(navigation), stale
+
+
+def _flow_symbol(args, navigation, index, project):
+    return _resolve(args, navigation, index, args.name, project).symbol
+
+
+def _cmd_flow(args: argparse.Namespace) -> int:
+    project, index, navigation, service, stale = _flow_service(args)
+    symbol = _flow_symbol(args, navigation, index, project)
+    try:
+        summary = service.control_flow(project, index, symbol)
+    except FlowAnalysisError as exc:
+        raise CliError(str(exc)) from exc
+    path = index.path_of(symbol.file_id)
+    if args.format == "json":
+        _emit_json(
+            {
+                "symbol": symbol.qualified_name,
+                "path": path,
+                "metrics": summary.metrics,
+                "items": [vars(i) for i in summary.items],
+                "handlers": [vars(h) for h in summary.handlers],
+                "raises": [{"line": r.line, "exception": r.exception} for r in summary.raises],
+                "hints": [vars(h) for h in summary.hints],
+            }
+        )
+        return 0
+    m = summary.metrics
+    print(f"{safe(symbol.qualified_name)}  ({symbol.kind.value}, {safe(path)}:{symbol.start_line}-{symbol.end_line}, {m['lines']}行)")
+    print("制御構造（行番号付き。ネストはインデント）:")
+    for item in summary.items:
+        detail = f"  {safe(item.detail)}" if item.detail else ""
+        print(f"  L{item.line:<5}{'  ' * item.depth}{item.kind}{detail}")
+    if not summary.items:
+        print("  （分岐・ループ・例外処理・return等はありません）")
+    print(
+        f"指標: 分岐 {m['branches']}, ループ {m['loops']}, try {m['try_blocks']}/except {m['handlers']}, "
+        f"raise {m['raises']}, return {m['returns']}, await {m['awaits']}, with {m['with_blocks']}, "
+        f"循環的複雑度 {m['cyclomatic']}, 最大ネスト {m['max_depth']}"
+    )
+    if summary.handlers:
+        print("例外処理:")
+        for h in summary.handlers:
+            traits = []
+            if h.swallowed:
+                traits.append("握りつぶし（何もしない）")
+            if h.reraises:
+                traits.append("再送出あり")
+            if h.logs:
+                traits.append("ログ/表示あり")
+            if "<bare>" in h.types:
+                traits.append("型の指定なし")
+            print(f"  L{h.line:<5} except {safe(', '.join(h.types))}  {' / '.join(traits) or '処理あり'}")
+    if summary.hints:
+        print("リトライ・タイムアウト・待機の手がかり（名前・構文からの推定）:")
+        labels = {"retry": "リトライ", "timeout": "タイムアウト指定", "sleep": "待機"}
+        for hint in summary.hints:
+            print(f"  L{hint.line:<5} {labels[hint.kind]}: {safe(hint.detail)}")
+    _warn_stale(stale)
+    print("※ 構文から確認できた構造です。実行時にどの経路を通るかは示しません。", file=sys.stderr)
+    return 0
+
+
+def _print_trace(trace, prefix: str = "", top: bool = True) -> None:
+    if top:
+        role = "引数" if trace.is_param else "変数"
+        print(f"{role} {safe(trace.name)}  ({safe(trace.symbol.qualified_name)}, {safe(trace.path)})")
+        defs = "; ".join(
+            f"L{d.line} " + ("引数" if d.how == "param" else f"{d.how}" + (f" ← {safe(d.origin)}" if d.origin else ""))
+            for d in trace.definitions
+        )
+        print(f"{prefix}  定義: {defs or '（なし）'}")
+        print(f"{prefix}  使用: {', '.join('L' + str(n) for n in trace.uses) or '（なし）'}")
+    for position, flow in enumerate(trace.flows):
+        last = position == len(trace.flows) - 1
+        status = f"  [{safe(flow.status)}]" if flow.status else ""
+        print(f"{prefix}{'└── ' if last else '├── '}L{flow.line} {safe(flow.description)}{status}")
+        if flow.child is not None:
+            child = flow.child
+            print(f"{prefix}{'    ' if last else '│   '}   ▸ {safe(child.symbol.qualified_name)} の {safe(child.name)}"
+                  f"（定義 {len(child.definitions)}、使用 {len(child.uses)}）")
+            _print_trace(child, prefix + ("    " if last else "│   ") + "   ", top=False)
+
+
+def _print_upstream(nodes, prefix: str = "") -> None:
+    for position, node in enumerate(nodes):
+        last = position == len(nodes) - 1
+        print(f"{prefix}{'└── ' if last else '├── '}{safe(node.path)}:{node.line}  {safe(node.caller.qualified_name)}  ← {safe(node.argument)}")
+        _print_upstream(node.children, prefix + ("    " if last else "│   "))
+
+
+def _cmd_dataflow(args: argparse.Namespace) -> int:
+    project, index, navigation, service, stale = _flow_service(args)
+    symbol = _flow_symbol(args, navigation, index, project)
+    try:
+        if args.variable is None:
+            variables = service.variables(project, index, symbol)
+            print(f"{safe(symbol.qualified_name)} の変数（定義数 / 使用数 / 伝播先の数）:")
+            for name, info in sorted(variables.items(), key=lambda kv: (not kv[1].is_param, min((d.line for d in kv[1].definitions), default=0), kv[0])):
+                role = "引数" if info.is_param else "変数"
+                print(f"  {role} {safe(name):<20} 定義 {len(info.definitions):>2} / 使用 {len(set(info.uses)):>2} / 伝播 {len(info.flows):>2}")
+            print("変数名を指定すると、値の行き先をたどります（例: dataflow <シンボル> <変数名>）。")
+            _warn_stale(stale)
+            return 0
+        trace = service.trace_variable(project, index, symbol, args.variable, args.depth)
+        _print_trace(trace)
+        if args.upstream:
+            if not trace.is_param:
+                raise CliError(f"--upstream は引数にのみ使えます: {safe(args.variable)}")
+            print("\n呼び出し元から渡される実引数（解決済みの呼び出しのみ）:")
+            upstream = service.upstream(project, index, symbol, args.variable, args.depth)
+            _print_upstream(upstream)
+            if not upstream:
+                print("  確認できる呼び出し元がありません")
+    except FlowAnalysisError as exc:
+        raise CliError(str(exc)) from exc
+    _warn_stale(stale)
+    print("※ 実行順序・条件を考慮しない近似です。値そのものや、動的な呼び出しの先は追えません。", file=sys.stderr)
+    return 0
+
+
+def _cmd_state(args: argparse.Namespace) -> int:
+    project, index, navigation, service, stale = _flow_service(args)
+    symbol = _flow_symbol(args, navigation, index, project)
+    try:
+        if symbol.kind == SymbolKind.CLASS:
+            accesses = service.class_state(project, index, symbol)
+        elif symbol.kind == SymbolKind.MODULE:
+            writes = service.module_state(project, index, symbol)
+            print(f"{safe(symbol.qualified_name)}: 関数内から書き換えられるモジュール変数")
+            for w in writes:
+                how = "global宣言で再代入" if w.mode == "global_assign" else "破壊的メソッドで変更"
+                print(f"  L{w.line:<5} {safe(w.name)}  {safe(w.function)}() が{how}")
+            if not writes:
+                print("  確認できませんでした")
+            _warn_stale(stale)
+            return 0
+        else:
+            raise CliError(f"state はクラスまたはモジュールに使います（{symbol.kind.value}）。")
+    except FlowAnalysisError as exc:
+        raise CliError(str(exc)) from exc
+    by_attribute: dict[str, list[fa.StateAccess]] = defaultdict(list)
+    for access in accesses:
+        by_attribute[access.attribute].append(access)
+    if args.format == "json":
+        _emit_json({a: [vars(x) for x in items] for a, items in by_attribute.items()})
+        return 0
+    print(f"{safe(symbol.qualified_name)} の状態（self.<属性> の書き込み・変更・読み取り）")
+    for attribute, items in sorted(by_attribute.items(), key=lambda kv: min(a.line for a in kv[1])):
+        writers = [a for a in items if a.mode in ("write", "mutate")]
+        outside_init = {a.method for a in writers if a.method != "__init__"}
+        traits = "状態が変化する" if outside_init else ("初期化のみ" if writers else "読み取りのみ（外部から設定される可能性）")
+        print(f"\n  {safe(attribute)}  — {traits}")
+        for mode, label in (("write", "書き込み"), ("mutate", "変更(破壊的メソッド/添字代入)"), ("read", "読み取り")):
+            group = [a for a in items if a.mode == mode]
+            if group:
+                methods = sorted({(a.method, a.line) for a in group}, key=lambda x: x[1])
+                print(f"    {label}: " + ", ".join(f"{safe(m)}:L{n}" for m, n in methods[:8]) + (" …" if len(methods) > 8 else ""))
+    _warn_stale(stale)
+    return 0
+
+
+def _cmd_exceptions(args: argparse.Namespace) -> int:
+    project, index, navigation, service, stale = _flow_service(args)
+    symbol = _flow_symbol(args, navigation, index, project)
+    try:
+        report = service.exceptions(project, index, symbol, args.depth)
+    except FlowAnalysisError as exc:
+        raise CliError(str(exc)) from exc
+    if args.format == "json":
+        _emit_json(
+            {
+                "symbol": symbol.qualified_name,
+                "propagated": [
+                    {
+                        "exception": e.exception,
+                        "raised_in": e.raised_in.qualified_name,
+                        "line": e.raised_line,
+                        "chain": [{"symbol": s.qualified_name, "line": n} for s, n in e.chain],
+                    }
+                    for e in report.propagated
+                ],
+                "unresolved_calls": report.unresolved_calls,
+            }
+        )
+        return 0
+    print(f"{safe(symbol.qualified_name)} から呼び出し元へ出うる例外（明示的な raise のみ、深さ {args.depth}）:")
+    for exc in sorted(report.propagated, key=lambda e: (e.exception, e.raised_line)):
+        origin = index.path_of(exc.raised_in.file_id)
+        print(f"  {safe(exc.exception)}   raise: {safe(origin)}:{exc.raised_line}  {safe(exc.raised_in.qualified_name)}")
+        if exc.chain:
+            route = safe(symbol.qualified_name) + "".join(
+                f" →(L{line}) {safe(callee.qualified_name)}" for callee, line in exc.chain
+            )
+            print(f"      経路: {route}")
+    if not report.propagated:
+        print("  確認できませんでした")
+    if report.caught_inside:
+        print("関数内で捕捉される raise:")
+        for line, name, types in report.caught_inside:
+            print(f"  L{line:<5} {safe(name)}  → except {safe(', '.join(types))}")
+    swallowed = [h for h in report.handlers if h.swallowed]
+    if swallowed:
+        print("握りつぶしている例外処理:")
+        for h in swallowed:
+            print(f"  L{h.line:<5} except {safe(', '.join(h.types))}")
+    if report.unresolved_calls:
+        print(f"※ 呼び出し先を特定できない呼び出しが {report.unresolved_calls}件あり、そこから出る例外は追えていません。", file=sys.stderr)
+    print("※ 組み込み・外部ライブラリが送出する例外は含みません。", file=sys.stderr)
+    _warn_stale(stale)
+    return 0
+
+
+def _cmd_risks(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    rules = set(args.rule) if args.rule else None
+    findings, skipped = RiskService().scan(project, index, rules)
+    order = ("low", "medium", "high")
+    findings = [f for f in findings if order.index(f.severity) >= order.index(args.min_severity)]
+    if args.format == "json":
+        _emit_json({"skipped": skipped, "findings": [{**vars(f), "message": f.message} for f in findings]})
+        return 0
+    counts = Counter(f.rule for f in findings)
+    print(f"潜在的な問題の手がかり {len(findings)}件（バグの断定ではありません。意図的な実装の場合があります）")
+    grouped: dict[str, list] = defaultdict(list)
+    for f in findings:
+        grouped[f.rule].append(f)
+    for rule, items in sorted(grouped.items(), key=lambda kv: (-order.index(kv[1][0].severity), -len(kv[1]))):
+        print(f"\n■ [{items[0].severity}] {rule}（{counts[rule]}件） — {items[0].message}")
+        for f in items[: args.limit]:
+            where = f"  in {safe(f.symbol)}" if f.symbol else ""
+            detail = f"  {safe(f.detail)}" if f.detail else ""
+            print(f"  {safe(f.path)}:{f.line}{where}{detail}")
+        if len(items) > args.limit:
+            print(f"  … ほか {len(items) - args.limit}件（--limit / --all）")
+    if skipped:
+        print(f"\n解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
+    return 0
+
+
 def _cmd_unresolved(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
     navigation = NavigationService(repository)
@@ -1022,6 +1271,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     overview = add("overview", "リポジトリの全体像（言語・主要モジュール・エントリポイント・中心となる関数）", _cmd_overview)
     overview.add_argument("--top", type=int, default=10, help="各ランキングの表示件数")
+
+    flow = add("flow", "関数の制御構造（分岐・ループ・例外処理・return）と、リトライ/タイムアウトの手がかりを表示する", _cmd_flow)
+    flow.add_argument("name", help="関数・メソッドの名前または修飾名")
+    flow.add_argument("--file")
+
+    dataflow = add("dataflow", "変数の定義・使用と、値の行き先（代入・呼び出し引数・戻り値・状態）をたどる", _cmd_dataflow, ("text",))
+    dataflow.add_argument("name", help="関数・メソッドの名前または修飾名")
+    dataflow.add_argument("variable", nargs="?", help="変数名（省略時は変数の一覧）")
+    dataflow.add_argument("--depth", type=int, default=2, help="呼び出し先・代入先をたどる深さ")
+    dataflow.add_argument("--upstream", action="store_true", help="引数に渡される実引数を、呼び出し元から調べる")
+    dataflow.add_argument("--file")
+
+    state = add("state", "クラスの属性（self.<属性>）・モジュール変数の書き込み/変更/読み取りを表示する", _cmd_state)
+    state.add_argument("name", help="クラスまたはモジュールの名前または修飾名")
+    state.add_argument("--file")
+
+    exceptions = add("exceptions", "関数から出うる例外（明示的なraiseと解決済みの呼び出しをたどる）と握りつぶしを表示する", _cmd_exceptions)
+    exceptions.add_argument("name", help="関数・メソッドの名前または修飾名")
+    exceptions.add_argument("--depth", type=int, default=4)
+    exceptions.add_argument("--file")
+
+    risks = add("risks", "潜在的な問題の手がかり（例外の握りつぶし・eval・shell=True等）を探す", _cmd_risks)
+    risks.add_argument("--rule", action="append", choices=sorted(RISK_RULES), help="規則で絞り込む")
+    risks.add_argument("--min-severity", choices=("low", "medium", "high"), default="low")
+    risks.add_argument("--limit", type=int, default=10, help="規則ごとの表示件数")
 
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")
