@@ -73,3 +73,26 @@
 (defun core-fail ()
   (signal 'wrong-type-argument '(x))
   (kill-emacs 1))
+
+(defun core-pipeline (path &optional verbose)
+  "データフローとリスクの例。"
+  ;; TODO: 引数の検証を追加する
+  (let* ((raw (core-read path))
+         (items (split-string raw "\n"))
+         (count (length items)))
+    (add-hook 'find-file-hook (lambda () (message "opened")))
+    (shell-command (format "ls %s" path))
+    (when verbose
+      (message "count=%d" count))
+    (condition-case nil
+        (delete-file path)
+      (t nil))
+    (puthash path items core-cache)
+    (if (> count 0) items)))
+
+(defvar core-cache (make-hash-table :test 'equal))
+
+(defun core-read (file)
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))

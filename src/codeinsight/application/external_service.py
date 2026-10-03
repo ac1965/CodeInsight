@@ -241,6 +241,55 @@ def categorize_c_function(name: str) -> str | None:
     return None
 
 
+# Emacs Lispの関数名（Emacs本体・標準のライブラリ）→ (カテゴリ, 操作)。名前による分類であり、
+# advice・再定義・同名の別の関数の可能性があるため、確定ではなく推定として扱う。
+_ELISP_FUNCTIONS: dict[str, tuple[str, str]] = {
+    **{n: ("filesystem", "read") for n in (
+        "insert-file-contents", "insert-file-contents-literally", "file-exists-p", "file-readable-p", "file-directory-p", "file-regular-p",
+        "directory-files", "directory-files-recursively", "directory-files-and-attributes", "file-attributes", "file-truename",
+        "file-newer-than-file-p", "file-symlink-p", "find-file-noselect", "locate-file", "file-modes", "file-writable-p",
+        "load-file", "load", "insert-directory", "file-name-all-completions")},
+    **{n: ("filesystem", "write") for n in (
+        "write-region", "write-file", "delete-file", "delete-directory", "rename-file", "copy-file", "copy-directory", "make-directory",
+        "make-symbolic-link", "add-name-to-file", "set-file-modes", "set-file-times", "append-to-file", "make-temp-file",
+        "save-buffer", "basic-save-buffer",  "dired-delete-file", "make-empty-file")},
+    **{n: ("process", "effect") for n in (
+        "call-process", "call-process-region", "call-process-shell-command", "process-file", "start-process", "start-file-process", "make-process",
+        "shell-command", "shell-command-to-string", "async-shell-command", "shell-command-on-region", "process-lines", "process-send-string",
+        "process-send-region", "delete-process", "kill-process", "signal-process", "interrupt-process", "kill-emacs", "kill-terminal", "suspend-emacs",
+        "compile", "make-serial-process", "make-pipe-process")},
+    **{n: ("network", "effect") for n in (
+        "url-retrieve", "url-retrieve-synchronously", "url-copy-file", "url-insert-file-contents", "url-http", "open-network-stream",
+        "make-network-process", "network-lookup-address-info", "browse-url", "browse-url-default-browser", "eww", "request", "plz", "websocket-open",
+        "package-refresh-contents", "package-install", "send-mail", "smtpmail-send-it", "message-send-and-exit")},
+    **{n: ("config", "read") for n in ("getenv", "getenv-internal", "locate-user-emacs-file", "system-name", "user-login-name", "user-full-name",
+                                        "emacs-pid", "executable-find", )},
+    **{n: ("config", "write") for n in ("setenv", "putenv")},
+    **{n: ("logging", "output") for n in ("message", "princ", "print", "prin1", "terpri", "display-warning", "lwarn", "warn", "minibuffer-message",
+                                           "display-message-or-buffer", "pp", "write-char", )},
+    **{n: ("gui", "io") for n in (
+        "read-string", "read-from-minibuffer", "completing-read", "completing-read-multiple", "y-or-n-p", "yes-or-no-p", "read-file-name",
+        "read-directory-name", "read-number", "read-char", "read-key", "read-event", "read-buffer", "read-passwd", "read-regexp", "read-answer",
+        "switch-to-buffer", "pop-to-buffer", "display-buffer", "set-frame-parameter", "make-frame", "delete-frame", "x-popup-menu",
+        "set-face-attribute", "set-window-buffer", "select-window", "ding", "beep", "sit-for", "recenter", "redisplay")},
+    **{n: ("concurrency", "effect") for n in (
+        "run-with-timer", "run-with-idle-timer", "run-at-time", "cancel-timer", "make-thread", "thread-join", "make-mutex", "mutex-lock",
+        "accept-process-output", "sleep-for", "make-condition-variable", "async-start", )},
+    **{n: ("database", "effect") for n in ("sqlite-open", "sqlite-execute", "sqlite-select", "sqlite-close", "sqlite-transaction", "sqlite-commit",
+                                            "sqlite-pragma", "emacsql", "emacsql-with-transaction")},
+    **{n: ("persistence", "write") for n in ("customize-save-variable", "customize-set-variable", "custom-save-all", "savehist-save", "desktop-save",
+                                              "recentf-save-list", "bookmark-save",  "write-abbrev-file", )},
+    **{n: ("crypto", "pure") for n in ("secure-hash", "md5", "sha1", "buffer-hash", "gnutls-hash-mac", "gnutls-symmetric-encrypt", "base64-encode-string",
+                                        "base64-decode-string", "epg-encrypt-string", "epg-decrypt-string")},
+}
+def classify_elisp_function(name: str) -> tuple[str, str] | None:
+    """Emacs Lispの関数名から (カテゴリ, 操作)。分類できなければ None。"""
+
+    if name in _ELISP_FUNCTIONS:
+        return _ELISP_FUNCTIONS[name]
+    return None
+
+
 def external_name(reference: Reference) -> str | None:
     """外部参照の、import元まで解決した修飾名。組み込みはその名前。"""
 
@@ -271,7 +320,7 @@ class ExternalService:
             if dependency.resolution_status != ResolutionStatus.EXTERNAL or dependency.is_candidate:
                 continue
             source_file = index.files.get(dependency.source_file_id)
-            if source_file is None or source_file.language == Language.ELISP:  # Emacs Lispの外部連携の分類は未対応（CやPythonの名前表を当てはめない）
+            if source_file is None or source_file.language == Language.ELISP:  # Emacs Lispの require は分類しない（CやPythonの名前表は当てはめない）
                 continue
             name = dependency.target_name
             category = categorize(name, source_file.language) or (
@@ -296,9 +345,13 @@ class ExternalService:
             if source is None:
                 continue
             language = index.files[source.file_id].language
-            if language == Language.ELISP:
-                continue
             path = index.path_of(source.file_id)
+            if language == Language.ELISP:  # 名前による分類（確定ではなく推定）。マクロとして書かれる呼び出し（with-temp-file など）は対象外
+                if reference.resolution_status == ResolutionStatus.EXTERNAL and reference.reference_kind == ReferenceKind.CALL:
+                    classified = classify_elisp_function(reference.target_name)
+                    if classified and classified[1] != "pure":
+                        report.uses.append(ExternalUse(classified[0], reference.target_name, classified[1], source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "inferred"))
+                continue
             if reference.resolution_status == ResolutionStatus.EXTERNAL:
                 callee = external_name(reference) if language == Language.PYTHON else reference.target_name
                 category = (categorize(callee, language) if language == Language.PYTHON else categorize_c_function(callee)) if callee else None

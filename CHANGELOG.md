@@ -2,6 +2,9 @@
 
 ## Emacs Lispの関数単位の解析（未リリース）
 
+* Emacs Lispの `dataflow`（呼び出し先の仮引数まで追跡）、戻り値（各経路の最後の式・暗黙の nil）、`risks`（eval・shell-command・握りつぶし・グローバルな再定義など）、外部への副作用の分類（関数名による推定）を追加し、`understand` に統合。Emacs本体の53,117関数で異常終了0件。
+* 修正: `puthash` の書き換え先を第1引数としていた（`state`）。
+
 * `understand` に、Emacs Lispの引数・状態の変更・失敗時（シグナルと保護、呼び出し先経由の送出）を組み込み。外部連携の集計から、Emacs Lispを除外（`signal`（エラーの送出）がプロセスのシグナルと誤分類されたため）。
 
 * `flow` / `exceptions` / `state` がEmacs Lispに対応（`analysis/elisp_flow_analysis.py`、`application/elisp_flow_service.py`、`cli/reading_el.py`）。制御フロー、シグナルと `condition-case` 等の保護、呼び出し先を経由した送出の連鎖（推定）、グローバル変数への書き込み。`dataflow` は未対応と明示して拒否する。

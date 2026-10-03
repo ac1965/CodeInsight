@@ -10,6 +10,7 @@ from codeinsight.application.elisp_flow_service import ElispFlowService
 from codeinsight.application.flow_service import FlowAnalysisError
 from codeinsight.application.navigation_service import NavigationService
 from codeinsight.cli.common import CliError, emit_json, safe, warn_if_stale
+from codeinsight.cli.reading_c import _print_trace
 
 _KIND_LABELS = {"signal": "エラーのシグナル", "terminate": "Emacsを終了する呼び出し", "throw": "throw（対応する catch へ）"}
 _MODE_LABELS = {"write": "書き込み", "mutate": "書き換え", "read": "読み取り"}
@@ -127,4 +128,30 @@ def state(args: argparse.Namespace, project, index, navigation: NavigationServic
         print(f"\n  ※ 局所にも束縛される名前のため、グローバルへのアクセスかを判定していません: {', '.join(safe(n) for n in result.shadowed)}")
     warn_if_stale(stale)
     print("※ 変数の読み取りは、プロジェクト内で defvar 等により定義された変数に限ります。マクロの内部・funcall 経由・間接的な書き換え（変数を別の名前で渡した場合）は追えません。", file=sys.stderr)
+    return 0
+
+
+_SCOPE_NAMES = {"param": "引数", "local": "局所変数", "global": "グローバル・動的変数"}
+
+
+def dataflow(args: argparse.Namespace, project, index, navigation: NavigationService, symbol, stale) -> int:
+    service = ElispFlowService(navigation)
+    try:
+        if args.upstream:
+            raise CliError("--upstream（呼び出し元の実引数の追跡）は、Emacs Lispでは未対応です。")
+        if args.variable is None:
+            variables = service.variables(project, index, symbol)
+            print(f"{safe(symbol.qualified_name)} の変数（定義数 / 使用数 / 伝播先の数）:")
+            for name, info in sorted(variables.items(), key=lambda kv: (kv[1].scope != "param", min((d.line for d in kv[1].definitions), default=0), kv[0])):
+                print(f"  {_SCOPE_NAMES[info.scope]:<10} {safe(name):<24} 定義 {len(info.definitions):>2} / 使用 {len(set(info.uses)):>2} / 伝播 {len(info.flows):>2}")
+            print("変数名を指定すると、値の行き先をたどります（例: dataflow <シンボル> <変数名>）。")
+            warn_if_stale(stale)
+            return 0
+        trace = service.trace_variable(project, index, symbol, args.variable, args.depth)
+        _print_trace(trace)
+    except FlowAnalysisError as exc:
+        raise CliError(str(exc)) from exc
+    warn_if_stale(stale)
+    print("※ 実行順序・条件を考慮しない近似です。値そのもの、別名（同じオブジェクトを指す別の変数）、リスト・ハッシュテーブルの要素、"
+          "pcase・cl-destructuring-bind のパターンで束縛される変数、マクロの展開後、funcall 経由の呼び出し先は追えません。呼び出し先の解決は名前の一致による推定です。", file=sys.stderr)
     return 0

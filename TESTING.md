@@ -23,7 +23,7 @@ pytest -v
 | ファイル | 件数 | 対象 | 種別 |
 |---|---|---|---|
 | `test_language_detection.py` | 3 | 拡張子ベースの言語識別 | 単体 |
-| `test_elisp_flow.py` | 9 | Emacs Lispの関数単位の解析（制御フロー・シグナルと保護・推定の連鎖・状態と局所束縛・古いソースの拒否・CLI） | 単体・結合 |
+| `test_elisp_flow.py` | 14 | Emacs Lispの関数単位の解析（制御フロー・シグナルと保護・推定の連鎖・状態と局所束縛・古いソースの拒否・データフロー・戻り値・リスク・外部分類・CLI） | 単体・結合 |
 | `test_elisp_analyzer.py` | 19 | ElispAnalyzer（文字リテラル、定義の抽出、局所変数・クォートの除外、マクロのテンプレート、括弧不整合の失敗、非UTF-8、推定/曖昧/外部の解決、Orgブロックの行番号・noweb・壊れたブロック） | 単体・結合 |
 | `test_python_analyzer.py` | 4 | PythonAnalyzer（モジュール/クラス/関数/デコレータ/構文エラー） | 単体 |
 | `test_c_analyzer.py` | 11 | CAnalyzer（関数/構造体/typedef/マクロ/ローカル変数/構文エラー） | 単体 |

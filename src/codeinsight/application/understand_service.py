@@ -209,7 +209,8 @@ class UnderstandService:
         """Emacs LispのS式から得る事実。失敗は、シグナル（error / signal / throw）と終了の手がかりで示す。"""
 
         result.parameters = [Parameter(name, "", "", "positional") for name in self._el.parameters(project, index, symbol)]
-        result.return_note = "Emacs Lispは、本体の最後の式の値を返します（戻り値の解析は未対応です）。"
+        result.return_note = "Emacs Lispは、本体の最後に評価された式の値を返します（条件分岐の各経路の最後の式を示します）。"
+        result.returns = [(r.line, r.text + (f"  （{r.note}）" if r.note else "")) for r in self._el.returns(project, index, symbol)]
         state = self._el.state(project, index, symbol)
         scope_label = {"global": "グローバル・動的変数", "buffer-local": "バッファローカル変数", "hook": "フック"}
         for access in state.accesses:
@@ -218,10 +219,13 @@ class UnderstandService:
                 result.state_changes.append(f"L{access.line} {scope_label[access.scope]} {access.name} を{verb}（{access.via}）")
         result.el_shadowed = state.shadowed
         result.el_exit_report = self._el.exit_report(project, index, symbol, depth + 1)
+        findings, _ = self._el.scan_risks(project, index, only_paths={result.path})
+        result.risks = [f for f in findings if symbol.start_line <= f.line <= symbol.end_line and f.symbol == symbol.qualified_name and f.rule != "todo-marker"]
+        result.todo_comments = [(f.line, f.detail) for f in findings if f.symbol == symbol.qualified_name and f.rule == "todo-marker"]
         result.limitations.append(
             "Emacs Lispの関数内の解析は、実行順序・値を考慮しない近似です。マクロ（独自マクロ・use-package など）の展開後、funcall 経由の呼び出し、"
-            "advice による置き換えは追えません。呼び出し先の解決は名前の一致による推定です。組み込み関数が送出するエラーは含みません。"
-            "外部への副作用（ファイル・プロセスなど）の分類、データフロー、リスクの検出は未対応です。"
+            "advice による置き換えは追えません。呼び出し先の解決は名前の一致による推定です。無名関数（lambda）の本体も、この関数の一部として数えます。組み込み関数が送出するエラーは含みません。"
+            "外部への副作用の分類は、関数名による推定です。データフロー（dataflow）は、別名・要素・パターン束縛を追えません。"
         )
 
     # --- 関数のASTから得る事実 ---

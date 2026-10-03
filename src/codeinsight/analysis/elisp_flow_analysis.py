@@ -26,6 +26,7 @@ _WRITES = frozenset({"setq", "setq-local", "setq-default", "setf", "cl-incf", "c
                      "add-to-ordered-list", "cl-callf", "cl-callf2", "cl-rotatef", "cl-shiftf", "cl-remf", "setq-mode-local"})
 _MUTATORS = frozenset({"aset", "puthash", "setcar", "setcdr", "nconc", "nreverse", "delq", "delete", "remhash", "clrhash", "cl-delete", "sort", "ring-insert",
                        "fillarray", "cl-nsubstitute"})
+_MUTATED_INDEX = {"puthash": 2, "ring-insert": 0}  # 書き換えられるオブジェクトの引数の位置（既定は先頭）
 _PLACE_SECOND = frozenset({"push", "cl-pushnew"})
 _HOOK_FORMS = frozenset({"add-hook", "remove-hook"})
 _SET_FORMS = frozenset({"set", "set-default", "make-local-variable", "make-variable-buffer-local", "defvar-local", "defvar", "defconst", "defcustom"})
@@ -374,8 +375,10 @@ def analyze_state(definition: Form, known_globals: set[str]) -> ElispState:
                 elif isinstance(place, Form) and len(place.items) > 1 and isinstance(place.items[1], Atom) and place.items[1].kind == "symbol":
                     record(place.items[1].text, place.items[1].line, "mutate", "global", f"{head} ({_head_name(place)})")  # (setf (alist-get k var) v)
                     written.add((place.items[1].text, place.items[1].line))
-            elif head in _MUTATORS and rest and isinstance(rest[0], Atom) and rest[0].kind == "symbol" and not rest[0].quoted:
-                record(rest[0].text, rest[0].line, "mutate", "global", head)
+            elif head in _MUTATORS and len(rest) > _MUTATED_INDEX.get(head, 0) and isinstance(rest[_MUTATED_INDEX.get(head, 0)], Atom):
+                target = rest[_MUTATED_INDEX.get(head, 0)]
+                if isinstance(target, Atom) and target.kind == "symbol" and not target.quoted:
+                    record(target.text, target.line, "mutate", "global", head)
             elif head in _SET_FORMS and rest:
                 quoted = _quoted_symbol(rest[0])
                 if quoted and head in ("set", "set-default", "make-local-variable", "make-variable-buffer-local"):

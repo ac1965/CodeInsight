@@ -10,6 +10,7 @@ from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application import FlowAnalysisError, FlowService, NavigationService, RiskService
 from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
+from codeinsight.application.elisp_flow_service import ElispFlowService
 from codeinsight.application.external_service import CATEGORY_LABELS
 from codeinsight.application.understand_service import UnderstandService
 from codeinsight.cli import reading_c, reading_el
@@ -131,7 +132,7 @@ def cmd_dataflow(args: argparse.Namespace) -> int:
     if _is_c(index, symbol):
         return reading_c.dataflow(args, project, index, navigation, symbol, stale)
     if _is_elisp(index, symbol):
-        raise CliError("dataflow は、Emacs Lispでは未対応です（制御フロー flow・例外 exceptions・状態 state は対応しています）。")
+        return reading_el.dataflow(args, project, index, navigation, symbol, stale)
     try:
         if args.variable is None:
             variables = service.variables(project, index, symbol)
@@ -264,13 +265,15 @@ def cmd_risks(args: argparse.Namespace) -> int:
     rules = set(args.rule) if args.rule else None
     findings, skipped = RiskService().scan(project, index, rules)
     c_findings, c_skipped = CFlowService(NavigationService(repository)).scan_risks(project, index)
-    findings = [*findings, *(f for f in c_findings if rules is None or f.rule in rules)]
-    skipped = [*skipped, *c_skipped]
+    el_findings, el_skipped = ElispFlowService(NavigationService(repository)).scan_risks(project, index)
+    findings = [*findings, *(f for f in [*c_findings, *el_findings] if rules is None or f.rule in rules)]
+    skipped = [*skipped, *c_skipped, *el_skipped]
     order = ("low", "medium", "high")
     findings = [f for f in findings if order.index(f.severity) >= order.index(args.min_severity)]
-    note = coverage_note(index, "リスクの検出", covered=(Language.PYTHON, Language.C))
+    covered = (Language.PYTHON, Language.C, Language.ELISP)
+    note = coverage_note(index, "リスクの検出", covered=covered)
     if args.format == "json":
-        emit_json({"skipped": skipped, "not_covered_languages": not_covered(index, (Language.PYTHON, Language.C)), "findings": [{**vars(f), "message": f.message} for f in findings]})
+        emit_json({"skipped": skipped, "not_covered_languages": not_covered(index, covered), "findings": [{**vars(f), "message": f.message} for f in findings]})
         return 0
     counts = Counter(f.rule for f in findings)
     print(f"潜在的な問題の手がかり {len(findings)}件（バグの断定ではありません。意図的な実装の場合があります）")

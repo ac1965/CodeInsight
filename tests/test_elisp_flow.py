@@ -96,7 +96,7 @@ def test_cli_flow_exceptions_state_and_dataflow(tmp_path: Path, capsys) -> None:
         assert main([command, "core-risky", "--db", db, "--project", str(FIXTURE)]) == 0
         out = capsys.readouterr().out
         assert "core-risky" in out
-    assert main(["dataflow", "core-risky", "--db", db, "--project", str(FIXTURE)]) != 0
+    assert main(["dataflow", "core-risky", "--db", db, "--project", str(FIXTURE)]) == 0
 
 
 def test_understand_includes_elisp_state_and_failure(tmp_path: Path, capsys) -> None:
@@ -107,6 +107,61 @@ def test_understand_includes_elisp_state_and_failure(tmp_path: Path, capsys) -> 
     out = capsys.readouterr().out
     assert "core-log を書き換える（push）" in out and "core-counter を書き込む（setq）" in out
     assert "user-error" in out and "kill-emacs" in out and "（推定）" in out
-    assert "最後の式の値" in out  # 戻り値の解析は未対応であることを示す（「return なし」と誤読させない）
-    assert "未対応" in out
-    assert "[外部プロセス" not in out  # signal を、プロセスのシグナルと誤分類しない
+    assert "最後に評価された式の値" in out and "return total" in out  # 戻り値は、本体の最後の式の値（各経路）として示す
+    assert "近似" in out
+    assert "] signal" not in out and "] error" not in out  # signal / error（エラーの送出）を、外部への操作と誤分類しない
+    assert "kill-emacs" in out
+
+
+def test_dataflow_traces_through_resolved_calls(env) -> None:
+    service, project, index, symbol = env
+    variables = service.variables(project, index, symbol("core-pipeline"))
+    assert variables["path"].is_param and variables["raw"].scope == "local" and variables["core-cache"].scope == "global"
+    trace = service.trace_variable(project, index, symbol("core-pipeline"), "path", 3)
+    texts = [f.description for f in trace.flows]
+    assert any("core-read の仮引数 file" in t and "推定" in t for t in texts)  # 解決済みの呼び出しを介して仮引数へ
+    call = next(f for f in trace.flows if f.callee is not None)
+    assert call.child is not None and any("insert-file-contents" in f.description for f in call.child.flows)
+    derived = [f for f in trace.flows if "raw へ式に含めて代入" in f.description]
+    assert derived and derived[0].child is not None  # raw → items → count と連鎖する
+    items = service.trace_variable(project, index, symbol("core-pipeline"), "items", 1)
+    assert any(f.kind == "attr_store" and f.status for f in items.flows)  # puthash による書き込み先の別名は追えないと明示
+    assert any(f.kind == "return" for f in items.flows)
+
+
+def test_returns_cover_every_tail_path(env) -> None:
+    service, project, index, symbol = env
+    returns = service.returns(project, index, symbol("core-pipeline"))
+    assert [(r.text, bool(r.note)) for r in returns] == [("items", False), ("nil", True)]  # (if c items) の else 無し = 暗黙の nil
+    assert any("暗黙" in r.note or "条件が偽" in r.note for r in returns)
+
+
+def test_risks_rules_and_todo(env) -> None:
+    service, project, index, symbol = env
+    findings, skipped = service.scan_risks(project, index)
+    assert skipped == []
+    in_pipeline = {f.rule for f in findings if f.symbol == "core-pipeline"}
+    assert {"command-exec", "anonymous-hook", "bare-except", "swallowed-exception", "todo-marker"} <= in_pipeline
+    assert not any(f.symbol == "core-greet" for f in findings)  # 問題のない関数には、何も出さない
+
+
+def test_externals_are_classified_by_name_as_inferred(env) -> None:
+    from codeinsight.application.external_service import ExternalService
+
+    service, project, index, symbol = env
+    uses = [u for u in ExternalService().report(index).uses if u.source_id == symbol("core-pipeline").symbol_id]
+    by_name = {u.library: u for u in uses}
+    assert by_name["delete-file"].category == "filesystem" and by_name["shell-command"].category == "process"
+    assert all(u.confidence == "inferred" if hasattr(u, "confidence") else True for u in uses)
+    assert "format" not in by_name and "length" not in by_name  # 純粋な関数は、外部への操作ではない
+
+
+def test_cli_dataflow_and_risks_for_elisp(tmp_path: Path, capsys) -> None:
+    db = str(tmp_path / "d.db")
+    assert main(["analyze", str(FIXTURE), "--db", db]) == 0
+    capsys.readouterr()
+    assert main(["dataflow", "core-pipeline", "path", "--db", db, "--project", str(FIXTURE)]) == 0
+    assert "core-read の仮引数 file" in capsys.readouterr().out
+    assert main(["risks", "--db", db, "--project", str(FIXTURE)]) == 0
+    out = capsys.readouterr().out
+    assert "command-exec" in out and "検査していません" not in out  # Emacs Lispも対象に含まれる

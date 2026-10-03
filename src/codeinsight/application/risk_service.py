@@ -23,9 +23,13 @@ RULES = {
     "todo-marker": ("low", "TODO/FIXME等の未対応を示すコメント"),
     # C言語
     "unsafe-libc": ("medium", "境界を確認しない・再入不可など、危険とされるC標準関数の使用（C）"),
-    "command-exec": ("high", "シェルを介しうる外部コマンドの実行（system/popen/exec系。C）"),
+    "command-exec": ("high", "シェルを介しうる外部コマンドの実行（system/popen/exec系・shell-command系。C・Emacs Lisp）"),
     "format-string": ("medium", "書式が文字列リテラルでない printf 系の呼び出し（書式文字列攻撃の恐れ。C）"),
     "unchecked-alloc": ("medium", "メモリ割り当ての結果を条件で確認していない可能性（C。確認が別の形の場合は誤検出）"),
+    # Emacs Lisp
+    "global-redefinition": ("medium", "関数の定義・挙動をグローバルに変更する（fset・advice-add・defalias など。Emacs Lisp）"),
+    "anonymous-hook": ("low", "フックに無名関数を追加している（再評価で重複し、remove-hook で外せない。Emacs Lisp）"),
+    "blocking-call": ("low", "Emacs全体を待機させる呼び出し（sleep-for。Emacs Lisp）"),
     "fallthrough": ("low", "switch の case が break なしで次のラベルへ続く（C。意図的な場合あり）"),
 }
 _MARKERS = ("TODO", "FIXME", "XXX", "HACK")
