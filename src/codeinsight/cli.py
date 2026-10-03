@@ -11,10 +11,17 @@ from pathlib import Path
 
 from codeinsight.analysis.call_graph import CallNode, Direction
 from codeinsight.analysis import flow_analysis as fa
+from codeinsight.application.environment_service import EnvironmentService
+from codeinsight.application.spec_check_service import SpecCheckService
+from codeinsight.application.history_service import HistoryService
+from codeinsight.application.impact_service import ImpactService
+from codeinsight.application.test_map_service import TestMapService
+from codeinsight.application.understand_service import UnderstandService
+from codeinsight.application.unused_service import UnusedService
 from codeinsight.application.boundary_service import KIND_LABELS as BOUNDARY_LABELS, BoundaryService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS, ConfigService
 from codeinsight.application.architecture_service import ROLE_LABELS, ArchitectureService
-from codeinsight.application.external_service import CATEGORY_LABELS, SIDE_EFFECT_CATEGORIES, ExternalService
+from codeinsight.application.external_service import CATEGORY_LABELS, ExternalService
 from codeinsight.application import (
     AmbiguousSymbolError,
     AnalysisCoordinator,
@@ -1106,6 +1113,23 @@ def _cmd_externals(args: argparse.Namespace) -> int:
     return 0
 
 
+def _group_uses(uses) -> list[tuple]:
+    """同じ外部名の使用を1行にまとめる（外部名, カテゴリ, 操作, 推定か, 行のリスト）。"""
+
+    grouped: dict[tuple, list[int]] = {}
+    for use in uses:
+        grouped.setdefault((use.library, use.category, use.operation, use.confidence != "confirmed"), []).append(use.line)
+    return [(*key, sorted(set(lines))) for key, lines in grouped.items()]
+
+
+def _lines_text(lines: list[int]) -> str:
+    shown = ", ".join(f"L{n}" for n in lines[:4])
+    return shown + (" …" if len(lines) > 4 else "")
+
+
+_OPERATION_LABELS = {"read": "読み取り", "write": "書き込み", "effect": "外部呼び出し", "output": "出力", "io": "入出力", "call": "呼び出し"}
+
+
 def _cmd_effects(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
     navigation = NavigationService(repository)
@@ -1114,14 +1138,20 @@ def _cmd_effects(args: argparse.Namespace) -> int:
     summary = service.effects(index, service.report(index), symbol, args.depth)
     print(f"{safe(symbol.qualified_name)} の副作用の候補（外部への入出力。読み取りだけの場合もあります）")
     print("\n■ この関数が直接行うもの")
-    for use in summary.direct:
-        mark = "" if use.confidence == "confirmed" else "  [推定]"
-        print(f"  {safe(use.path)}:{use.line}  [{CATEGORY_LABELS[use.category]}] {safe(use.library)}{mark}")
+    for library, category, operation, inferred, lines in _group_uses(summary.direct):
+        mark = "  [推定]" if inferred else ""
+        count = f" ×{len(lines)}" if len(lines) > 1 else ""
+        print(f"  [{CATEGORY_LABELS[category]}・{_OPERATION_LABELS[operation]}] {safe(library)}{count}  {_lines_text(lines)}{mark}")
     if not summary.direct:
         print("  確認できませんでした")
     print(f"\n■ 呼び出し先（解決済み、深さ{args.depth}）を介して行うもの")
+    seen_reach: set[tuple] = set()
     for use, route in summary.reachable:
-        print(f"  [{CATEGORY_LABELS[use.category]}] {safe(use.library)}  {safe(use.path)}:{use.line}")
+        key = (use.library, route[-1])
+        if key in seen_reach:
+            continue
+        seen_reach.add(key)
+        print(f"  [{CATEGORY_LABELS[use.category]}・{_OPERATION_LABELS[use.operation]}] {safe(use.library)}  {safe(use.path)}:{use.line}")
         print(f"      経路: {' → '.join(safe(r) for r in route)}")
     if not summary.reachable:
         print("  確認できませんでした")
@@ -1271,6 +1301,363 @@ def _cmd_boundaries(args: argparse.Namespace) -> int:
         print(f"解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
     _warn_stale(stale)
     print("※ フレームワークの規約に基づく検出です。独自の登録方法・動的な登録は検出できません。", file=sys.stderr)
+    return 0
+
+
+def _entry_ids(project, index) -> set[str]:
+    items, _ = BoundaryService().scan(project, index)
+    return {i.target.symbol_id for i in items if i.target and i.kind in ("entry", "cli", "http", "event", "thread")}
+
+
+def _cmd_history(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    service = HistoryService()
+    if args.name:
+        navigation = NavigationService(repository)
+        symbol = _resolve(args, navigation, index, args.name, project).symbol
+        history = service.symbol_history(project, index, symbol, args.limit)
+        if not history.available:
+            raise CliError("Gitの履歴を取得できませんでした（Gitリポジトリではない、または未コミットのファイル）。")
+        if args.format == "json":
+            _emit_json({"symbol": symbol.qualified_name, "modified_in_working_tree": history.modified_in_working_tree,
+                        "commits": [vars(c) for c in history.commits]})
+            return 0
+        print(f"{safe(symbol.qualified_name)} の変更履歴（{safe(history.path)}:{symbol.start_line}-{symbol.end_line} に触れたコミット、新しい順）")
+        for commit in history.commits:
+            print(f"  {commit.date}  {commit.hash[:8]}  {safe(commit.author)}  {safe(commit.subject)}")
+        if not history.commits:
+            print("  該当するコミットがありません（未コミット、または履歴を追えませんでした）")
+        if history.modified_in_working_tree:
+            print("警告: このファイルには未コミットの変更があり、行範囲と履歴の対応がずれている可能性があります。", file=sys.stderr)
+        print("※ 履歴は「なぜその実装か」の手がかりです。理由そのものはコードからは確認できません。", file=sys.stderr)
+        return 0
+    report = service.report(project, index, args.max_commits)
+    if not report.available:
+        raise CliError("Gitの履歴を取得できませんでした（Gitリポジトリではありません）。")
+    if args.format == "json":
+        _emit_json({"commits_examined": report.commits_examined,
+                    "churn": [vars(c) for c in report.churn[: args.limit]],
+                    "coupling": [{"a": a, "b": b, "commits": n} for a, b, n in report.coupling[: args.limit]]})
+        return 0
+    print(f"変更頻度の高いファイル（直近{report.commits_examined}コミット。コミット数×行数が大きい順）")
+    for churn in report.churn[: args.limit]:
+        print(f"  {churn.commits:>4}回 / {churn.authors}人 / {churn.lines:>5}行  {churn.first_date}〜{churn.last_date}  {safe(churn.path)}")
+    print("\n同時に変更されることが多いファイルの組（3コミット以上）")
+    for a, b, n in report.coupling[: args.limit]:
+        print(f"  {n:>3}回  {safe(a)}  ⇄  {safe(b)}")
+    if not report.coupling:
+        print("  確認できませんでした")
+    return 0
+
+
+def _cmd_tests(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    service = TestMapService()
+    if args.untested:
+        symbols = service.untested(index, args.depth, args.min_lines)
+        print(f"どのテストからも（深さ{args.depth}以内で）静的に届かない関数・クラス: {len(symbols)}件")
+        for symbol in symbols[: args.limit]:
+            print(f"  {safe(index.path_of(symbol.file_id))}:{symbol.start_line}-{symbol.end_line}\t{symbol.kind.value}\t{safe(symbol.qualified_name)}")
+        if len(symbols) > args.limit:
+            print(f"  … ほか {len(symbols) - args.limit}件（--limit）")
+        print("※ 静的に届くかどうかです。実際の実行・検証（カバレッジ）は確認していません。", file=sys.stderr)
+        return 0
+    if not args.name:
+        raise CliError("シンボル名か --untested を指定してください。")
+    navigation = NavigationService(repository)
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
+    mapping = service.tests_for(index, symbol, args.depth)
+    if args.format == "json":
+        _emit_json({"symbol": symbol.qualified_name,
+                    "tests": [{"test": r.test.qualified_name, "path": r.path, "line": r.line, "route": r.route, "direct": r.direct} for r in mapping.reaches],
+                    "test_files_importing": mapping.test_files_importing})
+        return 0
+    print(f"{safe(symbol.qualified_name)} に届くテスト（静的な呼び出し・参照の連鎖。深さ{args.depth}以内）")
+    direct = [r for r in mapping.reaches if r.direct]
+    indirect = [r for r in mapping.reaches if not r.direct]
+    print(f"\n■ 直接参照するテスト（{len(direct)}件）")
+    for r in direct:
+        print(f"  {safe(r.path)}:{r.line}  {safe(r.test.qualified_name)}")
+    print(f"\n■ 他の関数を介して届くテスト（{len(indirect)}件）")
+    for r in indirect[: args.limit]:
+        print(f"  {safe(r.path)}:{r.line}  {safe(r.test.qualified_name)}  経路: {' → '.join(safe(x) for x in r.route)}")
+    if mapping.test_files_importing:
+        print(f"\n■ このファイルをimportしているテストファイル: {', '.join(safe(f) for f in mapping.test_files_importing)}")
+    if not mapping.reaches:
+        print("\n  静的に届くテストは確認できませんでした（動的な呼び出しや、公開APIの外部テストは含みません）")
+    print("※ 静的に届くことを示すだけで、実際に検証されている（カバレッジ）ことは意味しません。", file=sys.stderr)
+    return 0
+
+
+def _cmd_impact(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    navigation = NavigationService(repository)
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
+    report = ImpactService().impact(index, symbol, args.depth, _entry_ids(project, index))
+    if args.format == "json":
+        _emit_json({"symbol": symbol.qualified_name, "affected": [{"symbol": a.symbol.qualified_name, "path": a.path, "distance": a.distance,
+                                                                    "route": a.route, "test": a.is_test} for a in report.affected],
+                    "files": sorted(report.files), "components": sorted(report.components),
+                    "entry_points": [a.symbol.qualified_name for a in report.entry_points]})
+        return 0
+    production = [a for a in report.affected if not a.is_test]
+    tests = [a for a in report.affected if a.is_test]
+    print(f"{safe(symbol.qualified_name)} を変更したときに影響を受ける範囲（呼び出し・参照・継承を逆にたどる。深さ{args.depth}）")
+    print(f"  影響を受ける関数・クラス: {len(production)}件 / ファイル {len({a.path for a in production})} / コンポーネント {len(report.components)} / 関連するテスト {len(tests)}件")
+    for a in production[: args.limit]:
+        print(f"  距離{a.distance}  {safe(a.path)}  {safe(a.symbol.qualified_name)}")
+        if a.distance > 1:
+            print(f"        経路: {' → '.join(safe(x) for x in a.route)}")
+    if len(production) > args.limit:
+        print(f"  … ほか {len(production) - args.limit}件（--limit / --depth）")
+    print("\n■ 入口（エントリポイント・CLI・HTTP・イベント等）に届くか")
+    for a in report.entry_points:
+        print(f"  {safe(a.path)}  {safe(a.symbol.qualified_name)}  経路: {' → '.join(safe(x) for x in a.route)}")
+    if not report.entry_points:
+        print("  静的に確認できる入口には届きません（動的な呼び出し・公開APIとしての利用は含みません）")
+    if report.unresolved_callers:
+        print(f"\n※ 同じ名前を呼ぶが解決できていない呼び出しが {report.unresolved_callers}件あり、影響を追えていません。", file=sys.stderr)
+    return 0
+
+
+def _cmd_unused(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    candidates = UnusedService().candidates(index, _entry_ids(project, index))
+    order = ("high", "medium", "low")
+    candidates = [c for c in candidates if order.index(c.confidence) <= order.index(args.min_confidence)]
+    if args.format == "json":
+        _emit_json([{"symbol": c.symbol.qualified_name, "kind": c.symbol.kind.value, "path": c.path, "line": c.symbol.start_line,
+                     "confidence": c.confidence, "reason": c.reason} for c in candidates])
+        return 0
+    labels = {"high": "確度 高", "medium": "確度 中", "low": "確度 低"}
+    print(f"どこからも参照されていないシンボルの候補 {len(candidates)}件（削除してよいという意味ではありません）")
+    for confidence in order:
+        group = [c for c in candidates if c.confidence == confidence]
+        if not group:
+            continue
+        print(f"\n■ {labels[confidence]}（{len(group)}件）")
+        for c in group[: args.limit]:
+            print(f"  {safe(c.path)}:{c.symbol.start_line}\t{c.symbol.kind.value}\t{safe(c.symbol.qualified_name)}\t# {safe(c.reason)}")
+        if len(group) > args.limit:
+            print(f"  … ほか {len(group) - args.limit}件（--limit）")
+    _warn_stale(stale)
+    print("※ 動的な呼び出し・リフレクション・外部から利用される公開API・フレームワークによる登録は静的には見えません。", file=sys.stderr)
+    return 0
+
+
+def _print_section(title: str) -> None:
+    print(f"\n━━ {title}")
+
+
+def _cmd_understand(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    navigation = NavigationService(repository)
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
+    try:
+        u = UnderstandService(navigation).understand(project, index, symbol, args.depth)
+    except FlowAnalysisError as exc:
+        raise CliError(str(exc)) from exc
+    limit = args.limit
+    print(f"{safe(symbol.qualified_name)}  ({symbol.kind.value}, {safe(u.path)}:{symbol.start_line}-{symbol.end_line})")
+    for number, text in u.declaration[:6]:
+        print(f"  {number:>5} | {safe(text)}")
+
+    _print_section("1. なぜ存在するのか（確認できる手がかり。理由そのものはコードからは確認できません）")
+    print(f"  docstring: {safe(u.summary) if u.summary else '（なし）'}")
+    if u.module_summary:
+        print(f"  モジュールの説明: {safe(u.module_summary)}")
+    components = len(u.impact.components) if u.impact else 0
+    print(f"  使われ方: 呼び出し元 {u.caller_total}件、影響範囲は {components} コンポーネント")
+    if u.test_names:
+        print(f"  テストでの扱い（テスト名は意図の手がかり）: {', '.join(safe(n.rsplit('.', 1)[-1]) for n in u.test_names)}")
+    for path, number, text in u.doc_mentions:
+        print(f"  文書での言及: {safe(path)}:{number}  {safe(text)}")
+    for number, text in u.todo_comments:
+        print(f"  未対応のコメント: L{number} {safe(text)}")
+    if u.history and u.history.introduced:
+        c = u.history.introduced
+        print(f"  最初に導入されたコミット: {c.date}  {c.hash[:8]}  {safe(c.subject)}")
+
+    _print_section("2. 誰が呼ぶのか")
+    print(f"  呼び出し元 {u.caller_total}件（解決済みの呼び出しのみ）")
+    for hit in u.callers[:limit]:
+        print(f"    {safe(hit.location)}  {safe(hit.source.qualified_name)}")
+    if u.caller_total > limit:
+        print(f"    … ほか {u.caller_total - limit}件（callers コマンド）")
+    for item in u.registrations:
+        print(f"  登録元: {safe(item.label)}  {safe(item.path)}:{item.line}")
+    if u.impact and u.impact.entry_points:
+        for a in u.impact.entry_points[:3]:
+            print(f"  入口からの到達: {' → '.join(safe(x) for x in a.route)}")
+
+    _print_section("3. 何を入力するのか")
+    if u.parameters:
+        for p in u.parameters:
+            ann = f": {safe(p.annotation)}" if p.annotation else ""
+            default = f" = {safe(p.default)}" if p.default else ""
+            kind = "" if p.kind == "positional" else f"  [{p.kind}]"
+            passed = u.caller_arguments.get(p.name)
+            actual = f"   ← 呼び出し元が渡す値: {', '.join(safe(a) for a in passed[:4])}" if passed else ""
+            print(f"  引数 {safe(p.name)}{ann}{default}{kind}{actual}")
+    elif u.language == Language.PYTHON and symbol.kind.value in ("function", "method"):
+        print("  引数なし")
+    for item in u.config_reads:
+        default = f" 既定値 {safe(item.default)}" if item.default else ""
+        print(f"  設定値: {CONFIG_LABELS[item.kind]} {safe(item.name)}{default}  ({safe(item.path)}:{item.line})")
+    for library, category, operation, inferred, lines in _group_uses(u.external_inputs)[:limit]:
+        print(f"  外部からの入力の可能性（直接）: [{CATEGORY_LABELS[category]}・{_OPERATION_LABELS[operation]}] {safe(library)}  {_lines_text(lines)}")
+    if u.effects:
+        seen_reads: set[tuple] = set()
+        for use, route in u.effects.reads_reachable:
+            key = (use.library, route[-1])
+            if key in seen_reads:
+                continue
+            seen_reads.add(key)
+            print(f"  外部からの入力の可能性（呼び出し先経由）: [{CATEGORY_LABELS[use.category]}・{_OPERATION_LABELS[use.operation]}] {safe(use.library)}  経路: {' → '.join(safe(r) for r in route)}")
+
+    _print_section("4. 何を変更するのか")
+    for text in u.state_changes:
+        print(f"  状態: {safe(text)}")
+    for text in u.parameter_mutations:
+        print(f"  引数: {safe(text)}")
+    if u.effects:
+        for library, category, operation, inferred, lines in _group_uses(u.effects.direct):
+            count = f" ×{len(lines)}" if len(lines) > 1 else ""
+            print(f"  外部への副作用の候補（直接）: [{CATEGORY_LABELS[category]}・{_OPERATION_LABELS[operation]}] {safe(library)}{count}  {_lines_text(lines)}")
+        seen = set()
+        for use, route in u.effects.reachable:
+            key = (use.category, use.library, route[-1])
+            if key in seen:
+                continue
+            seen.add(key)
+            print(f"  外部への副作用の候補（呼び出し先経由）: [{CATEGORY_LABELS[use.category]}・{_OPERATION_LABELS[use.operation]}] {safe(use.library)}  経路: {' → '.join(safe(r) for r in route)}")
+    if not (u.state_changes or u.parameter_mutations or (u.effects and (u.effects.direct or u.effects.reachable))):
+        print("  確認できる状態変更・引数の変更・外部への副作用はありません（静的に追える範囲）")
+
+    _print_section("5. 何を返すのか")
+    if u.return_annotation:
+        print(f"  戻り値の型注釈: {safe(u.return_annotation)}")
+    for number, text in u.returns[:limit]:
+        print(f"  L{number} return {safe(text)}")
+    if u.is_generator:
+        print("  ジェネレータ（yield で値を順次返す）")
+    if u.is_async:
+        print("  async 関数（awaitable を返す）")
+    if not u.returns and not u.is_generator and u.language == Language.PYTHON and symbol.kind.value in ("function", "method"):
+        print("  明示的な return はありません（None を返す）")
+
+    _print_section("6. 誰に影響するのか")
+    if u.impact:
+        production = [a for a in u.impact.affected if not a.is_test]
+        print(f"  影響を受ける関数・クラス {len(production)}件 / ファイル {len({a.path for a in production})} / コンポーネント {len(u.impact.components)}")
+        for a in production[: min(limit, 5)]:
+            print(f"    距離{a.distance}  {safe(a.symbol.qualified_name)}")
+    if u.tests:
+        direct = [r for r in u.tests.reaches if r.direct]
+        print(f"  届くテスト: 直接 {len(direct)}件、間接 {len(u.tests.reaches) - len(direct)}件（静的な呼び出しの連鎖）")
+
+    _print_section("7. 失敗するとどうなるのか")
+    if u.exceptions:
+        for e in sorted(u.exceptions.propagated, key=lambda x: (x.exception, x.raised_line)):
+            caught, total = u.caught_by_callers.get(e.exception, (0, 0))
+            where = f"{safe(e.raised_in.qualified_name)}:L{e.raised_line}"
+            via = f"（呼び出し先 {safe(e.chain[0][0].qualified_name)} 経由）" if e.chain else ""
+            print(f"  外へ出うる例外: {safe(e.exception)}  raise {where}{via}  — 呼び出し箇所 {total} 件中 {caught} 件が捕捉")
+        if not u.exceptions.propagated:
+            print("  外へ出うる明示的な例外は確認できません（組み込み・外部ライブラリの例外は含まない）")
+        for h in u.exceptions.handlers:
+            traits = "握りつぶし" if h.swallowed else ("再送出あり" if h.reraises else "処理あり")
+            print(f"  関数内の例外処理: L{h.line} except {safe(', '.join(h.types))} — {traits}")
+        if u.exceptions.unresolved_calls:
+            print(f"  ※ 呼び出し先を特定できない呼び出しが {u.exceptions.unresolved_calls}件あり、そこからの例外は追えていません")
+    labels = {"retry": "リトライ", "timeout": "タイムアウト指定", "sleep": "待機"}
+    for hint in u.resilience:
+        print(f"  {labels[hint.kind]}の手がかり: L{hint.line} {safe(hint.detail)}")
+    for finding in u.risks:
+        print(f"  リスクの手がかり: L{finding.line} [{finding.severity}] {finding.rule} — {safe(finding.message)}")
+
+    _print_section("8. なぜ現在の実装になっているのか（履歴の手がかり）")
+    if u.history and u.history.available:
+        for commit in u.history.commits[: min(limit, 6)]:
+            print(f"  {commit.date}  {commit.hash[:8]}  {safe(commit.author)}  {safe(commit.subject)}")
+        if not u.history.commits:
+            print("  この範囲に触れたコミットは確認できません（未コミットの可能性）")
+        if u.history.modified_in_working_tree:
+            print("  ※ 未コミットの変更があり、履歴と行範囲の対応がずれている可能性があります")
+    else:
+        print("  Gitの履歴を取得できません")
+    print("  ※ 設計判断の理由は、コミットメッセージ・Issue・設計資料にあります。コードと履歴からは推測しません。")
+
+    if u.limitations:
+        _print_section("確認できなかったこと・対象外")
+        for text in u.limitations:
+            print(f"  ・{safe(text)}")
+    _warn_stale(stale)
+    return 0
+
+
+def _cmd_environment(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    report = EnvironmentService().report(project, index)
+    if args.format == "json":
+        _emit_json({
+            "python_requirement": report.python_requirement, "declared": report.declared,
+            "used_external": dict(report.used_external), "undeclared": report.undeclared,
+            "unused_declared": report.unused_declared, "frameworks": report.frameworks,
+            "platform_checks": [vars(x) for x in report.platform_checks],
+            "executables": [vars(x) for x in report.executables], "c_system_headers": report.c_system_headers,
+        })
+        return 0
+    print("実行環境の前提（pyproject/requirements・import・OS判定・外部コマンドから）")
+    print(f"\n■ 言語のバージョン\n  Python: {safe(report.python_requirement) or '宣言なし（pyproject.tomlのrequires-python）'}")
+    print(f"\n■ 宣言されている依存（{len(report.declared)}件）")
+    for name, origin in report.declared.items():
+        print(f"  {safe(name)}  ({safe(origin)})")
+    print(f"\n■ 使われている外部ライブラリ（importされる外部のトップレベル名、{len(report.used_external)}件）")
+    print("  " + (", ".join(f"{safe(n)}×{c}" for n, c in report.used_external.most_common()) or "なし"))
+    if report.frameworks:
+        print("\n■ フレームワーク・ライブラリの種類")
+        for label, names in report.frameworks.items():
+            print(f"  {label}: {', '.join(safe(n) for n in names)}")
+    if report.undeclared:
+        print(f"\n■ 使われているが、宣言に見つからない（候補）: {', '.join(safe(n) for n in report.undeclared)}")
+        print("  ※ パッケージ名とimport名が異なる場合（例: beautifulsoup4 と bs4）も、ここに出ます。")
+    if report.unused_declared:
+        print(f"\n■ 宣言されているが、importが見つからない（候補）: {', '.join(safe(n) for n in report.unused_declared)}")
+    print(f"\n■ OS・実行環境による分岐（{len(report.platform_checks)}件）")
+    for site in report.platform_checks[: args.limit]:
+        print(f"  {safe(site.path)}:{site.line}  {safe(site.detail)}")
+    print(f"\n■ 起動する外部コマンド（{len(report.executables)}件）")
+    for site in report.executables[: args.limit]:
+        print(f"  {safe(site.path)}:{site.line}  {safe(site.detail)}")
+    if report.c_system_headers:
+        print(f"\n■ Cのシステムヘッダー: {', '.join(safe(h) for h in report.c_system_headers)}")
+    _warn_stale(stale)
+    print("※ 実行はしていません。静的に確認できる前提のみです（ライブラリの実際のバージョンやOSの設定は確認できません）。", file=sys.stderr)
+    return 0
+
+
+def _cmd_docs_check(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    report = SpecCheckService().check(project, index)
+    if args.format == "json":
+        _emit_json({"documents": report.documents, "checked": report.checked,
+                    "missing_in_code": [vars(m) for m in report.missing_in_code],
+                    "undocumented_options": report.undocumented_options, "undocumented_env": report.undocumented_env})
+        return 0
+    print(f"文書 {report.documents}件のバッククォート内の識別子・オプション・環境変数 {report.checked}件を、実装と照合（文字列の一致のみ）")
+    labels = {"identifier": "識別子", "option": "オプション", "env": "環境変数"}
+    print(f"\n■ 文書に書かれているが、実装で見つからない（{len(report.missing_in_code)}件。文書が古い、または概念的な用語の可能性）")
+    for m in report.missing_in_code[: args.limit]:
+        print(f"  {safe(m.path)}:{m.line}  [{labels[m.kind]}] {safe(m.token)}")
+    print(f"\n■ 実装にあるが、文書に書かれていないオプション（{len(report.undocumented_options)}件）")
+    for name, path, line in report.undocumented_options[: args.limit]:
+        print(f"  {safe(path)}:{line}  {safe(name)}")
+    print(f"\n■ 実装にあるが、文書に書かれていない環境変数（{len(report.undocumented_env)}件）")
+    for name, path, line in report.undocumented_env[: args.limit]:
+        print(f"  {safe(path)}:{line}  {safe(name)}")
+    _warn_stale(stale)
+    print("※ 仕様の意味は理解せず、名前の一致だけを見ています。結果は、確認すべき箇所の手がかりです。", file=sys.stderr)
     return 0
 
 
@@ -1538,6 +1925,42 @@ def build_parser() -> argparse.ArgumentParser:
     boundaries = add("boundaries", "入口と境界（エントリポイント・CLI・HTTP・イベント・スレッド・非同期・キャッシュ）を表示する", _cmd_boundaries)
     boundaries.add_argument("--kind", action="append", choices=list(BOUNDARY_LABELS), help="種類で絞り込む")
     boundaries.add_argument("--limit", type=int, default=20, help="種類ごとの表示件数")
+
+    understand = add("understand", "関数の読解カード: 8つの問い（なぜ存在する/誰が呼ぶ/入力/変更/戻り値/影響/失敗時/履歴）に事実で答える", _cmd_understand, ("text",))
+    understand.add_argument("name", help="関数・メソッドの名前または修飾名")
+    understand.add_argument("--depth", type=int, default=3, help="呼び出しをたどる深さ")
+    understand.add_argument("--limit", type=int, default=8, help="各項目の表示件数")
+    understand.add_argument("--file")
+
+    history = add("history", "変更履歴（シンボル指定）、または変更頻度・同時変更の多いファイル（指定なし）を表示する（Git・読み取り専用）", _cmd_history)
+    history.add_argument("name", nargs="?", help="シンボル名（省略時はリポジトリ全体の傾向）")
+    history.add_argument("--limit", type=int, default=10)
+    history.add_argument("--max-commits", type=int, default=2000, help="全体の傾向で調べるコミット数")
+    history.add_argument("--file")
+
+    tests = add("tests", "シンボルに届くテスト、または届くテストがないコード(--untested)を表示する", _cmd_tests)
+    tests.add_argument("name", nargs="?", help="シンボル名")
+    tests.add_argument("--untested", action="store_true", help="どのテストからも静的に届かない関数・クラスを一覧する")
+    tests.add_argument("--depth", type=int, default=3)
+    tests.add_argument("--min-lines", type=int, default=1, help="--untested で対象にする最小の行数")
+    tests.add_argument("--limit", type=int, default=30)
+    tests.add_argument("--file")
+
+    impact = add("impact", "シンボルを変更したときの影響範囲（利用者側への波及・入口・テスト）を表示する", _cmd_impact)
+    impact.add_argument("name", help="名前または修飾名")
+    impact.add_argument("--depth", type=int, default=4)
+    impact.add_argument("--limit", type=int, default=20)
+    impact.add_argument("--file")
+
+    unused = add("unused", "どこからも参照されていないシンボルの候補を、確度つきで表示する", _cmd_unused)
+    unused.add_argument("--min-confidence", choices=("high", "medium", "low"), default="medium", help="表示する最低の確度")
+    unused.add_argument("--limit", type=int, default=20)
+
+    environment = add("environment", "実行環境の前提（Pythonのバージョン・依存・OS分岐・外部コマンド）を表示する", _cmd_environment)
+    environment.add_argument("--limit", type=int, default=15)
+
+    docs_check = add("docs-check", "文書の識別子・オプション・環境変数と、実装の差を探す（仕様と実装のずれの手がかり）", _cmd_docs_check)
+    docs_check.add_argument("--limit", type=int, default=20)
 
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")

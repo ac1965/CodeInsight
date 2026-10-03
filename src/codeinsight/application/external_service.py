@@ -87,19 +87,86 @@ _C_HEADER_PREFIXES: dict[str, str] = {
     **{p: "gui" for p in ("gtk/", "SDL", "X11/", "GL/")},
 }
 
+# 操作の種類。カテゴリ（何に触れるか）とは別に、「何をするか」を最長一致の接頭辞で分類する。
+#   pure   : 外部へ触れない（文字列・パスの計算、パース、例外クラス等）
+#   read   : 外部から読み取る        write  : 外部へ書き込む・作る・消す
+#   effect : ネットワーク・プロセス等の外部呼び出し    output : 標準出力・ログへの出力
+#   io     : 読み書きのどちらか静的に分からない（open等）
+_OPERATIONS: dict[str, str] = {
+    **{p: "pure" for p in (
+        "urllib.parse", "pathlib.Path", "pathlib.PurePath", "pathlib.Path.resolve", "pathlib.Path.with_suffix",
+        "pathlib.Path.with_name", "pathlib.Path.with_stem", "pathlib.Path.joinpath", "pathlib.Path.expanduser",
+        "pathlib.Path.absolute", "pathlib.Path.relative_to", "pathlib.Path.as_posix", "pathlib.Path.is_absolute",
+        "pathlib.Path.parent", "pathlib.Path.name", "pathlib.Path.suffix", "pathlib.Path.stem", "pathlib.Path.parts",
+        "os.path.join", "os.path.basename", "os.path.dirname", "os.path.splitext", "os.path.abspath",
+        "os.path.normpath", "os.path.relpath", "os.path.expanduser", "os.path.split", "os.path.isabs",
+        "json.loads", "json.dumps", "hashlib", "hmac", "base64", "shlex", "fnmatch", "logging.getLogger",
+        "io.StringIO", "io.BytesIO", "argparse", "functools", "itertools", "platform", "sys.argv",
+        "os.getcwd", "os.path.sep", "tempfile.gettempdir")},
+    **{p: "read" for p in (
+        "pathlib.Path.read_text", "pathlib.Path.read_bytes", "pathlib.Path.exists", "pathlib.Path.is_file",
+        "pathlib.Path.is_dir", "pathlib.Path.iterdir", "pathlib.Path.glob", "pathlib.Path.rglob",
+        "pathlib.Path.stat", "pathlib.Path.samefile", "os.listdir", "os.walk", "os.scandir", "os.stat",
+        "os.path.exists", "os.path.isfile", "os.path.isdir", "os.path.getsize", "os.path.getmtime",
+        "os.path.realpath", "json.load", "glob.glob", "glob.iglob", "os.environ", "os.getenv")},
+    **{p: "write" for p in (
+        "pathlib.Path.write_text", "pathlib.Path.write_bytes", "pathlib.Path.mkdir", "pathlib.Path.unlink",
+        "pathlib.Path.rmdir", "pathlib.Path.rename", "pathlib.Path.touch", "pathlib.Path.chmod",
+        "pathlib.Path.symlink_to", "pathlib.Path.hardlink_to", "pathlib.Path.replace", "shutil.copy",
+        "shutil.copy2", "shutil.copyfile", "shutil.copytree", "shutil.move", "shutil.rmtree", "os.remove",
+        "os.unlink", "os.rename", "os.replace", "os.makedirs", "os.mkdir", "os.rmdir", "os.chmod", "os.chown",
+        "json.dump", "pickle.dump", "tempfile.mkdtemp", "tempfile.mkstemp", "tempfile.NamedTemporaryFile",
+        "tempfile.TemporaryDirectory", "os.environ.setdefault", "os.putenv")},
+    **{p: "effect" for p in (
+        "requests.get", "requests.post", "requests.put", "requests.delete", "requests.patch", "requests.head",
+        "requests.request", "requests.Session.get", "requests.Session.post", "requests.Session.put",
+        "requests.Session.delete", "requests.Session.patch", "requests.Session.head", "requests.Session.request",
+        "urllib.request", "http.client", "socket", "smtplib", "httpx", "aiohttp", "websockets", "websocket",
+        "ftplib", "subprocess", "os.system", "os.popen", "os.exec", "os.spawn", "os.kill", "os.fork", "sys.exit",
+        "signal", "multiprocessing", "threading.Thread", "asyncio.run", "asyncio.create_task",
+        "sqlite3.connect", "sqlite3.Connection.execute", "sqlite3.Connection.executemany",
+        "sqlite3.Connection.commit", "psycopg2.connect", "pymysql.connect", "pymongo", "redis", "boto3")},
+    **{p: "output" for p in ("print", "builtins.print", "logging", "warnings.warn", "sys.stdout", "sys.stderr")},
+    **{p: "io" for p in ("open", "builtins.open", "pathlib.Path.open", "zipfile.ZipFile", "tarfile.open", "gzip.open",
+                         "io.open", "codecs.open", "shelve.open", "dbm.open")},
+}
+EFFECT_OPERATIONS = ("write", "effect", "output", "io")
+INPUT_OPERATIONS = ("read", "io", "effect")
+_EXCEPTION_SUFFIXES = ("Error", "Exception", "Warning", "Exit", "Interrupt")
+
+
+def classify_operation(name: str) -> str:
+    """外部名の操作の種類（pure/read/write/effect/output/io）。未知のものは "call"。"""
+
+    last = name.rsplit(".", 1)[-1]
+    if last.endswith(_EXCEPTION_SUFFIXES) and last[:1].isupper():
+        return "pure"  # 例外クラスの参照（送出・捕捉の記述）は、外部への操作ではない
+    best: tuple[int, str] | None = None
+    for prefix, operation in _OPERATIONS.items():
+        if name == prefix or name.startswith(prefix + "."):
+            if best is None or len(prefix) > best[0]:
+                best = (len(prefix), operation)
+    return best[1] if best else "call"
+
+
 # 副作用の可能性が高い呼び出し（名前での判定。外部の関数名・メソッド名が一致するもの）。
 _EFFECT_METHODS = {
     "write_text": "ファイルへの書き込み", "write_bytes": "ファイルへの書き込み", "mkdir": "ディレクトリ作成",
-    "unlink": "ファイル削除", "rmdir": "ディレクトリ削除", "touch": "ファイル作成", "rename": "ファイル名変更",
-    "replace": "ファイル置換/名前変更", "chmod": "権限変更", "symlink_to": "リンク作成",
-}
-_PURE_LOOKING = frozenset({"replace"})  # str.replace と区別できないため、変数経由の場合は確度を下げる
+    "unlink": "ファイル削除", "rmdir": "ディレクトリ削除", "touch": "ファイル作成", "chmod": "権限変更",
+    "symlink_to": "リンク作成",
+}  # `replace`/`rename` は str.replace 等と区別できないため、メソッド名だけの推定には含めない
+_READ_METHODS = {
+    "read_text": "ファイルの読み込み", "read_bytes": "ファイルの読み込み", "iterdir": "ディレクトリの列挙",
+    "rglob": "ディレクトリの走査", "glob": "ディレクトリの走査", "is_file": "ファイルの確認",
+    "is_dir": "ディレクトリの確認", "exists": "存在の確認",
+}  # 変数の型が分からない場合の、メソッド名による推定（Path以外の同名メソッドの可能性がある）
 
 
 @dataclass(frozen=True)
 class ExternalUse:
     category: str
     library: str  # 外部名（例: requests.get, sqlite3, stdio.h）
+    operation: str  # pure / read / write / effect / output / io / call（未分類）
     source_id: str | None  # 使っているシンボル（import/includeはファイル単位なのでモジュールシンボル、無ければNone）
     owner: str  # 使っているシンボルの修飾名（無ければファイルのパス）
     path: str
@@ -129,6 +196,8 @@ class EffectSummary:
     symbol: Symbol
     direct: list[ExternalUse] = field(default_factory=list)
     reachable: list[tuple[ExternalUse, list[str]]] = field(default_factory=list)  # (使用箇所, 呼び出し経路)
+    reads_direct: list[ExternalUse] = field(default_factory=list)  # 外部からの読み取り（入力）
+    reads_reachable: list[tuple[ExternalUse, list[str]]] = field(default_factory=list)
     unresolved_calls: int = 0  # 呼び出し先を特定できず、副作用を追えない呼び出しの数
 
 
@@ -213,7 +282,7 @@ class ExternalService:
             owner = self._module_symbol(index, dependency.source_file_id)
             report.uses.append(
                 ExternalUse(
-                    category, name, owner.symbol_id if owner else None,
+                    category, name, "import", owner.symbol_id if owner else None,
                     owner.qualified_name if owner else source_file.relative_path, source_file.relative_path,
                     dependency.evidence_location.start_line,
                     "include" if dependency.dependency_kind == DependencyKind.INCLUDE else "import",
@@ -231,13 +300,15 @@ class ExternalService:
             if reference.resolution_status == ResolutionStatus.EXTERNAL:
                 name = external_name(reference) if language == Language.PYTHON else reference.target_name
                 category = (categorize(name, language) if language == Language.PYTHON else categorize_c_function(name)) if name else None
-                if category and category not in ("other",):
-                    report.uses.append(ExternalUse(category, name, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "confirmed"))
+                operation = classify_operation(name) if name else "call"
+                if category and category not in ("other",) and operation != "pure":  # 純粋な計算・例外クラスは外部への操作ではない
+                    report.uses.append(ExternalUse(category, name, operation, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "confirmed"))
             elif reference.resolution_status == ResolutionStatus.UNRESOLVED and reference.reference_kind == ReferenceKind.CALL:
                 method = reference.target_name.rsplit(".", 1)[-1]
-                if method in _EFFECT_METHODS and "." in reference.target_name:
+                if "." in reference.target_name and (method in _EFFECT_METHODS or method in _READ_METHODS):
+                    operation = "write" if method in _EFFECT_METHODS else "read"
                     report.uses.append(
-                        ExternalUse("filesystem", reference.target_name, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "inferred")
+                        ExternalUse("filesystem", reference.target_name, operation, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "inferred")
                     )
         report.uses.sort(key=lambda u: (u.category, u.library, u.path, u.line))
         return report
@@ -256,16 +327,23 @@ class ExternalService:
         """
 
         uses_by_symbol: dict[str, list[ExternalUse]] = defaultdict(list)
+        reads_by_symbol: dict[str, list[ExternalUse]] = defaultdict(list)
         for use in report.uses:
-            if use.source_id and use.category in SIDE_EFFECT_CATEGORIES and use.kind == "call":
+            if use.source_id and use.kind == "call" and use.operation in EFFECT_OPERATIONS:
                 uses_by_symbol[use.source_id].append(use)
+            if use.source_id and use.kind == "call" and use.operation == "read":
+                reads_by_symbol[use.source_id].append(use)
 
         calls_from: dict[str, list[Reference]] = defaultdict(list)
         for reference in index.references:
             if reference.reference_kind == ReferenceKind.CALL:
                 calls_from[reference.source_symbol_id].append(reference)
 
-        summary = EffectSummary(symbol, direct=list(uses_by_symbol.get(symbol.symbol_id, [])))
+        summary = EffectSummary(
+            symbol,
+            direct=list(uses_by_symbol.get(symbol.symbol_id, [])),
+            reads_direct=list(reads_by_symbol.get(symbol.symbol_id, [])),
+        )
         seen = {symbol.symbol_id}
         frontier: list[tuple[str, list[str]]] = [(symbol.symbol_id, [symbol.qualified_name])]
         counted: set[str] = set()
@@ -287,6 +365,7 @@ class ExternalService:
                         continue
                     path = [*route, target.qualified_name]
                     summary.reachable.extend((use, path) for use in uses_by_symbol.get(target_id, []))
+                    summary.reads_reachable.extend((use, path) for use in reads_by_symbol.get(target_id, []))
                     next_frontier.append((target_id, path))
             frontier = next_frontier
         return summary

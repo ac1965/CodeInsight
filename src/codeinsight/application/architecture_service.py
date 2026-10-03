@@ -196,9 +196,14 @@ class ArchitectureService:
         return found
 
 
-def _component(path: str, depth: int) -> str:
+def component_of(path: str, depth: int) -> str:
+    """ファイルの相対パスが属するコンポーネント名（ディレクトリを深さdepthまで）。"""
+
     parent = PurePosixPath(path).parent.parts
     return "/".join(parent[:depth]) if parent else "(root)"
+
+
+_component = component_of
 
 
 def _role(name: str) -> str | None:

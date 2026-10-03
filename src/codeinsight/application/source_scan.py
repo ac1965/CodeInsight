@@ -43,11 +43,20 @@ class ScanResult:
     skipped: list[str] = field(default_factory=list)  # 解析後に変更された・読めない・構文エラーで対象外にしたファイル
 
 
-def iter_python_files(project: Project, index: ProjectIndex, result: ScanResult) -> Iterator[ScannedFile]:
+def iter_python_files(
+    project: Project,
+    index: ProjectIndex,
+    result: ScanResult,
+    only_paths: set[str] | None = None,
+    contains: str | None = None,
+) -> Iterator[ScannedFile]:
     """解析済みのPythonファイルを、解析時と同じ内容であることを確認して順に返す。
 
     解析後に変更されている・読めない・構文エラーのファイルは、位置が対応しないため
     返さず、result.skipped に記録する。
+
+    only_paths を渡すとそのファイルだけを、contains を渡すとその文字列を含むファイルだけを対象にする。
+    絞り込みは構文解析の前に行う（全ファイルを解析するコストを避けるため）。
     """
 
     by_file: dict[str, list[Symbol]] = {}
@@ -55,6 +64,8 @@ def iter_python_files(project: Project, index: ProjectIndex, result: ScanResult)
         by_file.setdefault(symbol.file_id, []).append(symbol)
     for source_file in sorted(index.files.values(), key=lambda f: f.relative_path):
         if source_file.language != Language.PYTHON:
+            continue
+        if only_paths is not None and source_file.relative_path not in only_paths:
             continue
         try:
             data = (project.root_path / source_file.relative_path).read_bytes()
@@ -65,6 +76,8 @@ def iter_python_files(project: Project, index: ProjectIndex, result: ScanResult)
             result.skipped.append(source_file.relative_path)
             continue
         text = data.decode("utf-8", errors="replace")
+        if contains is not None and contains not in text:
+            continue
         try:
             tree = ast.parse(text)
         except SyntaxError:

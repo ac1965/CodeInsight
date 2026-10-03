@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from codeinsight.analysis.call_graph import (
     CallGraph,
@@ -21,7 +20,6 @@ from codeinsight.domain import (
     FileFreshness,
     Project,
     Reference,
-    ReferenceKind,
     ResolutionStatus,
     Symbol,
     SymbolKind,

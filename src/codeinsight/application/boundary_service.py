@@ -48,7 +48,20 @@ class BoundaryService:
     登録されるコールバック等は、名前を静的に解決できたものだけ target に結び付ける。
     """
 
-    def scan(self, project: Project, index: ProjectIndex) -> tuple[list[BoundaryItem], list[str]]:
+    def scan(
+        self,
+        project: Project,
+        index: ProjectIndex,
+        *,
+        contains: str | None = None,
+        light: bool = False,
+    ) -> tuple[list[BoundaryItem], list[str]]:
+        """入口と境界を洗い出す。
+
+        light=True はソースを構文解析せず、解析結果（シンボル）とpyprojectだけから分かるものに限る。
+        contains を渡すと、その文字列を含むファイルだけを構文解析する（特定のシンボルを登録している箇所の探索用）。
+        """
+
         items: list[BoundaryItem] = []
         result = ScanResult()
         symbols_by_qualified = {s.qualified_name: s for s in index.symbols.values()}
@@ -79,8 +92,9 @@ class BoundaryService:
             elif symbol.kind in (SymbolKind.CLASS, SymbolKind.FUNCTION, SymbolKind.METHOD) and "cache" in symbol.name.lower():
                 items.append(BoundaryItem("cache", "名前に cache を含む定義", path, symbol.start_line, symbol.qualified_name, symbol, confidence="inferred"))
 
-        for scanned in iter_python_files(project, index, result):
-            items.extend(self._scan_file(scanned, symbols_by_qualified, symbols_by_name))
+        if not light:
+            for scanned in iter_python_files(project, index, result, contains=contains):
+                items.extend(self._scan_file(scanned, symbols_by_qualified, symbols_by_name))
         items.sort(key=lambda i: (list(KIND_LABELS).index(i.kind), i.path, i.line))
         return items, result.skipped
 

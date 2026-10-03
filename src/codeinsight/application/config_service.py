@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from codeinsight.analysis import flow_analysis as fa
+from codeinsight.application.paths import is_test_path
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.source_scan import ScanResult, ScannedFile, iter_python_files
 from codeinsight.domain import Project, ReferenceKind, ResolutionStatus, Symbol, SymbolKind
@@ -16,7 +17,6 @@ _CONFIG_LOADERS = {
     "yaml.load": "YAML", "configparser.ConfigParser": "INI", "dotenv.load_dotenv": ".env", "load_dotenv": ".env",
     "json.load": "JSON（設定かデータかは区別できない）",
 }
-_TEST_PATH = re.compile(r"(^|/)(tests?|testing)(/|$)|(^|/)test_[^/]*\.py$|_test\.py$")
 _CONSTANT = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -60,7 +60,9 @@ class ConfigService:
     名前空間（`args.<dest>`）の属性読み取りから求めた、静的な近似。
     """
 
-    def scan(self, project: Project, index: ProjectIndex) -> tuple[list[ConfigItem], list[str]]:
+    def scan(
+        self, project: Project, index: ProjectIndex, only_paths: set[str] | None = None
+    ) -> tuple[list[ConfigItem], list[str]]:
         items: list[ConfigItem] = []
         result = ScanResult()
         refs_by_target: dict[str, list] = {}
@@ -69,12 +71,12 @@ class ConfigService:
                 refs_by_target.setdefault(reference.target_symbol_id, []).append(reference)
         symbols_by_qualified = {s.qualified_name: s for s in index.symbols.values()}
 
-        for scanned in iter_python_files(project, index, result):
+        for scanned in iter_python_files(project, index, result, only_paths=only_paths):
             path = scanned.source_file.relative_path
             items.extend(self._env(scanned, path))
             items.extend(self._cli(scanned, path))
             items.extend(self._loaders(scanned, path))
-            if not _TEST_PATH.search(path):
+            if not is_test_path(path):
                 items.extend(self._constants(scanned, path, index, symbols_by_qualified, refs_by_target))
         items.sort(key=lambda i: (list(KIND_LABELS).index(i.kind), i.name, i.path, i.line))
         return items, result.skipped
@@ -145,7 +147,10 @@ class ConfigService:
                 if not names:
                     continue
                 keyword = {k.arg: k.value for k in node.keywords if k.arg}
-                dest = _literal(keyword["dest"]) if "dest" in keyword else _dest(names)
+                if "BooleanOptionalAction" in fa.unparse(keyword.get("action"), 60):
+                    # argparse.BooleanOptionalAction は、--x に加えて --no-x を自動で作る
+                    names = [*names, *[f"--no-{n[2:]}" for n in names if n.startswith("--")]]
+                dest = _literal(keyword["dest"]) if "dest" in keyword else _dest(names[:1] if names[0].startswith("--") else names)
                 item = ConfigItem(
                     "cli_option", ", ".join(names), path, node.lineno, scanned.owner.name_at(node.lineno),
                     default=fa.unparse(keyword.get("default"), 40),

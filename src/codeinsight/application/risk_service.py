@@ -46,10 +46,16 @@ class RiskService:
     根拠となる位置と規則名を示し、利用者が確認する前提とする。
     """
 
-    def scan(self, project: Project, index: ProjectIndex, rules: set[str] | None = None) -> tuple[list[Finding], list[str]]:
+    def scan(
+        self,
+        project: Project,
+        index: ProjectIndex,
+        rules: set[str] | None = None,
+        only_paths: set[str] | None = None,
+    ) -> tuple[list[Finding], list[str]]:
         findings: list[Finding] = []
         result = ScanResult()
-        for scanned in iter_python_files(project, index, result):
+        for scanned in iter_python_files(project, index, result, only_paths=only_paths):
             findings.extend(self._scan_file(scanned.source_file.relative_path, scanned.text, scanned.tree, scanned.owner))
         if rules:
             findings = [f for f in findings if f.rule in rules]
