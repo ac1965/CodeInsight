@@ -13,6 +13,7 @@
 
 ### 修正
 
+* Linuxで、C言語の解析が標準ヘッダー（`<stdio.h>`等）を含むだけで全体として失敗する不具合。pipで入るlibclangはClang組み込みヘッダー（`<stddef.h>`等）を含まないため、`clang`/`gcc` の設定値（`-print-resource-dir` / `-print-file-name=include`、読み取り専用）から場所を検出して `-isystem` に加える。CIのubuntuで29件のテストが失敗して判明した。
 * mypy が見つけた不具合: `understand` が、引数を持たないPython関数で `Language` の未定義により異常終了する。
 * `requires-python` を `>=3.11` に修正（設定ファイルの読み込みに `tomllib` を使うため。従来の `>=3.10` は誤り）。
 

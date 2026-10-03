@@ -23,6 +23,34 @@ from codeinsight.domain import (
 _DEFAULT_ARGS = ["-std=c11"]
 
 
+def _query_compiler(command: list[str]) -> str:
+    """コンパイラの設定値だけを問い合わせる（読み取り専用。対象のコードはコンパイルも実行もしない）。"""
+
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _compiler_builtin_include_args() -> list[str]:
+    """Linux等で、コンパイラ組み込みのヘッダー（<stddef.h>等）の場所を検出する。
+
+    pipで入るlibclangはClangの組み込みヘッダーを含まないため、これが無いと
+    <stdio.h>などを含むだけでC言語の解析が全体として失敗する。
+    見つからない場合は何も足さず、その分の制約は解析結果のエラーとして表れる。
+    """
+
+    for command in (["clang", "-print-resource-dir"], ["gcc", "-print-file-name=include"], ["cc", "-print-file-name=include"]):
+        found = _query_compiler(command)
+        if not found:
+            continue
+        include_dir = Path(found) / "include" if command[1] == "-print-resource-dir" else Path(found)
+        if include_dir.is_dir() and (include_dir / "stddef.h").exists():
+            return ["-isystem", str(include_dir)]
+    return []
+
+
 def _detect_default_args() -> list[str]:
     """compile_commands.jsonが無い場合の最小限のデフォルト引数を組み立てる。
 
@@ -34,7 +62,7 @@ def _detect_default_args() -> list[str]:
 
     args = list(_DEFAULT_ARGS)
     if platform.system() != "Darwin":
-        return args
+        return [*_compiler_builtin_include_args(), *args]
     try:
         completed = subprocess.run(
             ["xcrun", "--show-sdk-path"],
