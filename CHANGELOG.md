@@ -27,6 +27,7 @@
 
 ### 修正
 
+* `make reading` で `uv` が無い場合に、make の `Error 127` ではなく原因を示して止まる（事前確認）。
 * `make reading` が `python3` に依存し、最小のLinux環境（pythonが無い）で目次が作れなかった。失敗も `|| true` で隠れていた。`uv run python` に統一し、失敗を表示する。
 * Makefile のコマンド変数名が `CI` で、GitHub Actions が設定する環境変数 `CI=true` に上書きされ、すべてのコマンドが `true`（何もしない）に置き換わっていた。`CODEINSIGHT` に改名（CIで `make reading` のテストが失敗して発見）。
 * 言語によって対応範囲が異なる機能の結果が、「0件」「確認できませんでした」「なし」とだけ表示され、**検査していない**ことが「問題なし」と誤読されうる問題。共通の仕組みで、対象外の言語とそのファイル数を注記する（`risks`・`config`・`environment`・`boundaries`）。テキスト出力は標準出力、JSON出力は形式を変えないよう標準エラー（`environment` のJSONは `not_covered_languages` キー）。

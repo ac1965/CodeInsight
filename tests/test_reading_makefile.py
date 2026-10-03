@@ -117,3 +117,8 @@ def test_makefile_does_not_depend_on_a_bare_python3() -> None:
     # 最小のLinux環境には python3 が無い。uv が用意する環境で実行する（さもないと目次が作れず、失敗が隠れる）
     text = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert "python3 -c" not in text
+
+
+def test_missing_uv_is_reported_clearly_instead_of_error_127(tmp_path: Path) -> None:
+    result = _make("reading", f"TARGET={FIXTURES / 'layered'}", f"OUT={tmp_path / 'o'}", "UV=no-such-uv-command")
+    assert result.returncode == 2 and "見つかりません" in result.stdout + result.stderr  # make の "Error 127" ではなく、原因を示して止まる

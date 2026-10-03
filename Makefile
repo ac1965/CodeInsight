@@ -222,6 +222,7 @@ export READING_INDEX
 
 reading-check:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading TARGET=../my-repo))
+	@command -v $(firstword $(UV)) >/dev/null 2>&1 || { echo "$(firstword $(UV)) が見つかりません（https://docs.astral.sh/uv/ からインストールするか、UV=... で指定してください）"; exit 2; }
 	@test -d "$(TARGET)" || { echo "TARGET がディレクトリではありません: $(TARGET)"; exit 2; }
 	@case "$$(cd "$(TARGET)" && pwd -P)/" in \
 	  "$$(mkdir -p "$(OUT)" && cd "$(OUT)" && pwd -P)/"*) echo "OUT は TARGET の外に指定してください（対象を変更しないため）: $(OUT)"; exit 2;; esac; \
