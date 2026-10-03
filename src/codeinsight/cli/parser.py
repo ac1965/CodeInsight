@@ -234,6 +234,9 @@ def build_parser() -> argparse.ArgumentParser:
     from codeinsight.cli import ai_commands
 
     ai_commands.register(add)
+    from codeinsight.cli import dynamic_commands
+
+    dynamic_commands.register(add)
 
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")

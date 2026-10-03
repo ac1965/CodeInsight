@@ -72,6 +72,12 @@ src/codeinsight/
 │   ├── tui_view.py        TUIの画面の組み立て（描画命令を返す純粋関数）
 │   └── tui.py             cursesによる入出力（薄い層）
 │
+├── dynamic/           動的解析（スタブ。設計は DYNAMIC_ANALYSIS.md。対象を実行するコードを持たない）
+│   ├── permission.py      許可モデル（既定は拒否。--allow-run とコマンドの明示が揃うまで実行しない）
+│   ├── sandbox.py         隔離の方針（既定は最も厳しい）とバックエンドの確認
+│   ├── collectors.py      収集器の一覧（言語別・すべて未実装）
+│   └── service.py         plan（実行しない計画）/ run（許可の確認のみ。実行は未実装）
+│
 ├── ai/                AI解説（解析結果を入力に、解説を生成・検証する。解析器の代替にはしない）
 │   ├── config.py          AIConfig（送信の許可・送信先・APIキーの秘匿）、設定の解決（コマンドライン>環境変数>設定ファイル）
 │   ├── provider.py        AIProvider Protocol、OpenAICompatibleProvider（標準ライブラリのみ。Ollama等）
@@ -91,6 +97,7 @@ src/codeinsight/
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── reading_c.py       Cの関数の読解コマンド（flow / dataflow / exceptions / state）の表示
+    ├── dynamic_commands.py 動的解析のコマンド（dynamic-plan / dynamic-run。スタブ）
     ├── graph.py           グラフ出力（graph）
     ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status / ai-eval）
     ├── parser.py          コマンドの登録（argparse）とエントリポイント `main`
