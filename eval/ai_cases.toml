@@ -1,0 +1,95 @@
+# AI解説の評価ケース。リポジトリ内のサンプル（tests/fixtures）を対象に、次を機械的に採点する。
+#   expect_symbols  : 回答が引用すべき根拠（シンボルの定義範囲。行番号ではなく名前で書く）
+#   expect_terms    : 回答に現れるべき語（再現率が min_term_recall 以上であること。既定 0.6）
+#   forbidden_terms : コードに存在しない事柄（作り話の罠）。回答に現れたら不合格
+# 実行: codeinsight ai-eval --allow-send --ai-model <モデル>   （送信先は既定でlocalhostのOllama）
+
+[[case]]
+id = "layered-place-order"
+project = "../tests/fixtures/layered"
+kind = "symbol"
+target = "app.service.orders.place_order"
+expect_symbols = ["app.repository.store.save", "app.infra.mailer.notify"]
+expect_terms = ["save", "notify", "slug"]
+forbidden_terms = ["PaymentGateway", "send_sms", "kafka"]
+note = "呼び出し先（保存・通知・整形）を、根拠つきで説明できるか"
+
+[[case]]
+id = "layered-store-save"
+project = "../tests/fixtures/layered"
+kind = "symbol"
+target = "app.repository.store.save"
+expect_symbols = ["app.repository.store.save"]
+expect_terms = ["sqlite3", "orders.log", "json"]
+forbidden_terms = ["postgres", "redis", "mongodb"]
+note = "外部への入出力（データベース・ファイル）を取り違えないか"
+
+[[case]]
+id = "layered-path"
+project = "../tests/fixtures/layered"
+kind = "path"
+target = "app.web.routes.handle"
+target2 = "app.repository.store.save"
+expect_symbols = ["app.service.orders.place_order", "app.repository.store.save"]
+expect_terms = ["place_order", "save"]
+forbidden_terms = ["delete_order", "PaymentGateway"]
+note = "呼び出し経路の順に説明できるか"
+
+[[case]]
+id = "layered-question"
+project = "../tests/fixtures/layered"
+kind = "question"
+question = "place_order は注文をどこに保存しますか?"
+expect_symbols = ["app.service.orders.place_order"]
+expect_terms = ["save"]
+forbidden_terms = ["PaymentGateway", "mongodb"]
+note = "質問から関連コードを検索して答えられるか"
+
+[[case]]
+id = "layered-file"
+project = "../tests/fixtures/layered"
+kind = "file"
+target = "app/repository/store.py"
+expect_symbols = ["app.repository.store.save"]
+expect_terms = ["sqlite3", "json"]
+forbidden_terms = ["redis", "postgres"]
+
+[[case]]
+id = "flow-fetch"
+project = "../tests/fixtures/python_flow"
+kind = "symbol"
+target = "flow.fetch"
+expect_symbols = ["flow.fetch"]
+expect_terms = ["retries", "timeout", "NotFound", "transform"]
+forbidden_terms = ["asyncio", "sqlite", "database"]
+note = "リトライ・タイムアウト・例外・呼び出し先を、取り違えず説明できるか"
+
+[[case]]
+id = "flow-exceptions"
+project = "../tests/fixtures/python_flow"
+kind = "question"
+question = "fetch が失敗したとき、どの例外が送出されますか?"
+expect_symbols = ["flow.fetch"]
+expect_terms = ["NotFound"]
+forbidden_terms = ["TimeoutError", "ConnectionError", "KeyError"]
+note = "コードに無い例外を作らないか"
+
+[[case]]
+id = "boundary-cmd-run"
+project = "../tests/fixtures/python_boundary"
+kind = "symbol"
+target = "app.cmd_run"
+expect_symbols = ["app.cmd_run"]
+expect_terms = ["APP_TIMEOUT", "APP_TOKEN"]
+forbidden_terms = ["redis", "sqlite"]
+note = "設定値（環境変数）を正しく読み取れるか"
+
+[[case]]
+id = "c-main"
+project = "../tests/fixtures/c_callgraph"
+kind = "symbol"
+target = "main"
+expect_symbols = ["main"]
+expect_terms = ["apply", "fib", "helper"]
+forbidden_terms = ["pthread", "socket", "malloc"]
+note = "C言語のコードでも、呼び出し先を取り違えないか"

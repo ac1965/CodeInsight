@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from codeinsight.ai.citations import CitationStatus, ValidationReport
 from codeinsight.ai.config import AIConfig, ConsentError, config_file_warnings, load_ai_config
 from codeinsight.ai.context import ContextError
+from codeinsight.ai.evaluation import EvalError, EvalResult, evaluate, load_cases
 from codeinsight.ai.provider import AIProviderError, OpenAICompatibleProvider
 from codeinsight.ai.service import ExplanationResult, ExplanationService
 from codeinsight.application import FlowAnalysisError, NavigationService
@@ -241,6 +243,63 @@ def cmd_ai_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ai_eval(args: argparse.Namespace) -> int:
+    """評価ケースを実行し、AI解説を機械的な指標で採点する（モデル・プロンプトの比較用）。"""
+
+    from pathlib import Path
+
+    try:
+        cases = load_cases(Path(args.cases))
+    except EvalError as exc:
+        raise CliError(str(exc), 1) from exc
+    if args.only:
+        cases = [c for c in cases if c.case_id in set(args.only)]
+        if not cases:
+            raise CliError(f"指定のidのケースがありません: {', '.join(args.only)}", 2)
+    if args.list:
+        for case in cases:
+            print(f"{case.case_id:<26} {case.kind:<8} {Path(case.project).name:<18} {case.note}")
+        return 0
+
+    config = _config(args)
+    _guard(config.check_consent)  # 送信の許可・モデルの確認（許可が無ければ、何も送信しない）
+    marks = {"pass": "✓", "fail": "✗", "error": "!"}
+
+    def show(result: EvalResult) -> None:
+        if args.format == "json":
+            return
+        if result.status == "error":
+            print(f"! {result.case.case_id:<26} エラー: {safe(result.error)[:110]}")
+            return
+        recall = "-" if result.evidence_recall is None else f"{result.evidence_recall:.0%}"
+        terms = "-" if result.term_recall is None else f"{result.term_recall:.0%}"
+        print(
+            f"{marks[result.status]} {result.case.case_id:<26} 検証:{STATUS_LABEL[ExplanationStatus(result.validation_status)].split('（')[0]:<7} "
+            f"引用 {result.citations_valid}/{result.citations_total}  根拠再現 {recall:>4}  語再現 {terms:>4}  "
+            f"作り話の罠 {len(result.forbidden_hits)}  未確認行 {result.unsupported_lines}  {result.seconds:.0f}秒"
+        )
+        for reason in result.reasons:
+            print(f"    - {safe(reason)}")
+
+    summary = _guard(lambda: evaluate(cases, config, repeat=args.repeat, on_result=show))
+    data = summary.to_dict()
+    if args.report:
+        Path(args.report).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if args.format == "json":
+        emit_json(data)
+    else:
+        def pct(value):
+            return "-" if value is None else f"{value:.0%}"
+
+        print(f"\n── 集計（{len(summary.results)}件、エラー {data['errors']}件、モデル: {safe(config.model or '-')}）")
+        print(f"  合格率 {pct(summary.pass_rate)} / 引用の妥当性 {pct(summary.citation_validity)} / 根拠の再現率(平均) {pct(summary.mean_evidence_recall)} / 語の再現率(平均) {pct(summary.mean_term_recall)}")
+        print(f"  作り話の罠への該当 {summary.forbidden_total}件 / 存在を確認できない名前 {summary.unknown_identifier_total}件 / 検証状態 {summary.status_counts}")
+        print("  ※ 機械的な指標です。語の再現や根拠の引用が、内容の正しさを保証するものではありません。")
+    if summary.pass_rate is not None and summary.pass_rate < args.min_pass_rate:
+        return 5
+    return 0
+
+
 def register(add) -> None:
     """build_parser から呼ばれ、AI関連のコマンドを登録する。"""
 
@@ -267,6 +326,15 @@ def register(add) -> None:
     explanations.add_argument("id", nargs="?", help="解説ID（先頭の数文字でも可）")
     explanations.add_argument("--kind", choices=("symbol", "file", "path", "question"))
     explanations.add_argument("--limit", type=int, default=20)
+
+    ai_eval = add("ai-eval", "評価ケース(eval/ai_cases.toml)を実行し、AI解説を機械的に採点する（モデル・プロンプトの比較用）", cmd_ai_eval, ("text", "json"), exclude=False)
+    ai_eval.add_argument("--cases", default="eval/ai_cases.toml", help="評価ケースのTOML")
+    ai_eval.add_argument("--only", action="append", help="実行するケースのid（複数指定可）")
+    ai_eval.add_argument("--repeat", type=int, default=1, help="各ケースを繰り返す回数（出力の揺れを見る）")
+    ai_eval.add_argument("--report", help="結果をJSONで保存するパス")
+    ai_eval.add_argument("--list", action="store_true", help="ケースの一覧だけ表示する（AIは使わない）")
+    ai_eval.add_argument("--min-pass-rate", type=float, default=0.0, help="合格率がこれを下回ったら、終了コード5にする")
+    _add_ai_options(ai_eval)
 
     status = add("ai-status", "AIの設定と接続を確認する（ソースコードは送信しない）", cmd_ai_status, ("text", "json"), exclude=False)
     status.add_argument("--ai-base-url")

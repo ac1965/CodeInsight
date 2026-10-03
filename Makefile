@@ -23,7 +23,7 @@ AI_OPTS   = $(if $(MODEL),--ai-model $(MODEL))
 .DEFAULT_GOAL := help
 .PHONY: help setup test test-v test-fast check compile clean \
         analyze status overview architecture unresolved \
-        understand explain-dry explain ai-status
+        understand explain-dry explain ai-status ai-eval
 
 help: ## 使えるタスクの一覧を表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -88,3 +88,8 @@ explain: ## AIで解説する（NAME・MODEL・AI_SEND=1 が必須。ローカ�
 	$(if $(MODEL),,$(error MODEL を指定してください。例: MODEL=qwen3-coder:latest))
 	$(if $(filter 1,$(AI_SEND)),,$(error ソースコードをAIへ送信します。許可する場合は AI_SEND=1 を付けてください。内容は make explain-dry で確認できます))
 	$(CI) explain $(NAME) --allow-send $(AI_OPTS) $(READ_OPTS)
+
+ai-eval: ## AI解説を評価ケース(eval/ai_cases.toml)で採点する（MODEL・AI_SEND=1 が必須。サンプルのみを送信）
+	$(if $(MODEL),,$(error MODEL を指定してください。例: MODEL=qwen3-coder:latest))
+	$(if $(filter 1,$(AI_SEND)),,$(error サンプルのソースをAIへ送信します。許可する場合は AI_SEND=1 を付けてください。ケースの一覧は codeinsight ai-eval --list))
+	$(CI) ai-eval --allow-send $(AI_OPTS)
