@@ -66,20 +66,29 @@ src/codeinsight/
 │   ├── html_viewer.py     自己完結型のローカルHTMLビューアー
 │   └── structure_view.py  ディレクトリ・ファイル・シンボルの階層表示
 │
+├── ai/                AI解説（解析結果を入力に、解説を生成・検証する。解析器の代替にはしない）
+│   ├── config.py          AIConfig（送信の許可・送信先・APIキーの秘匿）、設定の解決（コマンドライン>環境変数>設定ファイル）
+│   ├── provider.py        AIProvider Protocol、OpenAICompatibleProvider（標準ライブラリのみ。Ollama等）
+│   ├── context.py         ContextBuilder（解析結果の事実とソースを予算内で組み立て、引用してよい位置を記録）、質問の検索
+│   ├── prompt.py          PromptBuilder（規則・根拠・課題の組み立て）
+│   ├── citations.py       CitationValidator（引用・識別子・根拠のない主張の機械的な検証）
+│   └── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存）
+│
 ├── bootstrap.py       標準の解析アダプターの組み立て（CLI・将来のGUIで共用）
-└── cli.py             コマンドラインインターフェース
+├── cli.py             コマンドラインインターフェース
+└── cli_ai.py          AI関連のコマンド（explain / explain-file / explain-path / ask / explanations / ai-status）
 ```
 
-AI層（AIProvider、PromptBuilder、ContextBuilder、CitationValidator）はPhase 4で実装する。現時点ではAIに依存する機能はない。
+AI層（`ai/`）は、解析基盤（domain・application）の結果を入力として解説を生成・検証する。解析基盤はAI層に依存せず、AIを使わない機能は、AI層が無くても（AIに接続できなくても）動作する。
 
 ## 依存方向
 
 ```
-cli
+cli ──> ai ──────────> application
+ │       │                 ├─> analysis ──> domain
+ │       └─> infrastructure └─> infrastructure ──> domain
  ├─> presentation ──> application
  └─> application
-      ├─> analysis ──> domain
-      └─> infrastructure ──> domain
 ```
 
 * `domain` はどのレイヤーにも依存しない。
@@ -111,7 +120,7 @@ cli
 2. `FreshnessService` が現在のファイルのハッシュと解析時のハッシュを比較し、変更されたファイルがあれば警告を出す。
 3. `NavigationService` / `SearchService` / `GraphBuilder` が結果を返し、`presentation` と `cli` が整形して出力する。
 
-## 保存データ（SQLite、スキーマバージョン3）
+## 保存データ（SQLite、スキーマバージョン4）
 
 | テーブル | 内容 |
 |---|---|
@@ -121,10 +130,11 @@ cli
 | `references_` | 参照（呼び出し・継承・import等）と、解決状態・確からしさ・理由・根拠位置 |
 | `dependencies` | ファイル/モジュール間の依存（include/import）と、解決状態・根拠位置 |
 | `analysis_results` | 解析実行の履歴（解析器バージョン、リビジョン、警告、エラー） |
+| `explanations` | AI解説（**解析結果とは別管理**）。モデル・プロンプトと入力のハッシュ・根拠にしたファイルの内容ハッシュ・検証結果・検証状態 |
 
 スキーマには `PRAGMA user_version` でバージョンを持たせ、Phase 1のDB（バージョン未設定）は開く際に列・テーブルを追加して移行する。移行したDBは解析器バージョンが空になるため、次回の解析で全ファイルが再解析される。新しいバージョンのDBは開かない。
 
-AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2-2）であり、Phase 4で専用のテーブルを追加する。
+AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2-2）であり、専用の `explanations` テーブルに保存する。解析結果のテーブル（シンボル・参照・依存関係）には書き込まず、再解析でも解説は消えない（根拠にしたファイルが変わると「古い解説」と示す）。
 
 ## 非侵襲性の実装
 
@@ -140,3 +150,10 @@ AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2
 走査コストが大きいサービス（設定値・境界・リスク）は、対象ファイル・対象の文字列を、構文解析の前に絞り込める（`understand` は、対象のシンボルを含むファイルだけを構文解析する）。
 
 サービス間の依存は、`understand_service` が他のサービスを集約する一方向で、サービス同士が互いに依存する循環はない。`analysis/flow_analysis.py` はドメインにもインフラにも依存しない純粋なAST解析で、サービス層から呼ばれる。
+
+## AI解説の依存と安全性
+
+* `ai/` は `application`・`infrastructure`・`domain` に依存し、逆の依存はない。`ai/service.py` が、`application` のサービス（読解カード・呼び出し経路・検索）の結果を `ContextBuilder` 経由で根拠にする。
+* 既定では、何も外部へ送信しない。送信には明示的な許可（`--allow-send` または設定）が必要で、送信先がこの計算機の外の場合は、さらに `--allow-remote` が必要（`AIConfig.check_consent`）。`--dry-run` は送信せず、プロンプトを表示する。
+* APIキーは、環境変数または設定ファイルからのみ読み、コマンドライン引数では受け取らない（シェルの履歴に残さないため）。`repr`・表示・例外メッセージには含めない。
+* 設定ファイルは `~/.codeinsight/config.toml` の `[ai]` テーブル（`CODEINSIGHT_DATA_DIR` で場所を変更可）。

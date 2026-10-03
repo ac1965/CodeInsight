@@ -28,12 +28,13 @@ C言語およびPythonを主要な対象言語とし、静的解析によって�
 
 ## 開発状況
 
-**Phase 1〜3(解析基盤・コードナビゲーション・可視化)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Pythonのシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)、動的解析(実行観測)は未実装です。実装状況の詳細と制約は [REQUIREMENTS.md](REQUIREMENTS.md) と [ANALYSIS.md](ANALYSIS.md) を参照してください。
+**Phase 1〜3(解析基盤・コードナビゲーション・可視化)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Pythonのシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)も実装済みで(下記「AIで解説する」)、動的解析(実行観測)は未実装です。実装状況の詳細と制約は [REQUIREMENTS.md](REQUIREMENTS.md) と [ANALYSIS.md](ANALYSIS.md) を参照してください。
 
 * 静的に確定できない関係(関数ポインタ、動的な呼び出し等)は推測で確定せず、**未解決**として明示します。候補を特定できるが実行時の挙動で変わりうるものは**推定**として、確定と区別します(AGENTS.md §3.5.1)。
 * 制御フロー・データフロー・状態・例外・設定値・境界の解析は**Python**が対象です(Cは呼び出し・参照・依存・外部連携・履歴・テストまで)。データフローは関数単位・流れ非依存の**近似**です。
 * 設計判断の「理由」はコードから確認できないため推測せず、変更履歴・コメント・文書という手がかりを示します。
 * 対象リポジトリのソースは変更せず、プログラムも実行しません(Gitは読み取り専用)。
+* AIには**既定では何も送信しません**。送信は利用者の明示的な許可が必要で、ローカルLLM(Ollama等)ならこの計算機の中で完結します。AIの解説は、解析結果(事実)とは別に管理し、引用を機械的に検証したうえで、根拠を確認できない記述を「未確認」と示します。
 
 実践的な検証対象は、以下の開発中リポジトリです(詳細は [AGENTS.md §2.3](AGENTS.md#23-実プロジェクトでの解析対象検証用) を参照)。現在のスコープはC言語・Pythonのため、[narou_dl](https://github.com/ac1965/narou_dl) が対象です。[PownForge](https://github.com/ac1965/PownForge) は未コミットの変更が多いため当面除外しています。Go製の[RiskForge](https://github.com/ac1965/RiskForge)とEmacs Lisp製の[.emacs.d](https://github.com/ac1965/.emacs.d)は将来の言語追加後の対象候補です。
 
@@ -131,6 +132,32 @@ uv run codeinsight risks                # 潜在的な問題の手がかり(例�
 uv run codeinsight history [<シンボル>] # 変更履歴(Git・読み取り専用)。指定なしなら変更頻度・同時変更
 uv run codeinsight docs-check           # 文書の識別子・オプション・環境変数と、実装の差(手がかり)
 ```
+
+### AIで解説する(Phase 4)
+
+解析結果(事実)とソースを根拠にAIが解説し、**回答の引用(`[ファイル:行]`)を機械的に検証**します。検証できない記述は「⚠未確認」と示され、検証済みの事実としては扱われません。AIの解説は解析結果とは別に保存され、`explanations` で参照できます。
+
+```bash
+# 1. 接続を確認する(ソースコードは送信しない)。Ollama を使う例(既定の送信先: http://localhost:11434/v1)
+uv run codeinsight ai-status --ai-model qwen3-coder:latest
+
+# 2. 送信される内容を確認する(何も送信しない)
+uv run codeinsight explain <関数> --dry-run --ai-model qwen3-coder:latest
+
+# 3. 送信を許可して解説する
+uv run codeinsight explain <関数|クラス> --allow-send --ai-model qwen3-coder:latest
+uv run codeinsight explain-file src/foo.py --allow-send --ai-model qwen3-coder:latest
+uv run codeinsight explain-path <呼び出し元> <呼び出し先> --allow-send --ai-model qwen3-coder:latest
+uv run codeinsight ask "キャッシュはどこに保存されますか?" --allow-send --ai-model qwen3-coder:latest
+
+# 保存済みの解説(検証状態・古さつき)
+uv run codeinsight explanations [<ID>]
+```
+
+* `--allow-send` が無いと、何も送信しません。送信先がこの計算機の外(localhost以外)の場合は、さらに `--allow-remote` が必要です。環境変数 `CODEINSIGHT_AI_ALLOW_SEND=1`・`CODEINSIGHT_AI_BASE_URL`・`CODEINSIGHT_AI_MODEL`、または `~/.codeinsight/config.toml` の `[ai]` でも設定できます。APIキーは環境変数 `CODEINSIGHT_AI_API_KEY` のみで、表示・ログには出しません。
+* `--no-source` は、生のソース行を送らず、解析結果の事実(名前・位置・件数・docstringの先頭行)だけを送ります。
+* 検証できるのは、引用の存在・行範囲・渡した根拠の範囲内であること・ファイルが解析後に変更されていないこと・回答中の名前の実在までです。**根拠が主張を実際に裏付けているかは、利用者が確認してください。**
+* 解説は、根拠にしたファイルが変更されると「古い解説」と示されます。AIに接続できない場合も、AIを使わない機能(`understand` など)は、そのまま使えます。
 
 ### グラフを出力する
 
