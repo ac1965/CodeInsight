@@ -32,6 +32,12 @@ _TRANSPARENT_DECORATORS = frozenset(
      "dataclass", "dataclasses.dataclass"}
 )
 _MAX_REEXPORT_DEPTH = 6
+# 小文字で始まるがクラスである、よく使われる標準ライブラリの名前（それ以外の小文字名は関数と見なす）。
+_LOWERCASE_CLASSES = frozenset(
+    {"datetime", "date", "time", "timedelta", "timezone", "tzinfo", "defaultdict", "deque", "partial",
+     "partialmethod", "socket", "array", "property", "staticmethod", "classmethod", "count", "cycle", "chain",
+     "ordereddict", "namedtuple"}
+)
 
 
 @dataclass(frozen=True)
@@ -456,7 +462,15 @@ class ReferenceResolver:
             )
             return
         if target is None or target.kind != SymbolKind.CLASS:
-            if outcome.status == ResolutionStatus.EXTERNAL:
+            last = dotted.rsplit(".", 1)[-1]
+            if outcome.status == ResolutionStatus.EXTERNAL and last[:1].islower() and last not in _LOWERCASE_CLASSES:
+                # `json.loads(...)` のように小文字で始まる外部名は関数の可能性が高く、戻り値の型を決められない。
+                self._set(
+                    reference,
+                    ResolutionStatus.UNRESOLVED,
+                    f"{dotted} は関数の可能性があり、戻り値の型を静的に確定できない",
+                )
+            elif outcome.status == ResolutionStatus.EXTERNAL:
                 self._set(
                     reference,
                     ResolutionStatus.EXTERNAL,

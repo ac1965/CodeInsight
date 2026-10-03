@@ -1,0 +1,305 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass, field
+
+from codeinsight.application.project_index import ProjectIndex
+from codeinsight.domain import (
+    DependencyKind,
+    Language,
+    Reference,
+    ReferenceKind,
+    ResolutionStatus,
+    Symbol,
+)
+
+# カテゴリ（外部システムとの接続・副作用の種類）。照合は、最長一致の接頭辞で行う。
+CATEGORY_LABELS = {
+    "network": "ネットワーク/HTTP",
+    "database": "データベース",
+    "filesystem": "ファイルシステム",
+    "process": "外部プロセス/OS",
+    "persistence": "永続化・シリアライズ",
+    "concurrency": "並行・非同期",
+    "cache": "キャッシュ",
+    "gui": "GUI/イベント",
+    "config": "設定・環境変数・CLI引数",
+    "logging": "ログ出力",
+    "crypto": "暗号・ハッシュ",
+    "scraping": "スクレイピング/ブラウザ操作",
+    "other": "その他の外部ライブラリ",
+}
+
+_PYTHON_PREFIXES: dict[str, str] = {
+    # network
+    **{p: "network" for p in (
+        "requests", "httpx", "urllib", "urllib3", "http", "socket", "ssl", "aiohttp", "websocket",
+        "websockets", "ftplib", "smtplib", "imaplib", "poplib", "telnetlib", "xmlrpc", "grpc",
+        "flask", "fastapi", "django", "starlette", "tornado", "uvicorn", "paramiko", "boto3", "botocore",
+        "socketserver", "wsgiref")},
+    # database
+    **{p: "database" for p in (
+        "sqlite3", "sqlalchemy", "psycopg2", "psycopg", "pymysql", "mysql", "pymongo", "redis", "peewee",
+        "asyncpg", "elasticsearch", "tortoise", "dbm", "shelve")},
+    # filesystem
+    **{p: "filesystem" for p in (
+        "pathlib", "shutil", "glob", "tempfile", "fnmatch", "zipfile", "tarfile", "fileinput", "os.path",
+        "os.remove", "os.unlink", "os.rename", "os.replace", "os.makedirs", "os.mkdir", "os.rmdir",
+        "os.listdir", "os.walk", "os.scandir", "os.stat", "os.chmod", "os.getcwd", "os.chdir", "io",
+        "gzip", "bz2", "lzma")},
+    "builtins.open": "filesystem",
+    "open": "filesystem",
+    # process / OS
+    **{p: "process" for p in (
+        "subprocess", "multiprocessing", "os.system", "os.popen", "os.exec", "os.spawn", "os.fork",
+        "os.kill", "signal", "sys.exit", "platform", "shlex")},
+    # persistence
+    **{p: "persistence" for p in (
+        "json", "pickle", "marshal", "csv", "plistlib", "yaml", "toml", "tomllib", "tomli_w", "xml",
+        "configparser")},
+    # concurrency
+    **{p: "concurrency" for p in ("threading", "concurrent", "asyncio", "queue", "sched", "trio", "anyio")},
+    # cache
+    **{p: "cache" for p in ("functools.lru_cache", "functools.cache", "cachetools", "diskcache")},
+    # gui / events
+    **{p: "gui" for p in ("PySide6", "PySide2", "PyQt5", "PyQt6", "tkinter", "wx", "kivy", "pygame")},
+    # config
+    **{p: "config" for p in (
+        "os.environ", "os.getenv", "os.putenv", "argparse", "click", "typer", "optparse", "getopt", "dotenv",
+        "sys.argv")},
+    # logging
+    **{p: "logging" for p in ("logging", "loguru", "structlog", "warnings", "print", "builtins.print")},
+    # crypto
+    **{p: "crypto" for p in ("hashlib", "hmac", "secrets", "cryptography", "Crypto", "nacl", "jwt")},
+    # scraping
+    **{p: "scraping" for p in ("bs4", "lxml", "scrapy", "selenium", "playwright", "mechanize")},
+}
+
+_C_HEADER_PREFIXES: dict[str, str] = {
+    **{p: "network" for p in ("sys/socket.h", "netinet/", "arpa/inet.h", "netdb.h", "curl/", "microhttpd.h")},
+    **{p: "database" for p in ("sqlite3.h", "mysql/", "libpq-fe.h", "hiredis/")},
+    **{p: "filesystem" for p in ("fcntl.h", "dirent.h", "sys/stat.h", "sys/types.h", "unistd.h", "stdio.h")},
+    **{p: "process" for p in ("sys/wait.h", "signal.h", "spawn.h", "stdlib.h")},
+    **{p: "concurrency" for p in ("pthread.h", "semaphore.h", "threads.h", "stdatomic.h", "sys/epoll.h", "sys/select.h", "poll.h")},
+    **{p: "crypto" for p in ("openssl/", "sodium.h", "gcrypt.h")},
+    **{p: "persistence" for p in ("jansson.h", "cJSON.h", "yaml.h", "libxml/", "expat.h")},
+    **{p: "logging" for p in ("syslog.h",)},
+    **{p: "gui" for p in ("gtk/", "SDL", "X11/", "GL/")},
+}
+
+# 副作用の可能性が高い呼び出し（名前での判定。外部の関数名・メソッド名が一致するもの）。
+_EFFECT_METHODS = {
+    "write_text": "ファイルへの書き込み", "write_bytes": "ファイルへの書き込み", "mkdir": "ディレクトリ作成",
+    "unlink": "ファイル削除", "rmdir": "ディレクトリ削除", "touch": "ファイル作成", "rename": "ファイル名変更",
+    "replace": "ファイル置換/名前変更", "chmod": "権限変更", "symlink_to": "リンク作成",
+}
+_PURE_LOOKING = frozenset({"replace"})  # str.replace と区別できないため、変数経由の場合は確度を下げる
+
+
+@dataclass(frozen=True)
+class ExternalUse:
+    category: str
+    library: str  # 外部名（例: requests.get, sqlite3, stdio.h）
+    source_id: str | None  # 使っているシンボル（import/includeはファイル単位なのでモジュールシンボル、無ければNone）
+    owner: str  # 使っているシンボルの修飾名（無ければファイルのパス）
+    path: str
+    line: int
+    kind: str  # import / call / include
+    confidence: str  # confirmed（名前解決済み）/ inferred（メソッド名などからの推定）
+
+
+@dataclass
+class ExternalReport:
+    uses: list[ExternalUse] = field(default_factory=list)
+
+    def by_category(self) -> dict[str, list[ExternalUse]]:
+        grouped: dict[str, list[ExternalUse]] = defaultdict(list)
+        for use in self.uses:
+            grouped[use.category].append(use)
+        return grouped
+
+
+SIDE_EFFECT_CATEGORIES = ("network", "database", "filesystem", "process", "persistence", "logging", "gui")
+
+
+@dataclass
+class EffectSummary:
+    """関数が（直接・呼び出しを介して）外部へ及ぼしうる副作用の候補。"""
+
+    symbol: Symbol
+    direct: list[ExternalUse] = field(default_factory=list)
+    reachable: list[tuple[ExternalUse, list[str]]] = field(default_factory=list)  # (使用箇所, 呼び出し経路)
+    unresolved_calls: int = 0  # 呼び出し先を特定できず、副作用を追えない呼び出しの数
+
+
+def categorize(name: str, language: Language) -> str | None:
+    """外部名（修飾名・ヘッダー名）をカテゴリに分類する。最長一致の接頭辞を用いる。"""
+
+    table = _PYTHON_PREFIXES if language == Language.PYTHON else _C_HEADER_PREFIXES
+    best: tuple[int, str] | None = None
+    for prefix, category in table.items():
+        if language == Language.PYTHON:
+            matches = name == prefix or name.startswith(prefix + ".")
+        else:
+            matches = name == prefix or (prefix.endswith("/") and name.startswith(prefix))
+        if matches and (best is None or len(prefix) > best[0]):
+            best = (len(prefix), category)
+    return best[1] if best else None
+
+
+_C_FUNCTION_PREFIXES: dict[str, str] = {
+    **{p: "filesystem" for p in ("fopen", "fread", "fwrite", "fclose", "fseek", "open", "read", "write", "close", "unlink",
+                                 "rename", "remove", "mkdir", "rmdir", "opendir", "readdir", "stat", "chmod", "fsync")},
+    **{p: "logging" for p in ("printf", "fprintf", "puts", "fputs", "perror", "syslog", "putchar")},
+    **{p: "network" for p in ("socket", "connect", "bind", "listen", "accept", "send", "recv", "sendto", "recvfrom",
+                              "getaddrinfo", "curl_")},
+    **{p: "process" for p in ("system", "popen", "fork", "execl", "execv", "execvp", "execve", "kill", "signal", "exit", "abort")},
+    **{p: "concurrency" for p in ("pthread_", "sem_", "thrd_")},
+    **{p: "config" for p in ("getenv", "setenv", "putenv")},
+    **{p: "database" for p in ("sqlite3_",)},
+    **{p: "crypto" for p in ("SSL_", "EVP_", "RAND_", "SHA256", "MD5")},
+}
+
+
+def categorize_c_function(name: str) -> str | None:
+    """C標準/システムの関数名をカテゴリに分類する（完全一致、または `pthread_` 等の接頭辞）。"""
+
+    if name in _C_FUNCTION_PREFIXES:
+        return _C_FUNCTION_PREFIXES[name]
+    for prefix, category in _C_FUNCTION_PREFIXES.items():
+        if prefix.endswith("_") and name.startswith(prefix):
+            return category
+    return None
+
+
+def external_name(reference: Reference) -> str | None:
+    """外部参照の、import元まで解決した修飾名。組み込みはその名前。"""
+
+    key = reference.target_key or ""
+    if key.startswith("pyimport:"):
+        return key[len("pyimport:"):]
+    if key.startswith("pytyped:"):
+        body = key[len("pytyped:"):]
+        type_key, _, attribute = body.rpartition("|")
+        for prefix in ("pyimport:", "py:"):
+            if type_key.startswith(prefix):
+                return f"{type_key[len(prefix):]}.{attribute}"
+    if reference.resolution_status == ResolutionStatus.EXTERNAL and key == "":
+        return reference.target_name  # 組み込み関数など（open, print）
+    return None
+
+
+class ExternalService:
+    """外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を洗い出す。
+
+    importと、名前解決済みの呼び出しから分類する。呼び出し元の変数の型が分からないメソッド
+    呼び出し（`path.write_text(...)` 等）は、メソッド名からの推定として別に示す。
+    """
+
+    def report(self, index: ProjectIndex) -> ExternalReport:
+        report = ExternalReport()
+        for dependency in index.dependencies:
+            if dependency.resolution_status != ResolutionStatus.EXTERNAL or dependency.is_candidate:
+                continue
+            source_file = index.files.get(dependency.source_file_id)
+            if source_file is None:
+                continue
+            name = dependency.target_name
+            category = categorize(name, source_file.language) or (
+                "other" if dependency.dependency_kind == DependencyKind.IMPORT and not _is_stdlib(name) else None
+            )
+            if category is None:
+                continue
+            owner = self._module_symbol(index, dependency.source_file_id)
+            report.uses.append(
+                ExternalUse(
+                    category, name, owner.symbol_id if owner else None,
+                    owner.qualified_name if owner else source_file.relative_path, source_file.relative_path,
+                    dependency.evidence_location.start_line,
+                    "include" if dependency.dependency_kind == DependencyKind.INCLUDE else "import",
+                    "confirmed",
+                )
+            )
+        for reference in index.references:
+            if reference.reference_kind not in (ReferenceKind.CALL, ReferenceKind.NAME_REF):
+                continue
+            source = index.symbols.get(reference.source_symbol_id)
+            if source is None:
+                continue
+            language = index.files[source.file_id].language
+            path = index.path_of(source.file_id)
+            if reference.resolution_status == ResolutionStatus.EXTERNAL:
+                name = external_name(reference) if language == Language.PYTHON else reference.target_name
+                category = (categorize(name, language) if language == Language.PYTHON else categorize_c_function(name)) if name else None
+                if category and category not in ("other",):
+                    report.uses.append(ExternalUse(category, name, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "confirmed"))
+            elif reference.resolution_status == ResolutionStatus.UNRESOLVED and reference.reference_kind == ReferenceKind.CALL:
+                method = reference.target_name.rsplit(".", 1)[-1]
+                if method in _EFFECT_METHODS and "." in reference.target_name:
+                    report.uses.append(
+                        ExternalUse("filesystem", reference.target_name, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "inferred")
+                    )
+        report.uses.sort(key=lambda u: (u.category, u.library, u.path, u.line))
+        return report
+
+    def effects(
+        self,
+        index: ProjectIndex,
+        report: ExternalReport,
+        symbol: Symbol,
+        depth: int = 3,
+    ) -> EffectSummary:
+        """関数の副作用の候補を、直接の外部呼び出しと、解決済みの呼び出しをたどった先で集める。
+
+        読み取りだけの場合もあるため「副作用の可能性」として扱う。呼び出し先を特定できない
+        呼び出しの先は追えない（件数を示す）。
+        """
+
+        uses_by_symbol: dict[str, list[ExternalUse]] = defaultdict(list)
+        for use in report.uses:
+            if use.source_id and use.category in SIDE_EFFECT_CATEGORIES and use.kind == "call":
+                uses_by_symbol[use.source_id].append(use)
+
+        calls_from: dict[str, list[Reference]] = defaultdict(list)
+        for reference in index.references:
+            if reference.reference_kind == ReferenceKind.CALL:
+                calls_from[reference.source_symbol_id].append(reference)
+
+        summary = EffectSummary(symbol, direct=list(uses_by_symbol.get(symbol.symbol_id, [])))
+        seen = {symbol.symbol_id}
+        frontier: list[tuple[str, list[str]]] = [(symbol.symbol_id, [symbol.qualified_name])]
+        counted: set[str] = set()
+        for _ in range(depth):
+            next_frontier: list[tuple[str, list[str]]] = []
+            for current, route in frontier:
+                for reference in calls_from.get(current, []):
+                    if reference.resolution_status in (ResolutionStatus.UNRESOLVED, ResolutionStatus.AMBIGUOUS):
+                        if reference.reference_id not in counted:
+                            counted.add(reference.reference_id)
+                            summary.unresolved_calls += 1
+                        continue
+                    target_id = reference.target_symbol_id
+                    if reference.resolution_status != ResolutionStatus.RESOLVED or not target_id or target_id in seen:
+                        continue
+                    seen.add(target_id)
+                    target = index.symbols.get(target_id)
+                    if target is None:
+                        continue
+                    path = [*route, target.qualified_name]
+                    summary.reachable.extend((use, path) for use in uses_by_symbol.get(target_id, []))
+                    next_frontier.append((target_id, path))
+            frontier = next_frontier
+        return summary
+
+    @staticmethod
+    def _module_symbol(index: ProjectIndex, file_id: str) -> Symbol | None:
+        for symbol in index.symbols.values():
+            if symbol.file_id == file_id and symbol.kind.value == "module":
+                return symbol
+        return next((s for s in index.symbols.values() if s.file_id == file_id), None)
+
+
+def _is_stdlib(name: str) -> bool:
+    import sys
+
+    return name.split(".", 1)[0] in sys.stdlib_module_names

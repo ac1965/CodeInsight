@@ -11,6 +11,8 @@ from pathlib import Path
 
 from codeinsight.analysis.call_graph import CallNode, Direction
 from codeinsight.analysis import flow_analysis as fa
+from codeinsight.application.architecture_service import ROLE_LABELS, ArchitectureService
+from codeinsight.application.external_service import CATEGORY_LABELS, SIDE_EFFECT_CATEGORIES, ExternalService
 from codeinsight.application import (
     AmbiguousSymbolError,
     AnalysisCoordinator,
@@ -1066,6 +1068,122 @@ def _cmd_risks(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_externals(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    report = ExternalService().report(index)
+    grouped = report.by_category()
+    if args.format == "json":
+        _emit_json(
+            {
+                cat: [
+                    {"library": u.library, "owner": u.owner, "path": u.path, "line": u.line, "kind": u.kind, "confidence": u.confidence}
+                    for u in uses
+                ]
+                for cat, uses in grouped.items()
+            }
+        )
+        return 0
+    print("外部システム・外部ライブラリとの接続（importと、名前解決できた呼び出しから分類）")
+    for category in CATEGORY_LABELS:
+        uses = grouped.get(category)
+        if not uses or (args.category and category not in args.category):
+            continue
+        libraries = Counter(u.library.split(".")[0] if u.kind != "call" else u.library for u in uses)
+        files = {u.path for u in uses}
+        print(f"\n■ {CATEGORY_LABELS[category]}（{len(uses)}箇所、{len(files)}ファイル）")
+        print("  主な外部名: " + ", ".join(f"{safe(name)}×{count}" for name, count in libraries.most_common(8)))
+        for use in uses[: args.limit]:
+            mark = "" if use.confidence == "confirmed" else "  [推定: メソッド名による]"
+            print(f"  {safe(use.path)}:{use.line}  {safe(use.owner)}  {use.kind} {safe(use.library)}{mark}")
+        if len(uses) > args.limit:
+            print(f"  … ほか {len(uses) - args.limit}件（--limit / --category）")
+    if not grouped:
+        print("  確認できませんでした")
+    _warn_stale(stale)
+    print("※ 外部名に解決できたimport・呼び出しのみです。変数の型が不明なメソッド呼び出しは、名前からの推定のみ示します。", file=sys.stderr)
+    return 0
+
+
+def _cmd_effects(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    navigation = NavigationService(repository)
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
+    service = ExternalService()
+    summary = service.effects(index, service.report(index), symbol, args.depth)
+    print(f"{safe(symbol.qualified_name)} の副作用の候補（外部への入出力。読み取りだけの場合もあります）")
+    print("\n■ この関数が直接行うもの")
+    for use in summary.direct:
+        mark = "" if use.confidence == "confirmed" else "  [推定]"
+        print(f"  {safe(use.path)}:{use.line}  [{CATEGORY_LABELS[use.category]}] {safe(use.library)}{mark}")
+    if not summary.direct:
+        print("  確認できませんでした")
+    print(f"\n■ 呼び出し先（解決済み、深さ{args.depth}）を介して行うもの")
+    for use, route in summary.reachable:
+        print(f"  [{CATEGORY_LABELS[use.category]}] {safe(use.library)}  {safe(use.path)}:{use.line}")
+        print(f"      経路: {' → '.join(safe(r) for r in route)}")
+    if not summary.reachable:
+        print("  確認できませんでした")
+    if summary.unresolved_calls:
+        print(f"※ 呼び出し先を特定できない呼び出しが {summary.unresolved_calls}件あり、そこから先の副作用は追えていません。", file=sys.stderr)
+    print("※ 副作用の種類は、外部ライブラリ・システム関数の名前による分類です。", file=sys.stderr)
+    _warn_stale(stale)
+    return 0
+
+
+def _cmd_architecture(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    externals = ExternalService().report(index)
+    architecture = ArchitectureService().build(index, externals, args.depth)
+    if args.format == "json":
+        _emit_json(
+            {
+                "depth": architecture.depth,
+                "layers": architecture.layers,
+                "cycles": architecture.cycles,
+                "components": {
+                    n: {
+                        "files": c.files, "definitions": c.definitions, "lines": c.lines, "role_hint": c.role,
+                        "imports": dict(c.imports), "calls": dict(c.calls), "externals": dict(c.externals),
+                    }
+                    for n, c in architecture.components.items()
+                },
+                "layer_violations": [vars(v) for v in architecture.violations],
+            }
+        )
+        return 0
+    print(f"■ コンポーネント（ディレクトリ単位、深さ{architecture.depth}）  ※役割は名前からの推定")
+    for name, c in sorted(architecture.components.items(), key=lambda kv: (-kv[1].level, kv[0])):
+        role = f"  [{ROLE_LABELS[c.role]}・推定]" if c.role else ""
+        print(f"  {safe(name)}  {c.files}ファイル / 定義{c.definitions} / {c.lines}行{role}")
+        if c.depends_on:
+            targets = ", ".join(
+                f"{safe(t)}(import {c.imports[t]}, call {c.calls[t]})" for t in sorted(c.depends_on)
+            )
+            print(f"      依存先: {targets}")
+        if c.externals:
+            ext = ", ".join(f"{CATEGORY_LABELS[k]}×{v}" for k, v in c.externals.most_common(5))
+            print(f"      外部連携: {ext}")
+    print("\n■ 層構造（依存の向きから機械的に求めた段。上位ほど他に依存する側、下位は依存される側）")
+    for number, group in enumerate(architecture.layers):
+        level = len(architecture.layers) - 1 - number
+        print(f"  段{level}: " + ", ".join(safe(g) for g in group))
+    print("\n■ 循環する依存（コンポーネント間）")
+    for cycle in architecture.cycles:
+        print("  " + " <-> ".join(safe(c) for c in cycle))
+    if not architecture.cycles:
+        print("  確認できませんでした")
+    if architecture.violations:
+        print("\n■ 層の順に反する可能性のある依存（候補。役割が名前からの推定のため）")
+        for v in architecture.violations:
+            print(
+                f"  {safe(v.source)}[{ROLE_LABELS[v.source_role]}] → {safe(v.target)}[{ROLE_LABELS[v.target_role]}]"
+                f"  (import {v.imports}, call {v.calls})"
+            )
+    _warn_stale(stale)
+    print("※ 層の段数は依存の向きから求めた事実に基づきます。役割名（プレゼンテーション層等）は名前による推定です。", file=sys.stderr)
+    return 0
+
+
 def _cmd_unresolved(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
     navigation = NavigationService(repository)
@@ -1120,6 +1238,9 @@ def _build_graph(
     if args.kind == "inherit":
         root = _resolve(args, navigation, index, args.root, project).symbol if args.root else None
         return builder.inheritance_graph(root, args.depth, traversal)
+    if args.kind == "arch":
+        architecture = ArchitectureService().build(index, ExternalService().report(index), args.depth)
+        return builder.architecture_graph(architecture)
     if args.kind == "flow":
         if not args.root:
             raise CliError("graph flow には --root で関数・メソッド名を指定してください。")
@@ -1307,14 +1428,26 @@ def build_parser() -> argparse.ArgumentParser:
     risks.add_argument("--min-severity", choices=("low", "medium", "high"), default="low")
     risks.add_argument("--limit", type=int, default=10, help="規則ごとの表示件数")
 
+    externals = add("externals", "外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を分類して表示する", _cmd_externals)
+    externals.add_argument("--category", action="append", choices=list(CATEGORY_LABELS), help="カテゴリで絞り込む")
+    externals.add_argument("--limit", type=int, default=8, help="カテゴリごとの表示件数")
+
+    effects = add("effects", "関数の副作用の候補（外部への入出力）を、直接と呼び出し先を介したものに分けて表示する", _cmd_effects, ("text",))
+    effects.add_argument("name", help="関数・メソッドの名前または修飾名")
+    effects.add_argument("--depth", type=int, default=3)
+    effects.add_argument("--file")
+
+    architecture = add("architecture", "コンポーネント構成・層構造・循環・外部連携を表示する（役割は名前による推定）", _cmd_architecture)
+    architecture.add_argument("--depth", type=int, help="コンポーネントとするディレクトリの深さ（省略時は自動）")
+
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")
     unresolved.add_argument("--all", action="store_true", help="全件を表示する")
 
     graph = add("graph", "グラフを出力する（Mermaid / DOT / JSON / 自己完結HTML）", _cmd_graph, ("mermaid", "dot", "json", "html"))
-    graph.add_argument("kind", choices=("call", "deps", "inherit", "flow"), help="呼び出し / ファイル依存 / 継承 / 関数の制御フロー(--rootが必須)")
+    graph.add_argument("kind", choices=("call", "deps", "inherit", "flow", "arch"), help="呼び出し / ファイル依存 / 継承 / 関数の制御フロー(--rootが必須) / コンポーネント間のアーキテクチャ")
     graph.add_argument("--root", help="起点のシンボル名（deps は相対パス）。指定すると部分グラフを出力")
-    graph.add_argument("--depth", type=int, help="起点からの深さ")
+    graph.add_argument("--depth", type=int, help="起点からの深さ（archではコンポーネントとするディレクトリの深さ）")
     graph.add_argument("--direction", choices=[t.value for t in Traversal], default="both")
     graph.add_argument("--external", action="store_true", help="プロジェクト外への関係も含める")
     graph.add_argument("--no-unresolved", action="store_true", help="未解決の関係を含めない")

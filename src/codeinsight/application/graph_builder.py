@@ -325,6 +325,47 @@ class GraphBuilder:
         )
         return self._finish(model, root.symbol_id if root else None, depth, traversal)
 
+    # --- アーキテクチャ（コンポーネント）グラフ ---
+
+    def architecture_graph(self, architecture) -> GraphModel:
+        """コンポーネント間の依存グラフ。名前から推定した層の逆向き依存は、推定（破線）で示す。"""
+
+        from codeinsight.application.architecture_service import ROLE_LABELS
+
+        violations = {(v.source, v.target) for v in architecture.violations}
+        nodes: list[GraphNode] = []
+        edges: list[GraphEdge] = []
+        for name, component in sorted(architecture.components.items()):
+            role = f"（{ROLE_LABELS[component.role]}・推定）" if component.role else ""
+            nodes.append(GraphNode(name, f"{name}{role}", "component", None, None))
+        for name, component in sorted(architecture.components.items()):
+            for target in sorted(component.depends_on):
+                parts = []
+                if component.imports[target]:
+                    parts.append(f"import {component.imports[target]}")
+                if component.calls[target]:
+                    parts.append(f"call {component.calls[target]}")
+                inverted = (name, target) in violations
+                edges.append(
+                    GraphEdge(
+                        name, target, "dependency",
+                        EdgeStyle.INFERRED if inverted else EdgeStyle.CONFIRMED,
+                        note="層の逆向き依存の候補（名前による推定）" if inverted else "",
+                        label=" / ".join(parts) + (" ⚠逆向き?" if inverted else ""),
+                    )
+                )
+        return GraphModel(
+            title=f"アーキテクチャ（コンポーネント間の依存、深さ{architecture.depth}）",
+            graph_kind="architecture",
+            nodes=nodes,
+            edges=edges,
+            notes=[
+                "コンポーネントはディレクトリ単位。辺はimport/includeと解決済みの呼び出しの数です。",
+                "役割（括弧内）は名前からの推定です。破線は、層の順に反する可能性がある依存の候補です。",
+            ],
+            meta={"layers": architecture.layers, "cycles": architecture.cycles},
+        )
+
     # --- 共通 ---
 
     def _finish(
