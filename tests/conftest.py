@@ -54,3 +54,13 @@ def analyzed(tmp_path: Path):
 @pytest.fixture
 def python_reexport_dir() -> Path:
     return FIXTURES_DIR / "python_reexport"
+
+
+@pytest.fixture
+def python_doc_dir() -> Path:
+    return FIXTURES_DIR / "python_doc"
+
+
+@pytest.fixture
+def c_doc_dir() -> Path:
+    return FIXTURES_DIR / "c_doc"

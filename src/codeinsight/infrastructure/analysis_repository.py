@@ -42,7 +42,7 @@ _FILE_COLUMNS = (
 )
 _SYMBOL_COLUMNS = (
     "symbol_id, file_id, name, qualified_name, kind, start_line, end_line, "
-    "parent_symbol_id, decorators, base_classes, is_async, usr"
+    "parent_symbol_id, decorators, base_classes, is_async, usr, summary"
 )
 _REFERENCE_COLUMNS = (
     "reference_id, file_id, source_symbol_id, target_name, target_key, target_symbol_id, "
@@ -263,26 +263,7 @@ class AnalysisRepository:
         """指定ファイルのシンボル・参照・依存関係を洗い替える。"""
 
         self._clear_file_facts(file_id)
-        self._connection.executemany(
-            f"INSERT INTO symbols ({_SYMBOL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    s.symbol_id,
-                    s.file_id,
-                    s.name,
-                    s.qualified_name,
-                    s.kind.value,
-                    s.start_line,
-                    s.end_line,
-                    s.parent_symbol_id,
-                    json.dumps(list(s.decorators)),
-                    json.dumps(list(s.base_classes)),
-                    int(s.is_async),
-                    s.usr,
-                )
-                for s in symbols
-            ],
-        )
+        self._insert_symbols(symbols)
         self._connection.executemany(
             f"INSERT INTO references_ ({_REFERENCE_COLUMNS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -327,12 +308,9 @@ class AnalysisRepository:
         )
         self._commit()
 
-    def replace_symbols_for_file(self, file_id: str, symbols: list[Symbol]) -> None:
-        """指定ファイルのシンボルのみを洗い替える（参照・依存関係は保持する）。"""
-
-        self._connection.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
+    def _insert_symbols(self, symbols: list[Symbol]) -> None:
         self._connection.executemany(
-            f"INSERT INTO symbols ({_SYMBOL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO symbols ({_SYMBOL_COLUMNS}) VALUES ({', '.join('?' * 13)})",
             [
                 (
                     s.symbol_id,
@@ -347,10 +325,17 @@ class AnalysisRepository:
                     json.dumps(list(s.base_classes)),
                     int(s.is_async),
                     s.usr,
+                    s.summary,
                 )
                 for s in symbols
             ],
         )
+
+    def replace_symbols_for_file(self, file_id: str, symbols: list[Symbol]) -> None:
+        """指定ファイルのシンボルのみを洗い替える（参照・依存関係は保持する）。"""
+
+        self._connection.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
+        self._insert_symbols(symbols)
         self._commit()
 
     def update_resolutions(
@@ -510,6 +495,7 @@ def _symbol_from_row(row: sqlite3.Row) -> Symbol:
         base_classes=tuple(json.loads(row["base_classes"])),
         is_async=bool(row["is_async"]),
         usr=row["usr"],
+        summary=row["summary"],
     )
 
 

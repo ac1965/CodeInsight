@@ -448,6 +448,13 @@ class ReferenceResolver:
         dotted = type_key[len(KEY_IMPORT if imported else KEY_DIRECT):]
         outcome = self._lookup_name(dotted, imported)
         target = outcome.target
+        if target is not None and target.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD):
+            self._set(
+                reference,
+                ResolutionStatus.UNRESOLVED,
+                f"{target.qualified_name} は関数であり、戻り値の型を静的に確定できない",
+            )
+            return
         if target is None or target.kind != SymbolKind.CLASS:
             if outcome.status == ResolutionStatus.EXTERNAL:
                 self._set(

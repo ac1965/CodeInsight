@@ -14,9 +14,11 @@ from codeinsight.application import (
     AmbiguousSymbolError,
     AnalysisCoordinator,
     AnalysisProgress,
+    DescribeService,
     FreshnessService,
     MatchMode,
     NavigationService,
+    OverviewService,
     ProjectIndex,
     ProjectManager,
     SearchService,
@@ -402,6 +404,10 @@ def _cmd_symbols(args: argparse.Namespace) -> int:
 
 def _cmd_tree(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
+    if args.path:
+        index = index.under(args.path)
+        if not index.files:
+            raise CliError(f"パスに一致するファイルがありません: {safe(args.path)}", 2)
     tree = build_structure_tree(
         index,
         project.name,
@@ -532,6 +538,8 @@ def _reference_command(args: argparse.Namespace, mode: str) -> int:
         hits = navigation.callers(index, symbol)
     else:
         hits = navigation.callees(index, symbol)
+        if args.hide_external:
+            hits = [h for h in hits if h.reference.resolution_status != ResolutionStatus.EXTERNAL]
     _warn_stale(stale)
     if args.format == "json":
         _emit_json(
@@ -632,16 +640,23 @@ def _cmd_deps(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     match = re.fullmatch(r"(?P<path>.+?)(?::(?P<start>\d+)(?:-(?P<end>\d+))?)?", args.location)
     if match is None:
-        raise CliError("位置は FILE[:LINE[-END]] の形式で指定してください。")
+        raise CliError("位置は FILE[:LINE[-END]] またはシンボル名で指定してください。")
     repository, project, index, stale = _prepare(args)
-    start = int(match["start"]) if match["start"] else None
-    end = int(match["end"]) if match["end"] else None
+    navigation = NavigationService(repository)
+    path, start, end = match["path"], match["start"], match["end"]
+    context = args.context
+    if index.file_by_path(path) is None:
+        # ファイルでなければ、シンボル名として解釈し、その定義全体を表示する。
+        symbol = _resolve(args, navigation, index, args.location, project).symbol
+        path, start, end = index.path_of(symbol.file_id), str(symbol.start_line), str(symbol.end_line)
+        context = 0
+        print(f"{safe(symbol.qualified_name)}  ({symbol.kind.value}, {safe(path)}:{start}-{end})")
+    start_line = int(start) if start else None
+    end_line = int(end) if end else None
     try:
-        view = NavigationService(repository).show_source(
-            project, index, match["path"], start, end, args.context
-        )
+        view = navigation.show_source(project, index, path, start_line, end_line, context)
     except SymbolNotFoundError as exc:
-        raise CliError(f"解析対象のファイルが見つかりません: {safe(match['path'])}", 2) from exc
+        raise CliError(f"解析対象のファイルが見つかりません: {safe(path)}", 2) from exc
     except OSError as exc:
         raise CliError(f"ファイルを読み込めません: {exc}") from exc
     if view.freshness != FileFreshness.FRESH:
@@ -651,6 +666,153 @@ def _cmd_show(args: argparse.Namespace) -> int:
     for number, text in view.lines:
         mark = ">" if view.highlight_start <= number <= view.highlight_end else " "
         print(f"{mark} {number:>{width}} | {safe(text)}")
+    return 0
+
+
+def _cmd_describe(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    navigation = NavigationService(repository)
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
+    description = DescribeService(navigation).describe(project, index, symbol)
+    _warn_stale(stale)
+    if args.format == "json":
+        _emit_json(
+            {
+                "symbol": _symbol_dict(description.hit),
+                "summary": symbol.summary,
+                "declaration": [{"line": n, "text": t} for n, t in description.declaration],
+                "decorators": list(symbol.decorators),
+                "base_classes": list(symbol.base_classes),
+                "members": [{"name": m.name, "kind": m.kind.value, "line": m.start_line} for m in description.members],
+                "derived_classes": [c.qualified_name for c in description.derived_classes],
+                "callers": description.callers,
+                "callees": {k.value: v for k, v in description.callees.items()},
+                "callees_include_members": description.callees_include_members,
+                "references": {k.value: v for k, v in description.references.items()},
+                "referencing_files": description.referencing_files,
+                "freshness": description.freshness.value,
+            }
+        )
+        return 0
+    print(f"{safe(symbol.qualified_name)}  ({symbol.kind.value})")
+    print(f"  場所: {safe(description.hit.location)}")
+    if symbol.summary:
+        print(f"  要約: {safe(symbol.summary)}   （ソースのdocstring/コメントの先頭行）")
+    if description.declaration:
+        print("  宣言:")
+        for number, text in description.declaration:
+            print(f"    {number:>5} | {safe(text)}")
+    if symbol.decorators:
+        print(f"  デコレータ: {', '.join(safe(d) for d in symbol.decorators)}")
+    if symbol.base_classes:
+        print(f"  基底クラス: {', '.join(safe(b) for b in symbol.base_classes)}")
+    if description.derived_classes:
+        print(f"  派生クラス: {', '.join(safe(c.qualified_name) for c in description.derived_classes)}")
+    if description.members:
+        print(f"  メンバ ({len(description.members)}):")
+        for member in description.members[: args.members]:
+            hint = f"  — {safe(member.summary)}" if member.summary else ""
+            print(f"    L{member.start_line:<5} {member.kind.value:<16} {safe(member.name)}{hint}")
+        if len(description.members) > args.members:
+            print(f"    … ほか {len(description.members) - args.members}件（--members で表示数を変更）")
+    callee_counts = description.callees
+    print(
+        f"  呼び出し元: {description.callers}件 / 呼び出し先"
+        + ("（メンバの合計）" if description.callees_include_members else "")
+        + ": "
+        + (
+            "・".join(f"{_STATUS_LABEL[s]} {callee_counts.get(s, 0)}" for s in ResolutionStatus)
+            if callee_counts
+            else "なし"
+        )
+    )
+    if description.references:
+        kinds = ", ".join(f"{k.value} {v}" for k, v in sorted(description.references.items(), key=lambda kv: kv[0].value))
+        print(f"  参照: {kinds}（{description.referencing_files}ファイル）")
+    else:
+        print("  参照: 確認できた参照なし")
+    print(
+        "  ※ 件数は静的解析で確認できた関係のみで、動的な呼び出し等は含まれません。"
+        "詳細は callers / callees / refs / trace を参照。"
+    )
+    return 0
+
+
+def _cmd_overview(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    overview = OverviewService(NavigationService(repository)).build(index, args.top)
+    _warn_stale(stale)
+    if args.format == "json":
+        _emit_json(
+            {
+                "project": project.name,
+                "revision": project.repository_revision,
+                "languages": {k.value: v for k, v in overview.languages.items()},
+                "symbols": {k.value: v for k, v in overview.symbol_counts.items()},
+                "modules": [vars(m) for m in overview.modules],
+                "entry_points": [_symbol_dict(h) for h in overview.entry_points],
+                "most_called": [{**_symbol_dict(r.hit), "callers": r.value} for r in overview.most_called],
+                "most_calling": [{**_symbol_dict(r.hit), "callees": r.value} for r in overview.most_calling],
+                "largest": [{**_symbol_dict(r.hit), "lines": r.value} for r in overview.largest],
+                "dependency_cycles": overview.cycles,
+                "reference_status": {k.value: v for k, v in overview.reference_status.items()},
+                "failed_files": overview.failed_files,
+                "stale_files": stale,
+            }
+        )
+        return 0
+    print(f"プロジェクト: {safe(project.name)}  ルート: {project.root_path}")
+    print(f"リビジョン: {project.repository_revision or '-'}")
+    langs = ", ".join(f"{k.value} {v}ファイル" for k, v in sorted(overview.languages.items(), key=lambda kv: -kv[1]))
+    print(f"言語: {langs}")
+    counts = overview.symbol_counts
+    labels = (
+        ("クラス", SymbolKind.CLASS),
+        ("関数", SymbolKind.FUNCTION),
+        ("メソッド", SymbolKind.METHOD),
+        ("構造体", SymbolKind.STRUCT),
+        ("関数宣言", SymbolKind.FUNCTION_DECLARATION),
+    )
+    print("定義: " + ", ".join(f"{label} {counts[kind]}" for label, kind in labels if counts.get(kind)))
+
+    print("\n■ エントリポイントの候補（main関数・__main__.py）")
+    for hit in overview.entry_points or []:
+        print(f"  {safe(hit.location)}  {safe(hit.symbol.qualified_name)}")
+    if not overview.entry_points:
+        print("  確認できませんでした")
+
+    print(f"\n■ 主要なモジュール（他から依存される順、上位{len(overview.modules)}件）")
+    for m in overview.modules:
+        summary = f"  — {safe(m.summary)}" if m.summary else ""
+        print(f"  依存される{m.fan_in:>3} / 依存する{m.fan_out:>3}  {m.lines:>5}行  {safe(m.path)}{summary}")
+
+    for title, rows, unit in (
+        ("よく呼ばれる関数（呼び出し元の数）", overview.most_called, "元"),
+        ("多くを呼び出す関数（呼び出し先の数）", overview.most_calling, "先"),
+        ("大きい定義（行数）", overview.largest, "行"),
+    ):
+        print(f"\n■ {title}")
+        for r in rows:
+            print(f"  {r.value:>5}{unit}  {safe(r.hit.symbol.qualified_name)}  ({safe(r.hit.location)})")
+
+    print("\n■ 循環する依存関係")
+    for cycle in overview.cycles:
+        print("  " + " <-> ".join(safe(p) for p in cycle))
+    if not overview.cycles:
+        print("  確認できませんでした")
+
+    status = overview.reference_status
+    total = sum(status.values()) or 1
+    print(
+        "\n■ 解析の信頼性: 参照 "
+        + ", ".join(f"{_STATUS_LABEL[s]} {status.get(s, 0)}" for s in ResolutionStatus)
+        + f"（未解決 {status.get(ResolutionStatus.UNRESOLVED, 0) * 100 // total}%）"
+    )
+    if overview.failed_files:
+        print(f"  解析に失敗したファイル: {', '.join(safe(p) for p in overview.failed_files)}")
+    if stale:
+        print(f"  解析後に変更されたファイル: {len(stale)}件（再解析を推奨）")
+    print("\n※ 静的解析で確認できた事実のみです。「何をするか」の説明は、docstringの転記を除き、含みません。")
     return 0
 
 
@@ -797,6 +959,7 @@ def build_parser() -> argparse.ArgumentParser:
     symbols.add_argument("--kind", action="append", choices=[k.value for k in SymbolKind], help="種類で絞り込む")
 
     tree = add("tree", "ディレクトリ・ファイル・シンボルの階層を表示する", _cmd_tree)
+    tree.add_argument("path", nargs="?", help="表示を絞るディレクトリまたはファイルの相対パス（前方一致）")
     tree.add_argument("--locals", action="store_true", help="ローカル変数も表示する")
     tree.add_argument("--no-variables", action="store_true", help="変数（グローバル/クラス/static）を表示しない")
     tree.add_argument("--depth", type=int, help="ファイルの下に表示するシンボルの階層数（1ならトップレベルのみ）")
@@ -824,6 +987,8 @@ def build_parser() -> argparse.ArgumentParser:
         sub = add(name, help_text, lambda a, m=mode: _reference_command(a, m))
         sub.add_argument("name", help="名前または修飾名")
         sub.add_argument("--file")
+        if mode == "callees":
+            sub.add_argument("--hide-external", action="store_true", help="外部（標準/外部ライブラリ等）の呼び出しを除く")
 
     trace = add("trace", "呼び出し階層を表示する（再帰・未解決を明示）", _cmd_trace, ("text",))
     trace.add_argument("name")
@@ -845,9 +1010,18 @@ def build_parser() -> argparse.ArgumentParser:
     deps.add_argument("--cycles", action="store_true", help="循環する依存関係を表示する")
     deps.add_argument("--external", action="store_true", help="プロジェクト外への依存も表示する")
 
-    show = add("show", "ソースコードを行番号付きで表示する", _cmd_show, ("text",))
-    show.add_argument("location", help="FILE[:LINE[-END]]")
+    show = add("show", "ソースコードを行番号付きで表示する（ファイル位置またはシンボル名）", _cmd_show, ("text",))
+    show.add_argument("location", help="FILE[:LINE[-END]] またはシンボル名（定義全体を表示）")
     show.add_argument("--context", type=int, default=3)
+    show.add_argument("--file", help="シンボル名が複数に一致する場合の絞り込み")
+
+    describe = add("describe", "シンボルの詳細（宣言・要約・メンバ・呼び出し/参照の件数）を表示する", _cmd_describe)
+    describe.add_argument("name", help="名前または修飾名")
+    describe.add_argument("--file")
+    describe.add_argument("--members", type=int, default=30, help="表示するメンバ数の上限")
+
+    overview = add("overview", "リポジトリの全体像（言語・主要モジュール・エントリポイント・中心となる関数）", _cmd_overview)
+    overview.add_argument("--top", type=int, default=10, help="各ランキングの表示件数")
 
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")

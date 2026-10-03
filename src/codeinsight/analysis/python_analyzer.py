@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import sys
 from collections import Counter
 from pathlib import PurePosixPath
 
@@ -25,6 +26,13 @@ _BUILTIN_CONTAINER_ANNOTATIONS = frozenset({"list", "dict", "set", "frozenset", 
 _LITERAL_RECEIVERS = (
     ast.Constant, ast.JoinedStr, ast.List, ast.Dict, ast.Set, ast.Tuple,
     ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp,
+)
+# 名前・型注釈の参照を記録しない標準ライブラリ（読む人にとって価値が低く、行数だけ増えるため）。
+_STDLIB_ROOTS = frozenset(sys.stdlib_module_names) | {"typing_extensions"}
+_SUMMARY_MAX = 160
+_SECTION_HEADERS = frozenset(
+    {"args", "arguments", "parameters", "params", "returns", "return", "raises", "yields",
+     "attributes", "example", "examples", "note", "notes"}
 )
 _DYNAMIC_IMPORT_FUNCTIONS = frozenset({"importlib.import_module", "builtins.__import__"})
 
@@ -102,6 +110,7 @@ class PythonAnalyzer:
             kind=SymbolKind.MODULE,
             start_line=1,
             end_line=len(source.splitlines()) or 1,
+            summary=_summary(tree),
         )
         result.symbols.append(module_symbol)
 
@@ -284,6 +293,7 @@ class _SymbolBuilder:
             parent=parent,
             decorators=tuple(_unparse(d) for d in node.decorator_list),
             is_async=isinstance(node, ast.AsyncFunctionDef),
+            summary=_summary(node),
         )
         self._result.symbols.append(symbol)
         self._node_symbols[id(node)] = symbol
@@ -300,6 +310,7 @@ class _SymbolBuilder:
             parent=parent,
             decorators=tuple(_unparse(d) for d in node.decorator_list),
             base_classes=tuple(_unparse(b) for b in node.bases),
+            summary=_summary(node),
         )
         self._result.symbols.append(symbol)
         self._node_symbols[id(node)] = symbol
@@ -405,11 +416,23 @@ class _ReferenceCollector(ast.NodeVisitor):
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         for decorator in node.decorator_list:
             self.visit(decorator)
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
+        symbol = self._node_symbols.get(id(node))
+        # 型注釈と既定値は、名前の解決は関数の外側の文脈で行うが、読む人にとっては
+        # 関数のシグネチャが使っているものなので、参照元は関数自身にする。
+        if symbol is not None:
+            self._symbols.append(symbol)
+        arguments = node.args
+        all_arguments = [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]
+        all_arguments += [a for a in (arguments.vararg, arguments.kwarg) if a is not None]
+        for argument in all_arguments:
+            self._annotation_references(argument.annotation)
+        self._annotation_references(node.returns)
+        for default in [*arguments.defaults, *arguments.kw_defaults]:
             if default is not None:
                 self.visit(default)
+        if symbol is not None:
+            self._symbols.pop()
 
-        symbol = self._node_symbols.get(id(node))
         local_names = _local_names(node)
         self_name: str | None = self._self_names[-1]
         if symbol is not None:
@@ -637,7 +660,74 @@ class _ReferenceCollector(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         self._call(node)
-        self.generic_visit(node)
+        # 呼び出し対象の名前連鎖は呼び出しとして記録済みなので、名前の参照としては重複させない。
+        if self._dotted_parts(node.func) is None:
+            self.visit(node.func)
+        for argument in node.args:
+            self.visit(argument)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+
+    # --- 名前の参照・型注釈 ---
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load):
+            self._name_reference(node, [node.id], ReferenceKind.NAME_REF)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        parts = self._dotted_parts(node) if isinstance(node.ctx, ast.Load) else None
+        if parts is not None:
+            self._name_reference(node, parts, ReferenceKind.NAME_REF)
+        else:
+            self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._annotation_references(node.annotation)
+        self.visit(node.target)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def _name_reference(self, node: ast.expr, parts: list[str], kind: ReferenceKind) -> None:
+        """呼び出し以外での名前の使用（変数・関数・クラスの参照、型注釈）を記録する。
+
+        名前を静的にプロジェクト内の候補へ結び付けられる場合に限って記録する
+        （self経由・型推定経由・組み込み・標準ライブラリは、価値が低いため記録しない）。
+        """
+
+        key, status, _ = self._resolve_parts(parts, allow_self=False)
+        if not key or not key.startswith((KEY_DIRECT, KEY_IMPORT, KEY_STAR)):
+            return
+        if key.startswith(KEY_IMPORT) and key[len(KEY_IMPORT):].split(".", 1)[0] in _STDLIB_ROOTS:
+            return
+        self._add_reference(kind, node, self._symbols[-1], ".".join(parts), key, status)
+
+    def _annotation_references(self, annotation: ast.expr | None) -> None:
+        """型注釈に現れる名前を TYPE_USE として記録する（Optional[X]・X | None・文字列注釈を含む）。
+
+        文字列注釈の中の式は行番号が文字列内の相対位置になるため、記録する位置には
+        文字列そのもの（ソース上の位置）を使う。
+        """
+
+        if annotation is None:
+            return
+        stack: list[tuple[ast.expr, ast.expr]] = [(annotation, annotation)]  # (式, 位置の基準)
+        while stack:
+            current, anchor = stack.pop()
+            if isinstance(current, ast.Constant) and isinstance(current.value, str):
+                try:
+                    stack.append((ast.parse(current.value, mode="eval").body, current))
+                except SyntaxError:
+                    pass
+                continue
+            parts = self._dotted_parts(current)
+            if parts is not None and parts[0] != "super()":
+                self._name_reference(anchor, parts, ReferenceKind.TYPE_USE)
+            elif isinstance(current, ast.Subscript):
+                stack.extend([(current.value, anchor), (current.slice, anchor)])
+            elif isinstance(current, ast.BinOp):
+                stack.extend([(current.left, anchor), (current.right, anchor)])
+            elif isinstance(current, (ast.Tuple, ast.List)):
+                stack.extend((element, anchor) for element in current.elts)
 
     def _add_reference(
         self,
@@ -869,7 +959,11 @@ def _assignment_names(target: ast.expr):
 
 
 def _local_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """関数スコープで束縛される名前（引数・代入・ネスト定義など）を集める。"""
+    """関数スコープで束縛される名前（引数・代入・ネスト定義など）を集める。
+
+    関数内のimportで取り込まれた名前は、ファイル全体のimport対応表（bindings）で解決するため、
+    ローカル変数としては扱わない（遅延importされた関数の呼び出しを未解決にしないため）。
+    """
 
     args = node.args
     names = {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
@@ -888,9 +982,6 @@ def _local_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
             continue
         if isinstance(current, ast.Name) and isinstance(current.ctx, (ast.Store, ast.Del)):
             names.add(current.id)
-        elif isinstance(current, (ast.Import, ast.ImportFrom)):
-            for alias in current.names:
-                names.add((alias.asname or alias.name).split(".", 1)[0])
         elif isinstance(current, ast.ExceptHandler) and current.name:
             names.add(current.name)
         elif isinstance(current, (ast.Global, ast.Nonlocal)):
@@ -920,3 +1011,22 @@ def _module_level_imports(tree: ast.Module) -> set[int]:
             continue
         stack.extend(ast.iter_child_nodes(current))
     return found
+
+
+def _summary(node: ast.AST) -> str:
+    """docstringの先頭の非空行（ソースに書かれた内容の転記）。無ければ空文字。"""
+
+    try:
+        docstring = ast.get_docstring(node)  # type: ignore[arg-type]
+    except TypeError:
+        return ""
+    if not docstring:
+        return ""
+    for line in docstring.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if text.rstrip(":").lower() in _SECTION_HEADERS:
+            return ""  # "Args:" 等の見出しで始まる場合は、要約として使える文が無い
+        return text if len(text) <= _SUMMARY_MAX else text[: _SUMMARY_MAX - 1] + "…"
+    return ""

@@ -17,7 +17,8 @@ class ProjectIndex:
     （古さは FreshnessService で判定する）。
 
     件数が多い参照・依存関係は、初めて使われるまで読み込まない（定義の検索や構造表示
-    のように、参照を使わないコマンドで読み込みのコストを払わないため）。
+    のように、参照を使わないコマンドで読み込みのコストを払わないため）。リポジトリを閉じた
+    後に使う場合は、先に materialize() を呼ぶこと。
     """
 
     project_id: str
@@ -43,6 +44,12 @@ class ProjectIndex:
             _paths={f.relative_path: f for f in files.values()},
         )
 
+    def materialize(self) -> "ProjectIndex":
+        """参照・依存関係を今すぐ読み込む。リポジトリを閉じた後も索引を使う場合に呼ぶ。"""
+
+        _ = self.references, self.dependencies
+        return self
+
     @property
     def references(self) -> list[Reference]:
         if self._references is None:
@@ -58,19 +65,36 @@ class ProjectIndex:
     def excluding(self, patterns: Iterable[str]) -> "ProjectIndex":
         """パスが除外パターン（fnmatch形式、例: ``tests/*``）に一致するファイルを取り除いた索引。
 
-        除外したファイルのシンボルに加え、除外ファイル内の参照・依存関係、および
-        除外ファイル内のシンボルを指す参照・依存関係も取り除く（表示を絞り込むための操作で、
-        保存済みの解析結果は変更しない）。
+        表示を絞り込むための操作で、保存済みの解析結果は変更しない。
         """
 
         globs = list(patterns)
         if not globs:
             return self
-        dropped = {
-            fid
-            for fid, f in self.files.items()
-            if any(fnmatch.fnmatch(f.relative_path, g) for g in globs)
-        }
+        return self._without(
+            {
+                fid
+                for fid, f in self.files.items()
+                if any(fnmatch.fnmatch(f.relative_path, g) for g in globs)
+            }
+        )
+
+    def under(self, prefix: str) -> "ProjectIndex":
+        """指定のファイルまたはディレクトリ（相対パス）の配下だけに絞った索引。"""
+
+        prefix = prefix.rstrip("/")
+        return self._without(
+            {
+                fid
+                for fid, f in self.files.items()
+                if f.relative_path != prefix and not f.relative_path.startswith(prefix + "/")
+            }
+        )
+
+    def _without(self, dropped: set[str]) -> "ProjectIndex":
+        """指定ファイルのシンボルを取り除く。それらのファイル内の参照・依存関係、およびそれらの
+        シンボルを指す参照・依存関係も取り除く。"""
+
         files = {fid: f for fid, f in self.files.items() if fid not in dropped}
         symbols = {sid: s for sid, s in self.symbols.items() if s.file_id not in dropped}
         return ProjectIndex(

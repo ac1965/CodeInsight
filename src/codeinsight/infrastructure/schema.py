@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -52,9 +52,10 @@ CREATE TABLE IF NOT EXISTS analysis_results (
 );
 """
 
-# バージョン2で追加された列・テーブル（新規DBにも移行時にも同じ定義を適用する）。
+# バージョン2以降で追加された列・テーブル（新規DBにも移行時にも同じ定義を適用する）。
 V2_COLUMNS = (
     ("symbols", "usr", "TEXT"),
+    ("symbols", "summary", "TEXT NOT NULL DEFAULT ''"),
     ("source_files", "analyzer_version", "TEXT NOT NULL DEFAULT ''"),
     ("analysis_results", "repository_revision", "TEXT"),
 )

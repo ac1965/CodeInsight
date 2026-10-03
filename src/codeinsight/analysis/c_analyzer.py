@@ -67,6 +67,16 @@ _TAG_KINDS = {
 }
 
 
+def _first_line(text: str | None) -> str:
+    """ドキュメントコメント（briefコメント）の先頭の非空行。無ければ空文字。"""
+
+    for line in (text or "").splitlines():
+        if line.strip():
+            line = line.strip()
+            return line if len(line) <= 160 else line[:159] + "…"
+    return ""
+
+
 _RESOLVE_CACHE: dict[str, str] = {}
 
 
@@ -400,6 +410,7 @@ class CAnalyzer:
             end_line=extent.end.line,
             parent=parent_symbol,
             usr=cursor.get_usr() or None,
+            summary=_first_line(cursor.brief_comment),
         )
 
     def _map_kind(self, cursor: cindex.Cursor) -> SymbolKind | None:

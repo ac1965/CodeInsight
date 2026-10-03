@@ -12,6 +12,7 @@ class ReferenceKind(enum.Enum):
     CALL = "call"  # 関数呼び出し（呼び出し式）
     FUNCTION_REF = "function_ref"  # 関数名の参照（呼び出しを伴わない。アドレス取得など）
     VARIABLE_REF = "variable_ref"  # グローバル/static変数の参照
+    NAME_REF = "name_ref"  # Pythonの名前の参照（呼び出し・型注釈以外。変数・関数・クラス等）
     INHERITANCE = "inheritance"
     TYPE_USE = "type_use"
     IMPORT = "import"

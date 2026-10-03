@@ -326,3 +326,32 @@ def test_python_module_level_chained_assignments_do_not_break_analysis(
     _, _, _, find, target = _view(repo, project)
     (make,) = find(ReferenceKind.CALL, "m", "k.make")
     assert target(make) == "m.K.make"
+
+
+def test_function_local_import_names_are_resolved(analyzed, tmp_path: Path) -> None:
+    # 遅延import（関数内import）で取り込んだ名前の呼び出しを、ローカル変数扱いで未解決にしない
+    root = tmp_path / "lazy"
+    root.mkdir()
+    (root / "heavy.py").write_text("def build():\n    return 1\n")
+    (root / "main.py").write_text(
+        "def run():\n    from heavy import build\n    return build()\n"
+    )
+    repo, project, result = analyzed(root)
+    _, _, _, find, target = _view(repo, project)
+    (call,) = find(ReferenceKind.CALL, "main.run", "build")
+    assert target(call) == "heavy.build"
+
+
+def test_result_of_a_function_call_is_not_mistaken_for_a_class_instance(
+    analyzed, tmp_path: Path
+) -> None:
+    root = tmp_path / "ret"
+    root.mkdir()
+    (root / "m.py").write_text(
+        "def make():\n    return object()\n\n\ndef use():\n    value = make()\n    return value.run()\n"
+    )
+    repo, project, result = analyzed(root)
+    _, _, _, find, _ = _view(repo, project)
+    (ref,) = find(ReferenceKind.CALL, "m.use", "value.run")
+    assert ref.resolution_status == ResolutionStatus.UNRESOLVED
+    assert "関数であり、戻り値の型を静的に確定できない" in ref.note

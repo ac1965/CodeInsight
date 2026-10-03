@@ -44,3 +44,6 @@ class Symbol:
     base_classes: tuple[str, ...] = field(default_factory=tuple)
     is_async: bool = False
     usr: str | None = None  # C: libclangのUSR（ファイルをまたぐ参照解決用）
+    # ソースのdocstring/ドキュメントコメントの先頭1行。ソースに書かれた内容の転記であり、
+    # 解析器やAIが生成した要約ではない。
+    summary: str = ""
