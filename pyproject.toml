@@ -27,3 +27,5 @@ packages = ["src/codeinsight"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/fixtures は解析対象のサンプルであり、実行するテストではない
+norecursedirs = ["fixtures"]
