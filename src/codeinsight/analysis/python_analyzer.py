@@ -5,7 +5,7 @@ import builtins
 import sys
 from collections import Counter
 from pathlib import PurePosixPath
-from typing import TypeGuard
+from typing import TypeGuard, cast
 
 from codeinsight.analysis.ids import IdAllocator, build_symbol
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
@@ -271,6 +271,15 @@ class _SymbolBuilder:
 
     def walk_body(self, body: list[ast.stmt], parent: Symbol) -> None:
         for node in body:
+            if parent.kind in (SymbolKind.MODULE, SymbolKind.CLASS):
+                # プラットフォーム分岐・importの失敗時の代替定義などは、if/try/with の中にある。
+                # どの分岐が実際に使われるかは静的に決まらないため、すべての分岐の定義を抽出する
+                # （同名の定義は複数のシンボルとなり、参照は「曖昧」として扱われる）。
+                nested = _nested_statement_bodies(node)
+                if nested:
+                    for inner in nested:
+                        self.walk_body(inner, parent)
+                    continue
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._function(node, parent)
             elif isinstance(node, ast.ClassDef):
@@ -947,6 +956,19 @@ class _ReferenceCollector(ast.NodeVisitor):
                 note="動的インポート（引数が実行時に決まる）",
             )
         self._result.dependencies.append(dependency)
+
+
+def _nested_statement_bodies(node: ast.stmt) -> list[list[ast.stmt]]:
+    """if / try / with の中の文の並び（定義を含みうるもの）。それ以外は空。"""
+
+    if isinstance(node, ast.If):
+        return [node.body, node.orelse]
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        return [node.body]
+    if isinstance(node, ast.Try) or node.__class__.__name__ == "TryStar":
+        try_node = cast("ast.Try", node)
+        return [try_node.body, *[handler.body for handler in try_node.handlers], try_node.orelse, try_node.finalbody]
+    return []
 
 
 def _assignment_names(target: ast.expr):

@@ -181,3 +181,19 @@ def test_unresolved_references_are_listed_separately_from_external(
     _, _, nav, index = _c(analyzed, c_callgraph_dir)
     unresolved = nav.unresolved_references(index)
     assert {h.reference.target_name for h in unresolved} == {"op"}
+
+
+def test_symbol_can_be_selected_by_line_when_the_same_name_is_defined_twice(tmp_path: Path, analyzed) -> None:
+    root = tmp_path / "branches"
+    root.mkdir()
+    (root / "m.py").write_text("import sys\n\nif sys.platform == 'win32':\n    def top():\n        return 1\nelse:\n    def top():\n        return 2\n")
+    repo, project, _ = analyzed(root)
+    navigation = NavigationService(repo)
+    index = navigation.load_index(project)
+
+    with pytest.raises(AmbiguousSymbolError):
+        navigation.resolve_symbol(index, "m.top")
+    assert navigation.resolve_symbol(index, "m.top@7").symbol.start_line == 7
+    assert navigation.resolve_symbol(index, "top@4").symbol.start_line == 4
+    with pytest.raises(SymbolNotFoundError):
+        navigation.resolve_symbol(index, "m.top@1")  # その行を含む定義が無い

@@ -267,6 +267,6 @@ def resolve_symbol_arg(
             for h in exc.candidates
         )
         raise CliError(
-            f"'{safe(query)}' は複数のシンボルに一致します。修飾名か --file で絞り込んでください:\n{listing}",
+            f"'{safe(query)}' は複数のシンボルに一致します。修飾名・--file、または `名前@行番号`（例: {safe(query)}@{exc.candidates[0].symbol.start_line}）で絞り込んでください:\n{listing}",
             2,
         ) from exc

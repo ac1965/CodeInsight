@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from codeinsight.analysis.call_graph import (
@@ -27,6 +28,7 @@ from codeinsight.domain import (
 from codeinsight.infrastructure.analysis_repository import AnalysisRepository
 
 _LOCAL_KINDS = frozenset({SymbolKind.LOCAL_VARIABLE})
+_LINE_SUFFIX = re.compile(r"^(.+)@(\d+)$")
 
 
 class SymbolNotFoundError(LookupError):
@@ -124,9 +126,15 @@ class NavigationService:
     ) -> SymbolHit:
         """1つのシンボルに特定する。複数あれば、定義を宣言より優先して絞り込む。"""
 
+        line: int | None = None
+        match = _LINE_SUFFIX.match(query)
+        if match:  # `名前@行番号`: 同名の定義が複数ある場合に、その行を含む定義を選ぶ
+            query, line = match.group(1), int(match.group(2))
         candidates = self.lookup(index, query, file=file, kinds=kinds)
+        if line is not None:
+            candidates = [h for h in candidates if h.symbol.start_line <= line <= h.symbol.end_line]
         if not candidates:
-            raise SymbolNotFoundError(query)
+            raise SymbolNotFoundError(query if line is None else f"{query}@{line}")
         if len(candidates) > 1:
             definitions = [
                 h for h in candidates if h.symbol.kind != SymbolKind.FUNCTION_DECLARATION

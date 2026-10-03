@@ -51,3 +51,21 @@ def test_syntax_error_is_recorded_as_failure(tmp_path: Path) -> None:
     assert not result.succeeded
     assert result.errors
     assert not result.symbols
+
+
+def test_definitions_inside_if_try_and_with_blocks_are_extracted(tmp_path: Path) -> None:
+    source = tmp_path / "m.py"
+    source.write_text(
+        "import sys\n\n"
+        "if sys.platform == 'win32':\n    def top():\n        return 1\nelse:\n    def top():\n        return 2\n\n"
+        "try:\n    import fast\n    def impl():\n        return fast.go()\nexcept ImportError:\n    def impl():\n        return 0\n\n\n"
+        "class P:\n    if sys.platform == 'win32':\n        def run(self):\n            return 1\n"
+        "    else:\n        def run(self):\n            return 2\n        LIMIT = 3\n",
+        encoding="utf-8",
+    )
+    result = PythonAnalyzer().analyze_file(SourceUnit.from_path(str(uuid.uuid4()), source))
+
+    found = sorted((s.qualified_name, s.kind.value, s.start_line) for s in result.symbols if s.kind != SymbolKind.MODULE)
+    assert ("m.top", "function", 4) in found and ("m.top", "function", 7) in found  # すべての分岐の定義を抽出する
+    assert [n for n, _, _ in found].count("m.impl") == 2 and [n for n, _, _ in found].count("m.P.run") == 2
+    assert ("m.P.LIMIT", "class_variable", 26) in found
