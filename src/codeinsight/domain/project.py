@@ -21,6 +21,7 @@ class ProjectConfiguration:
     )
     exclude_files: tuple[str, ...] = ()
     respect_gitignore: bool = True
+    compile_commands_dir: str | None = None  # 解析に使った compile_commands.json のあるディレクトリ（Cの関数単位の解析で再利用する）
 
 
 @dataclass

@@ -37,7 +37,7 @@ from codeinsight.infrastructure.schema import (
 
 _PROJECT_COLUMNS = (
     "project_id, root_path, name, repository_revision, exclude_dirs, "
-    "exclude_files, respect_gitignore"
+    "exclude_files, respect_gitignore, compile_commands_dir"
 )
 _FILE_COLUMNS = (
     "file_id, project_id, relative_path, language, content_hash, "
@@ -141,14 +141,15 @@ class AnalysisRepository:
         self._connection.execute(
             f"""
             INSERT INTO projects ({_PROJECT_COLUMNS})
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(project_id) DO UPDATE SET
                 root_path=excluded.root_path,
                 name=excluded.name,
                 repository_revision=excluded.repository_revision,
                 exclude_dirs=excluded.exclude_dirs,
                 exclude_files=excluded.exclude_files,
-                respect_gitignore=excluded.respect_gitignore
+                respect_gitignore=excluded.respect_gitignore,
+                compile_commands_dir=excluded.compile_commands_dir
             """,
             (
                 project.project_id,
@@ -158,6 +159,7 @@ class AnalysisRepository:
                 json.dumps(list(cfg.exclude_dirs)),
                 json.dumps(list(cfg.exclude_files)),
                 int(cfg.respect_gitignore),
+                cfg.compile_commands_dir,
             ),
         )
         self._commit()
@@ -507,6 +509,7 @@ def _project_from_row(row: sqlite3.Row) -> Project:
             exclude_dirs=tuple(json.loads(row["exclude_dirs"])),
             exclude_files=tuple(json.loads(row["exclude_files"])),
             respect_gitignore=bool(row["respect_gitignore"]),
+            compile_commands_dir=row["compile_commands_dir"],
         ),
     )
 

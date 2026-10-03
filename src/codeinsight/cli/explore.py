@@ -6,6 +6,7 @@ import argparse
 import re
 import sys
 from collections import Counter, defaultdict
+from dataclasses import replace
 from pathlib import Path
 
 from codeinsight.analysis.call_graph import Direction
@@ -68,6 +69,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     with AnalysisRepository(db_path) as repository:
         project = ProjectManager(repository).get_or_register(root_path)
+        used_dir = str(compile_commands_dir.resolve()) if has_database else None
+        if project.configuration.compile_commands_dir != used_dir:  # 解析時の設定として保存し、Cの関数単位の解析で再利用する
+            project.configuration = replace(project.configuration, compile_commands_dir=used_dir)
+            repository.save_project(project)
         coordinator = AnalysisCoordinator(
             repository, build_symbol_extractor(compile_commands_dir if has_database else None)
         )

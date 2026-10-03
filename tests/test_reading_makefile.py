@@ -111,3 +111,9 @@ def test_makefile_is_not_overridden_by_the_ci_environment_variable() -> None:
     # GitHub Actions などは環境変数 CI=true を設定する。Makefile の変数名が CI だと、コマンドが `true` に置き換わってしまう
     result = subprocess.run(["make", "-n", "status"], cwd=ROOT, capture_output=True, text=True, env={**__import__("os").environ, "CI": "true"})
     assert result.returncode == 0 and "codeinsight status" in result.stdout and not result.stdout.startswith("true")
+
+
+def test_makefile_does_not_depend_on_a_bare_python3() -> None:
+    # 最小のLinux環境には python3 が無い。uv が用意する環境で実行する（さもないと目次が作れず、失敗が隠れる）
+    text = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "python3 -c" not in text

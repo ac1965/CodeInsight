@@ -54,7 +54,7 @@ pytest -v
 ## 実行結果（最終確認時点）
 
 ```
-263 passed
+266 passed
 ```
 
 全テストが成功している。
@@ -149,6 +149,22 @@ codeinsight analyze /tmp/gcc-src/libiberty --compile-commands /tmp/gcc-build/lib
 * libiberty の残り8件の失敗は妥当: 他プラットフォーム向けのコード（MS-DOS・Win32・DJGPP）と、K&R形式の古いコード。ヘッダーは、取り込む側の文脈で解析して全て成功した。
 * emacs は352件が失敗のまま。内訳は、データベースに載っていない領域（`lib/`・`oldXMenu` など。補間した設定では `config.h` を先に取り込めないもの）、libclangが未対応のC23構文（`_Countof` など）やGCC固有の属性、他OS向けのコード。libgcc（583ファイル）は、トップレベルの `configure` を要し、クロスビルドの前提が重いため、今回は試していない。
 * 評価した計算機は1台（macOS、Apple clang）。解析時間は評価（Ollama）と並行して測ったため参考値。
+
+### 実機とCIで見つかった不具合と、再発防止（回帰テスト）
+
+| # | 見つかった場所 | 不具合 | 修正 | 回帰テスト |
+| --- | --- | --- | --- | --- |
+| 1 | 実機（gcc libiberty） | `compile_commands.json` の相対パス（`-I.`）が `directory` 基準で解決されない | `_absolutize_paths` | `test_relative_paths_in_compile_commands_…` |
+| 2 | 実機 | `file` が相対パスの記録で、載っているファイルを判定できない | `_command_file` | `test_relative_file_entries_in_compile_commands_…` |
+| 3 | 実機 | コンパイルDBの経路でシステムヘッダー（SDK・`<stdarg.h>`）を探索しない | `_system_include_args` | `test_out_of_tree_build_uses_generated_headers_…` |
+| 4 | 実機 / CI（Linux） | pip版libclangに組み込みヘッダーが無く、`<stdio.h>` を含むだけで解析が失敗 | `_compiler_builtin_include_args` | `test_compiler_builtin_headers_are_detected_…`、CI（ubuntu）の全Cテスト |
+| 5 | 実機（emacs） | `-MMD -MF`・`-o` で解析が対象の環境へ書き込もうとする / `-Werror` で警告が解析失敗になる | `_strip_output_options` | `test_output_producing_options_are_removed_…` |
+| 6 | 実機 | 記録に無いファイル・ヘッダーが失敗する（補間・取り込む側の文脈が必要） | 補間の使用と注記、ヘッダーを取り込む側の文脈で解析 | `test_header_is_analyzed_in_the_context_…`、`…interpolates_settings_for_unlisted_files` |
+| 7 | 実機（`flow` の失敗） | Pythonの `if` / `try` / `with` 内の定義が抽出されない | `_nested_statement_bodies` | `test_definitions_inside_if_try_and_with_blocks_…`、`test_symbol_can_be_selected_by_line_…` |
+| 8 | CI | Makefile の変数名 `CI` が環境変数 `CI=true` に上書きされ、全コマンドが `true` になる | `CODEINSIGHT` に改名 | `test_makefile_is_not_overridden_by_the_ci_environment_variable` |
+| 9 | 実機（最小のLinux） | `make reading` が `python3` に依存し、無い環境で目次が作れず、失敗が隠れる | `uv run python` に統一、失敗を表示 | `test_makefile_does_not_depend_on_a_bare_python3`、Docker（python3なし・`CI=true`）での完走 |
+| 10 | CI | `setup-uv@v10` というタグが無い / Node.js 20 の廃止警告 | `@v10.2.0` に固定、`checkout@v7` | CI（lint・3.11〜3.13） |
+| 11 | 実機 | 言語未対応の機能の結果（0件・なし）が「問題なし」と誤読される | 対象外の言語を注記 | `test_language_limited_commands_say_what_they_did_not_check` ほか |
 
 ### AI解説（実際のローカルモデルでの確認）
 

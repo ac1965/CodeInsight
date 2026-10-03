@@ -224,8 +224,13 @@ class CAnalyzer:
         self._system_args = _system_include_args()
         self._default_args = [*self._system_args, *_DEFAULT_ARGS]
 
-    def analyze_file(self, unit: SourceUnit) -> FileAnalysis:
-        result = FileAnalysis()
+    def parse(self, unit: SourceUnit, result: FileAnalysis) -> cindex.TranslationUnit | None:
+        """ファイルを構文解析する（解析時にも、関数単位の問い合わせ時にも同じ設定で使う）。
+
+        ヘッダーは、取り込む側のソースの設定と文脈で解析する。警告・エラーは result に記録する。
+        ファイル自身にエラーがある場合は None を返す（エラーのあるファイルを正常に解析したものとして扱わない）。
+        """
+
         absolute_path = unit.absolute_path
         target_name = str(Path(str(absolute_path)).resolve())
         parse_path = absolute_path
@@ -252,7 +257,7 @@ class CAnalyzer:
             )
         except cindex.TranslationUnitLoadError as exc:
             result.errors.append(f"構文解析に失敗しました: {exc}")
-            return result
+            return None
 
         def own_diagnostic(diag: cindex.Diagnostic) -> bool:
             """取り込む側の文脈で解析した場合、ヘッダー自身の診断だけを、このファイルの成否に関わるものとして扱う。"""
@@ -270,7 +275,7 @@ class CAnalyzer:
         if fatal_diagnostics:
             for diag in fatal_diagnostics:
                 result.errors.append(f"{diag.location}: {diag.spelling}")
-            return result
+            return None
 
         outside = 0
         for diag in translation_unit.diagnostics:
@@ -280,6 +285,15 @@ class CAnalyzer:
                 result.warnings.append(f"{diag.location}: {diag.spelling}")
         if outside:
             result.warnings.append(f"取り込む側の{parse_path.name}の解析で、ヘッダー以外の場所に{outside}件のエラーがありました（このヘッダーの結果には含めていません）。")
+        return translation_unit
+
+    def analyze_file(self, unit: SourceUnit) -> FileAnalysis:
+        result = FileAnalysis()
+        absolute_path = unit.absolute_path
+        target_name = str(Path(str(absolute_path)).resolve())
+        translation_unit = self.parse(unit, result)
+        if translation_unit is None:
+            return result
 
         project_root = self._project_root(unit)
         ids = IdAllocator(unit.file_id)

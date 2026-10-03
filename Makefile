@@ -259,7 +259,7 @@ reading-graphs: reading-analyze ## [資料] 呼び出し・依存・構成の図
 
 reading-functions: reading-docs ## [資料] 主要な関数（上位 TOP 件ずつ）の読解カードを作る
 	@mkdir -p $(OUT)/functions $(OUT)/logs
-	@python3 -c "$$KEY_FUNCTIONS" $(TOP) < $(OUT)/overview.json > $(OUT)/functions/.names 2>/dev/null || true
+	@$(UV) run python -c "$$KEY_FUNCTIONS" $(TOP) < $(OUT)/overview.json > $(OUT)/functions/.names 2>> $(OUT)/logs/functions.log || echo "  ! 主要な関数の一覧を作れませんでした（logs/functions.log）"
 	@while IFS="$$(printf '\t')" read -r name path; do \
 	  [ -n "$$name" ] || continue; \
 	  file="$(OUT)/functions/$$(echo "$$name" | sed 's/@\([0-9]*\)$$/_L\1/' | tr -c 'A-Za-z0-9._\n-' '_').txt"; \
@@ -279,7 +279,7 @@ reading-ai: reading-functions ## [資料] AI解説（MODEL と AI_SEND=1 があ�
 
 reading-index: ## [資料] 目次（README.md）を作る
 	@mkdir -p $(OUT)/logs
-	@python3 -c "$$READING_INDEX" "$(OUT)" "$(TARGET)" "$(TOP)"
+	@$(UV) run python -c "$$READING_INDEX" "$(OUT)" "$(TARGET)" "$(TOP)"
 
 reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] 対象のコードリーディング資料一式を OUT に作る（TARGET 必須）
 	@$(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP)

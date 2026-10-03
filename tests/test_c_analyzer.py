@@ -130,3 +130,25 @@ def test_header_is_analyzed_in_the_context_of_the_source_that_includes_it(tmp_pa
     assert [s.name for s in in_context.symbols if s.kind.value == "function_declaration"] == ["total"]
     assert any("main.c" in w and "推定" in w for w in in_context.warnings)  # 取り込む側の文脈で解析したことを注記する
     assert all(s.start_line <= 4 for s in in_context.symbols)  # 位置はヘッダー自身のもの（取り込む側のものではない）
+
+
+def test_relative_file_entries_in_compile_commands_are_matched_against_the_command_directory(tmp_path: Path) -> None:
+    import json
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.c").write_text("int a(void) { return 1; }\n")
+    # autotools + bear の記録のように、file が相対パスで、directory が各ソースのあるディレクトリ
+    (src / "compile_commands.json").write_text(json.dumps([
+        {"directory": str(src), "file": "a.c", "arguments": ["cc", "-c", "a.c"]},
+    ]))
+    result = CAnalyzer(compile_commands_dir=src).analyze_file(SourceUnit.from_path(str(uuid.uuid4()), src / "a.c"))
+    assert result.succeeded, result.errors
+    assert not any("補間" in w or "設定が無い" in w for w in result.warnings)  # 記録に載っているファイルとして扱われる
+
+
+def test_compiler_builtin_headers_are_detected_when_a_compiler_is_available() -> None:
+    from codeinsight.analysis.c_analyzer import _compiler_builtin_include_args
+
+    args = _compiler_builtin_include_args()
+    assert args == [] or (args[0] == "-isystem" and (Path(args[1]) / "stddef.h").exists())  # 見つかった場合は、実在する組み込みヘッダーの場所
