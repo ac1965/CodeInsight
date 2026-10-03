@@ -68,6 +68,18 @@ pip install -e ".[dev]"
 
 C言語解析にはlibclang(PyPIパッケージに同梱)を使用します。追加のClangインストールは不要です。
 
+よく使う操作は `make` から実行できます(`make help` で一覧)。
+
+```bash
+make setup                              # 依存のインストール
+make check                              # 構文の確認とテスト
+make analyze TARGET=../my-repo          # 解析(対象は変更しない)
+make overview                           # 全体像(DB=・PROJECT= で解析結果を指定)
+make understand NAME=main               # 関数の読解カード
+make explain-dry NAME=main MODEL=qwen3-coder:latest   # AIへ送る内容の確認(送信しない)
+make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の許可が必要)
+```
+
 ## 使い方(CLI)
 
 解析結果は、既定で `~/.codeinsight/codeinsight.db` に保存されます(対象リポジトリには書き込みません。`--db` または環境変数 `CODEINSIGHT_DATA_DIR` で変更できます)。登録したプロジェクトが複数ある場合は `--project`(ID・名前・ルートパス)で指定します。多くのコマンドは `--format json` と、表示から除くパスを指定する `--exclude 'tests/*'` に対応します。
@@ -179,7 +191,7 @@ uv run codeinsight graph call --format html -o call.html                 # 自�
 ## テスト
 
 ```bash
-uv run pytest -v
+uv run pytest -v   # または make test
 ```
 
 詳細は [TESTING.md](TESTING.md) を参照してください。
