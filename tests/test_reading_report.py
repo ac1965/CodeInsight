@@ -244,5 +244,5 @@ def test_make_reading_with_ai_send_but_no_model_explains_why_and_keeps_the_other
     result = subprocess.run(["make", "--no-print-directory", "reading", f"TARGET={target}", f"OUT={out}", "TOP=1", "AI_SEND=1", "PDF=0"],
                             cwd=ROOT, capture_output=True, text=True, timeout=300, env=env)
     assert result.returncode == 0  # 他の成果物は作る
-    assert "AI解説を1件も作れませんでした" in result.stdout and "モデルが指定されていません" in result.stdout  # 原因を示す
+    assert "AI解説を作れませんでした" in result.stdout and "モデルが指定されていません" in result.stdout  # 原因を示す
     assert (out / "overview.txt").is_file() and not list((out / "ai").glob("*.md"))

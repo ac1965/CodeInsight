@@ -264,6 +264,7 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | `TOP` | 8 | 主要な関数の選択数（入口・よく呼ばれる・多くを呼ぶ・大きい、各 `TOP` 件の和集合の上位 `2×TOP` 件） |
 | `COMPILE_DB` | `BUILD` にあれば自動 | Cの `compile_commands.json` のあるディレクトリ |
 | `BUILD` | `OUT/build` | `reading-c-build` のビルド先 |
+| `AI_WORKERS` / `AI_NO_REUSE` | 2 / なし | AI解説の並列数、保存済みを再利用しない（7.1.3） |
 | `AI_SEND` | なし | `AI_SEND=1` のときだけ、主要な関数のAI解説を `ai/` と PDF の「AIの解説」章に追記する。**ソースの一部をAIへ送信する**ため、既定では作らない |
 | `MODEL` | 環境変数 `CODEINSIGHT_AI_MODEL`、設定ファイル | AIのモデル。どれも無ければ、原因を示して AI解説だけスキップする（他の成果物は作る） |
 | `UV` | `uv` | uv コマンド |
@@ -292,6 +293,21 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 * PDFの「AIの解説」章の先頭に、**検証状態の一覧**（対象・モデル・検証済み/一部未確認/未検証・引用の検証できた数）と、注意書き（解析結果ではないこと、「未検証」は事実として扱わないこと、「⚠未確認」の行の意味）を載せます。
 * 作れなかった解説は、`logs/ai.log` と画面に原因を示します（例: モデルが指定されていない・AIに接続できない）。AI解説を1件も作れなくても、他の成果物とPDFは作ります。
 * 解説は、解析結果とは別に管理され、解析結果のテーブルには保存されません（検証結果つきで、DBの別テーブルに保存）。
+
+### 7.1.3 AI解説の並列化と再開（`AI_WORKERS`）
+
+AI解説は、AIへの問い合わせだけを並列にして生成します（`codeinsight explain-many`。`make reading` が呼びます）。
+
+| 項目 | 内容 |
+| --- | --- |
+| 並列数 | `AI_WORKERS=N`（既定 2）。ローカルLLM（Ollama）は、同時処理を直列に捌く設定が既定のことがあり、並列にしても速くならない場合がある（`OLLAMA_NUM_PARALLEL` で変えられる）。ホスト型のAPIでは、増やすと速くなる |
+| 並列にする範囲 | AIへの問い合わせだけ。根拠の組み立て・検証・DBへの保存は、1つのスレッドで順に行う（SQLiteの競合を避ける） |
+| 再開（キャッシュ） | 同じ関数・同じモデル・同じ入力（プロンプトのハッシュ）の解説が保存済みで、根拠のファイルも変わっていなければ、AIへ再送信せず再利用する（検証は再実行する）。中断しても、同じコマンドで、生成済みの分を飛ばして再開できる。`AI_NO_REUSE=1` で、すべて新しく生成する |
+| 再試行 | 一時的な失敗（HTTP 429・5xx・時間切れ）は、指数バックオフ（2秒・4秒…）で、最大3回まで再試行する |
+| 打ち切り | 認証・権限・モデル/URLの誤り（HTTP 400/401/402/403/404）、接続できない場合は、再試行しても回復しないため、残りを打ち切り、「未処理」として示す。原因を解消して、同じコマンドを再実行する |
+| 失敗の扱い | 失敗した解説は保存しない（失敗を成功として残さない）。1件の失敗は、他の件を止めない。結果は「生成・再利用・失敗・未処理」の件数で示す |
+
+単体では `codeinsight explain-many --from-file 一覧 --out-dir ai/ --workers 4 --allow-send --ai-model <モデル>`（一覧は、1行に `名前` または `名前<TAB>ファイル`）。
 
 ### 7.2 出力の構成
 
@@ -525,7 +541,7 @@ make test-fast    # 最初の失敗で止める
 | 全体像 | `overview`, `architecture`, `boundaries`, `externals`, `effects`, `config`, `environment` |
 | 関数を読む | `understand`, `flow`, `dataflow`, `state`, `exceptions`, `risks` |
 | 品質・履歴 | `history`, `tests`, `impact`, `unused`, `docs-check` |
-| AI | `explain`, `explain-file`, `explain-path`, `ask`, `explanations`, `ai-status`, `ai-eval` |
+| AI | `explain`, `explain-many`（複数を並列・再開つき）, `explain-file`, `explain-path`, `ask`, `explanations`, `ai-status`, `ai-eval` |
 | 資料の1ファイル化 | `reading-report` |
 | 動的解析（スタブ） | `dynamic-plan`（実行しない計画の表示）, `dynamic-run`（許可の確認のみ。実行は未実装） |
 

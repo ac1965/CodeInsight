@@ -11,7 +11,32 @@ _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class AIProviderError(Exception):
-    """AIプロバイダーとの通信・応答の失敗。メッセージにAPIキーは含めない。"""
+    """AIプロバイダーとの通信・応答の失敗。メッセージにAPIキーは含めない。
+
+    kind: http（HTTPエラー。status に番号）/ connection（接続できない）/ timeout / format（応答の形式が想定と異なる）。
+    一括実行では、これで「再試行する」「残りを打ち切る」を判断する。
+    """
+
+    def __init__(self, message: str, *, kind: str = "", status: int | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.status = status
+
+    @property
+    def retryable(self) -> bool:
+        """時間をおいて再試行すれば成功しうるか（429・5xx・時間切れ・応答の形式の揺れ）。"""
+
+        if self.kind == "http":
+            return self.status == 429 or (self.status is not None and self.status >= 500)
+        return self.kind in ("timeout", "format")
+
+    @property
+    def fatal(self) -> bool:
+        """再試行しても回復せず、残りの要求も失敗する見込みか（認証・権限・モデル/URLの誤り・接続できない）。"""
+
+        if self.kind == "http":
+            return self.status in (400, 401, 402, 403, 404)
+        return self.kind == "connection"
 
 
 @dataclass(frozen=True)
@@ -67,7 +92,7 @@ class OpenAICompatibleProvider:
             choice = data["choices"][0]["message"]
             text = choice.get("content") or ""
         except (KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise AIProviderError("AIの応答の形式が想定と異なります（choices[0].message.content がありません）。") from exc
+            raise AIProviderError("AIの応答の形式が想定と異なります（choices[0].message.content がありません）。", kind="format") from exc
         usage = data.get("usage") or {}
         return Completion(
             text=_THINK.sub("", text).strip(),  # 思考過程（<think>）は回答に含めない
@@ -99,14 +124,16 @@ class OpenAICompatibleProvider:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read(300).decode("utf-8", errors="replace").replace(self._api_key or "\0", "***")
-            raise AIProviderError(f"AIがエラーを返しました（HTTP {exc.code}）: {detail}") from exc
+            raise AIProviderError(f"AIがエラーを返しました（HTTP {exc.code}）: {detail}", kind="http", status=exc.code) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
+            timed_out = isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) or "timed out" in str(reason).lower()
             raise AIProviderError(
                 f"AIに接続できません（{self._base_url}）: {reason}。"
-                "AIを使わない機能（understand 等）は、そのまま利用できます。"
+                "AIを使わない機能（understand 等）は、そのまま利用できます。",
+                kind="timeout" if timed_out else "connection",
             ) from exc
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise AIProviderError("AIの応答がJSONとして読み取れません。") from exc
+            raise AIProviderError("AIの応答がJSONとして読み取れません。", kind="format") from exc

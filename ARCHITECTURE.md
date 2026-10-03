@@ -87,7 +87,7 @@ src/codeinsight/
 │   ├── retrieval.py       質問に関連するシンボルの検索（名前・パス・docstring・本文の語をBM25風に採点。日本語は用語辞書で英語の語に展開）
 │   ├── prompt.py          PromptBuilder（規則・根拠・課題の組み立て）
 │   ├── citations.py       CitationValidator（引用・識別子・根拠のない主張の機械的な検証）
-│   ├── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存）
+│   ├── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存。explain_symbols: 問い合わせだけ並列・保存済みの再利用・再試行・打ち切り）
 │   └── evaluation.py      評価ケース（eval/ai_cases.toml）の読み込み・実行・機械的な採点（保存はしない。モデル・プロンプトの比較用）
 │
 ├── (リポジトリ直下) eval/ai_cases.toml  AI評価ケース、.github/workflows/ci.yml  CI（pytest 3.11〜3.13・ruff・mypy）、Makefile、LICENSE（GPL-3.0-or-later）

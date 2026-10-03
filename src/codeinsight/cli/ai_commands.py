@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
+import re
 import sys
+from pathlib import Path
 
 from codeinsight.ai.citations import CitationStatus, ValidationReport
 from codeinsight.ai.config import AIConfig, ConsentError, config_file_warnings, load_ai_config
@@ -11,6 +15,7 @@ from codeinsight.ai.evaluation import EvalError, EvalResult, evaluate, load_case
 from codeinsight.ai.provider import AIProviderError, OpenAICompatibleProvider
 from codeinsight.ai.service import ExplanationResult, ExplanationService
 from codeinsight.application import FlowAnalysisError, NavigationService
+from codeinsight.application.navigation_service import AmbiguousSymbolError, SymbolNotFoundError
 from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe
 from codeinsight.domain import Explanation, ExplanationStatus
 
@@ -161,6 +166,78 @@ def cmd_explain_path(args: argparse.Namespace) -> int:
     target = resolve_symbol_arg(args, navigation, index, args.target, project).symbol
     result = _guard(lambda: service.explain_path(project, index, source, target, dry_run=args.dry_run, save=not args.no_save))
     return _print_result(args, result, _config(args))
+
+
+def _file_base(name: str) -> str:
+    """`修飾名@行` を、出力ファイル名の基にする（`a.b@12` → `a.b_L12`。英数字・`._-` 以外は `_`）。"""
+
+    return re.sub(r"[^A-Za-z0-9._-]", "_", re.sub(r"@(\d+)$", r"_L\1", name))
+
+
+def _rendered(result: ExplanationResult, config: AIConfig) -> str:
+    """`explain` と同じ表示を、文字列として得る（一括生成で、ファイルに書くため）。"""
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _print_result(argparse.Namespace(format="text", no_save=False), result, config)
+    return buffer.getvalue()
+
+
+def cmd_explain_many(args: argparse.Namespace) -> int:
+    """一覧の関数のAI解説を、並列に生成して、ファイルに書き出す（再実行・中断からの再開ができる）。"""
+
+    repository, project, index, navigation, service, _ = _service(args)
+    config = _config(args)
+    requested: list[tuple[str, str | None]] = [(n, None) for n in args.names]
+    if args.from_file:
+        for line in Path(args.from_file).read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                name, _, file_path = line.partition("\t")
+                requested.append((name.strip(), file_path.strip() or None))
+    if not requested:
+        raise CliError("解説する関数が指定されていません（名前、または --from-file）。", 2)
+    out_dir = Path(args.out_dir) if args.out_dir else None
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols, names, unresolved = [], [], []
+    for name, path in requested:
+        try:
+            symbol = navigation.resolve_symbol(index, name, file=path).symbol
+        except (SymbolNotFoundError, AmbiguousSymbolError) as exc:
+            unresolved.append((name, f"シンボルを特定できません: {exc}"))
+            continue
+        symbols.append(symbol)
+        names.append(name)
+
+    def progress(item, done: int, total: int) -> None:
+        label = {"created": "生成", "reused": "再利用", "failed": "失敗", "skipped": "未処理"}[item.status]
+        extra = f"（{item.seconds:.0f}秒" + (f"、再試行 {item.attempts - 1}回" if item.attempts > 1 else "") + "）" if item.status == "created" else ""
+        detail = f": {safe(item.error)[:120]}" if item.error and item.status == "failed" else ""
+        print(f"[{done}/{total}] {label} {safe(item.symbol.qualified_name)}{extra}{detail}", flush=True)
+
+    print(f"AI解説を作成します（{len(symbols)}件、並列 {args.workers}、送信先: {config.base_url}（{'この計算機の内' if config.is_local else 'この計算機の外'}）、保存済みの再利用: {'しない' if args.no_reuse else 'する'}）", flush=True)
+    items = _guard(lambda: service.explain_symbols(
+        project, index, symbols, workers=args.workers, reuse=not args.no_reuse, save=not args.no_save, retries=args.retries, on_event=progress,
+    ))
+    written = 0
+    for name, item in zip(names, items, strict=True):  # 結果は、入力と同じ順序で返る
+        if out_dir and item.result is not None:
+            note = "（保存済みの解説を再利用しました。根拠の入力とモデルが同じため。検証は再実行しています）\n" if item.status == "reused" else ""
+            (out_dir / f"{_file_base(name)}.md").write_text(note + _rendered(item.result, config), encoding="utf-8")
+            written += 1
+    counts = {s: sum(1 for i in items if i.status == s) for s in ("created", "reused", "failed", "skipped")}
+    failed = counts["failed"] + len(unresolved)
+    print(f"AI解説: {counts['created']} 件生成、{counts['reused']} 件再利用、{failed} 件失敗、{counts['skipped']} 件未処理"
+          + (f"（{written}件を {out_dir} に書き出し）" if out_dir else ""))
+    for name, reason in unresolved:
+        print(f"  ! {safe(name)}: {reason}", file=sys.stderr)
+    for item in items:
+        if item.status in ("failed", "skipped") and item.error:
+            print(f"  ! {safe(item.symbol.qualified_name)}: {safe(item.error)}", file=sys.stderr)
+    if counts["skipped"]:
+        print("  ※ 認証・権限・接続の失敗など、再試行しても回復しない失敗があったため、残りを打ち切りました。原因を解消して、同じコマンドを再実行してください（生成済みの解説は再利用されます）。", file=sys.stderr)
+    return 1 if (failed or counts["skipped"]) else 0
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
@@ -335,6 +412,15 @@ def register(add) -> None:
     ai_eval.add_argument("--list", action="store_true", help="ケースの一覧だけ表示する（AIは使わない）")
     ai_eval.add_argument("--min-pass-rate", type=float, default=0.0, help="合格率がこれを下回ったら、終了コード5にする")
     _add_ai_options(ai_eval)
+
+    many = add("explain-many", "複数の関数のAI解説を、並列に生成して書き出す（保存済みは再利用。中断・再実行から再開できる）", cmd_explain_many, ("text",))
+    many.add_argument("names", nargs="*", help="関数の名前または修飾名（`名前@行番号` も可）")
+    many.add_argument("--from-file", help="名前の一覧（1行に `名前` または `名前<TAB>ファイル`）")
+    many.add_argument("--out-dir", help="各解説を書き出すディレクトリ（`<名前>.md`）")
+    many.add_argument("--workers", type=int, default=2, help="AIへの並列の問い合わせ数（ローカルLLMは、同時処理が遅いことがあるため、既定は2）")
+    many.add_argument("--retries", type=int, default=3, help="一時的な失敗（429・5xx・時間切れ）の再試行を含む試行回数")
+    many.add_argument("--no-reuse", action="store_true", help="保存済みの解説を再利用せず、すべて新しく生成する")
+    _add_ai_options(many)
 
     status = add("ai-status", "AIの設定と接続を確認する（ソースコードは送信しない）", cmd_ai_status, ("text", "json"), exclude=False)
     status.add_argument("--ai-base-url")

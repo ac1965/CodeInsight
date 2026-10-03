@@ -17,6 +17,7 @@
 #   make reading TARGET=../my-repo OUT=out TOP=12        # 出力先・主要な関数の数を指定
 #   make reading TARGET=../c-proj COMPILE_DB=/tmp/build  # Cで compile_commands.json がある場合
 #   make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure+ビルド記録
+#   make reading TARGET=... AI_SEND=1 AI_WORKERS=4             # AI解説を並列に追記する（保存済みは再利用。中断しても同じコマンドで再開）
 #   make reading TARGET=... AI_SEND=1                          # AI解説を追記する（モデルは MODEL=、環境変数 CODEINSIGHT_AI_MODEL、設定ファイル。既定では送信しない）
 
 UV      ?= uv
@@ -37,6 +38,7 @@ READING_NAME = $(notdir $(TARGET))
 OUT         ?= reading/$(READING_NAME)
 override OUT := $(call expand_path,$(OUT))
 TOP         ?= 8
+AI_WORKERS  ?= 2
 RDB          = $(OUT)/analysis/codeinsight.db
 RCI          = $(CODEINSIGHT)
 RFLAGS       = --db $(RDB)
@@ -280,18 +282,14 @@ reading-functions: reading-docs ## [資料] 主要な関数（上位 TOP 件ず�
 	done < $(OUT)/functions/.names
 	@[ -s $(OUT)/logs/functions.log ] || rm -f $(OUT)/logs/functions.log
 
-reading-ai: reading-functions ## [資料] AI解説を追記する（AI_SEND=1 が必要。モデルは MODEL=、または環境変数 CODEINSIGHT_AI_MODEL・設定ファイル）
+reading-ai: reading-functions ## [資料] AI解説を追記する（AI_SEND=1 が必要。MODEL=、AI_WORKERS=並列数、AI_NO_REUSE=1 で保存済みを再利用しない）
 	@if [ "$(AI_SEND)" = "1" ]; then \
-	  mkdir -p $(OUT)/ai; : > $(OUT)/logs/ai.log; ok=0; failed=0; \
+	  mkdir -p $(OUT)/ai; \
 	  echo "AI解説を作成します（ソースの一部をAIへ送信します。送信先: $${CODEINSIGHT_AI_BASE_URL:-既定の localhost}）"; \
-	  while IFS="$$(printf '\t')" read -r name path; do \
-	    [ -n "$$name" ] || continue; \
-	    base=$$(echo "$$name" | sed 's/@\([0-9]*\)$$/_L\1/' | tr -c 'A-Za-z0-9._\n-' '_'); \
-	    if $(RCI) explain "$$name" --file "$$path" --allow-send $(if $(MODEL),--ai-model $(MODEL)) $(RFLAGS) > "$(OUT)/ai/$$base.md" 2>> $(OUT)/logs/ai.log; then ok=$$((ok+1)); \
-	    else failed=$$((failed+1)); echo "  ! AI解説を作れなかった関数: $$name"; rm -f "$(OUT)/ai/$$base.md"; fi; \
-	  done < $(OUT)/functions/.names; \
-	  echo "AI解説: $$ok 件作成、$$failed 件失敗（検証状態は ai/ の各ファイルと、PDFの「AIの解説」の表を参照）"; \
-	  if [ $$ok -eq 0 ]; then echo "  ! AI解説を1件も作れませんでした。原因: $$(grep -m1 -E '^エラー' $(OUT)/logs/ai.log || echo '（logs/ai.log を参照）')"; fi; \
+	  $(RCI) explain-many --from-file $(OUT)/functions/.names --out-dir $(OUT)/ai --workers $(AI_WORKERS) --allow-send \
+	    $(if $(MODEL),--ai-model $(MODEL)) $(if $(AI_NO_REUSE),--no-reuse) $(RFLAGS) 2> $(OUT)/logs/ai.log; \
+	  rc=$$?; \
+	  if [ $$rc -ne 0 ]; then echo "  ! 一部またはすべてのAI解説を作れませんでした。原因: $$(grep -m1 -E '^(エラー|  !)' $(OUT)/logs/ai.log || echo '（logs/ai.log を参照）')"; fi; \
 	  [ -s $(OUT)/logs/ai.log ] || rm -f $(OUT)/logs/ai.log; \
 	else echo "AI解説はスキップ（AI_SEND=1 を付けると、主要な関数のAI解説を追記します。ソースの一部をAIへ送信するため、既定では作りません。送信内容は make explain-dry で確認できます）"; fi
 

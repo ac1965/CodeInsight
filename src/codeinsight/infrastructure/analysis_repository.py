@@ -451,6 +451,16 @@ class AnalysisRepository:
         rows = self._connection.execute(query + " ORDER BY created_at DESC", params).fetchall()
         return [_explanation_from_row(row) for row in rows]
 
+    def find_explanation(self, project_id: str, target_kind: str, target: str, model: str, prompt_hash: str) -> Explanation | None:
+        """同じ対象・同じモデル・同じ入力（プロンプトのハッシュ）で生成済みの解説のうち、最新のもの（再利用のため）。"""
+
+        row = self._connection.execute(
+            "SELECT * FROM explanations WHERE project_id = ? AND target_kind = ? AND target = ? AND model = ? AND prompt_hash = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (project_id, target_kind, target, model, prompt_hash),
+        ).fetchone()
+        return _explanation_from_row(row) if row else None
+
     def get_explanation(self, project_id: str, id_prefix: str) -> Explanation | None:
         """IDまたはその先頭部分（一意に定まる場合）で解説を取得する。"""
 
