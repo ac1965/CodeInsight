@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import io
 import tokenize
 from dataclasses import dataclass
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application.project_index import ProjectIndex
-from codeinsight.domain import Language, Project, SymbolKind
+from codeinsight.application.source_scan import OwnerLookup, ScanResult, iter_python_files
+from codeinsight.domain import Project
 
 SEVERITIES = ("low", "medium", "high")
 RULES = {
@@ -48,41 +48,19 @@ class RiskService:
 
     def scan(self, project: Project, index: ProjectIndex, rules: set[str] | None = None) -> tuple[list[Finding], list[str]]:
         findings: list[Finding] = []
-        skipped: list[str] = []
-        by_file: dict[str, list] = {}
-        for symbol in index.symbols.values():
-            if symbol.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD, SymbolKind.CLASS, SymbolKind.MODULE):
-                by_file.setdefault(symbol.file_id, []).append(symbol)
-
-        for source_file in index.files.values():
-            if source_file.language != Language.PYTHON:
-                continue
-            try:
-                data = (project.root_path / source_file.relative_path).read_bytes()
-            except OSError:
-                skipped.append(source_file.relative_path)
-                continue
-            if hashlib.sha256(data).hexdigest() != source_file.content_hash:
-                skipped.append(source_file.relative_path)  # 解析後に変更されており、位置が対応しない
-                continue
-            text = data.decode("utf-8", errors="replace")
-            try:
-                tree = ast.parse(text)
-            except SyntaxError:
-                skipped.append(source_file.relative_path)
-                continue
-            owner = _OwnerLookup(by_file.get(source_file.file_id, []))
-            findings.extend(self._scan_file(source_file.relative_path, text, tree, owner))
+        result = ScanResult()
+        for scanned in iter_python_files(project, index, result):
+            findings.extend(self._scan_file(scanned.source_file.relative_path, scanned.text, scanned.tree, scanned.owner))
         if rules:
             findings = [f for f in findings if f.rule in rules]
         findings.sort(key=lambda f: (-SEVERITIES.index(f.severity), f.path, f.line))
-        return findings, skipped
+        return findings, result.skipped
 
-    def _scan_file(self, path: str, text: str, tree: ast.Module, owner: "_OwnerLookup") -> list[Finding]:
+    def _scan_file(self, path: str, text: str, tree: ast.Module, owner: OwnerLookup) -> list[Finding]:
         found: list[Finding] = []
 
         def add(rule: str, line: int, detail: str = "") -> None:
-            found.append(Finding(rule, RULES[rule][0], path, line, owner.at(line), detail))
+            found.append(Finding(rule, RULES[rule][0], path, line, owner.name_at(line), detail))
 
         async_ranges = [(n.lineno, fa._end(n)) for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]
         for node in ast.walk(tree):
@@ -126,18 +104,3 @@ class RiskService:
         except (tokenize.TokenError, IndentationError):
             pass
         return found
-
-
-class _OwnerLookup:
-    """行番号から、それを含む最も内側のシンボルの修飾名を返す。"""
-
-    def __init__(self, symbols: list) -> None:
-        self._symbols = sorted(
-            (s for s in symbols if s.kind != SymbolKind.MODULE), key=lambda s: (s.end_line - s.start_line)
-        )
-
-    def at(self, line: int) -> str:
-        for symbol in self._symbols:
-            if symbol.start_line <= line <= symbol.end_line:
-                return symbol.qualified_name
-        return ""

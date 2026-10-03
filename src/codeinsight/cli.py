@@ -11,6 +11,8 @@ from pathlib import Path
 
 from codeinsight.analysis.call_graph import CallNode, Direction
 from codeinsight.analysis import flow_analysis as fa
+from codeinsight.application.boundary_service import KIND_LABELS as BOUNDARY_LABELS, BoundaryService
+from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS, ConfigService
 from codeinsight.application.architecture_service import ROLE_LABELS, ArchitectureService
 from codeinsight.application.external_service import CATEGORY_LABELS, SIDE_EFFECT_CATEGORIES, ExternalService
 from codeinsight.application import (
@@ -1184,6 +1186,94 @@ def _cmd_architecture(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_config(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    items, skipped = ConfigService().scan(project, index)
+    if args.kind:
+        items = [i for i in items if i.kind in args.kind]
+    if args.name:
+        items = [i for i in items if args.name.lower() in i.name.lower()]
+    if args.format == "json":
+        _emit_json(
+            [
+                {
+                    "kind": i.kind, "name": i.name, "path": i.path, "line": i.line, "owner": i.owner,
+                    "default": i.default, "help": i.help, "detail": i.detail, "confidence": i.confidence,
+                    "uses": [vars(u) for u in i.uses],
+                }
+                for i in items
+            ]
+        )
+        return 0
+    print("設定値の定義箇所と、使われる箇所（文字列リテラルで書かれた名前のみ。使用箇所は静的な近似）")
+    for kind, label in CONFIG_LABELS.items():
+        group = [i for i in items if i.kind == kind]
+        if not group:
+            continue
+        print(f"\n■ {label}（{len(group)}件）")
+        for item in group:
+            extras = []
+            if item.default:
+                extras.append(f"既定値: {item.default}")
+            if item.detail:
+                extras.append(item.detail)
+            if item.help:
+                extras.append(f"説明: {item.help}")
+            if item.confidence != "confirmed":
+                extras.append("推定")
+            print(f"  {safe(item.name)}  {safe(item.path)}:{item.line}  in {safe(item.owner)}" + (f"  [{' / '.join(safe(e) for e in extras)}]" if extras else ""))
+            for use in item.uses[: args.limit]:
+                print(f"      使われる箇所: {safe(use.path)}:{use.line}  {safe(use.owner)}  ({safe(use.how)})")
+            if len(item.uses) > args.limit:
+                print(f"      … ほか {len(item.uses) - args.limit}件（--limit）")
+            if not item.uses and kind in ("env", "cli_option", "constant"):
+                print("      使用箇所を確認できません（静的に追えない使い方か、未使用の可能性）")
+    if not items:
+        print("  確認できませんでした")
+    if skipped:
+        print(f"解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
+    _warn_stale(stale)
+    return 0
+
+
+def _cmd_boundaries(args: argparse.Namespace) -> int:
+    repository, project, index, stale = _prepare(args)
+    items, skipped = BoundaryService().scan(project, index)
+    if args.kind:
+        items = [i for i in items if i.kind in args.kind]
+    if args.format == "json":
+        _emit_json(
+            [
+                {
+                    "kind": i.kind, "label": i.label, "path": i.path, "line": i.line, "owner": i.owner,
+                    "target": i.target.qualified_name if i.target else None, "detail": i.detail, "confidence": i.confidence,
+                }
+                for i in items
+            ]
+        )
+        return 0
+    print("プログラムの入口と境界（フレームワークの規約・構文パターンから検出）")
+    for kind, label in BOUNDARY_LABELS.items():
+        group = [i for i in items if i.kind == kind]
+        if not group:
+            continue
+        print(f"\n■ {label}（{len(group)}件）")
+        for item in group[: args.limit]:
+            target = f"  → {safe(item.target.qualified_name)}" if item.target else ""
+            mark = "  [推定]" if item.confidence != "confirmed" else ""
+            detail = f"  ({safe(item.detail)})" if item.detail else ""
+            print(f"  {safe(item.label)}  {safe(item.path)}:{item.line}  in {safe(item.owner)}{target}{detail}{mark}")
+        if len(group) > args.limit:
+            print(f"  … ほか {len(group) - args.limit}件（--limit / --kind）")
+    if not items:
+        print("  確認できませんでした")
+    if skipped:
+        print(f"解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
+    _warn_stale(stale)
+    print("※ フレームワークの規約に基づく検出です。独自の登録方法・動的な登録は検出できません。", file=sys.stderr)
+    return 0
+
+
 def _cmd_unresolved(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
     navigation = NavigationService(repository)
@@ -1439,6 +1529,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     architecture = add("architecture", "コンポーネント構成・層構造・循環・外部連携を表示する（役割は名前による推定）", _cmd_architecture)
     architecture.add_argument("--depth", type=int, help="コンポーネントとするディレクトリの深さ（省略時は自動）")
+
+    config = add("config", "設定値（環境変数・コマンドライン引数・設定ファイル・定数）の定義箇所と使われる箇所を表示する", _cmd_config)
+    config.add_argument("--kind", action="append", choices=list(CONFIG_LABELS), help="種類で絞り込む")
+    config.add_argument("--name", help="名前の部分一致で絞り込む")
+    config.add_argument("--limit", type=int, default=5, help="1件あたりの使用箇所の表示数")
+
+    boundaries = add("boundaries", "入口と境界（エントリポイント・CLI・HTTP・イベント・スレッド・非同期・キャッシュ）を表示する", _cmd_boundaries)
+    boundaries.add_argument("--kind", action="append", choices=list(BOUNDARY_LABELS), help="種類で絞り込む")
+    boundaries.add_argument("--limit", type=int, default=20, help="種類ごとの表示件数")
 
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")

@@ -74,3 +74,8 @@ def python_flow_dir() -> Path:
 @pytest.fixture
 def layered_dir() -> Path:
     return FIXTURES_DIR / "layered"
+
+
+@pytest.fixture
+def python_boundary_dir() -> Path:
+    return FIXTURES_DIR / "python_boundary"
