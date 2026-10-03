@@ -57,7 +57,7 @@ pytest -v
 ## 実行結果（最終確認時点）
 
 ```
-294 passed
+296 passed
 ```
 
 全テストが成功している。
@@ -199,6 +199,7 @@ GCCの経路考慮の静的アナライザを、`risks` の補助にできるか
 | 8 | CI | Makefile の変数名 `CI` が環境変数 `CI=true` に上書きされ、全コマンドが `true` になる | `CODEINSIGHT` に改名 | `test_makefile_is_not_overridden_by_the_ci_environment_variable` |
 | 9 | 実機（最小のLinux） | `make reading` が `python3` に依存し、無い環境で目次が作れず、失敗が隠れる | `uv run python` に統一、失敗を表示 | `test_makefile_does_not_depend_on_a_bare_python3`、Docker（python3なし・`CI=true`）での完走 |
 | 10 | CI | `setup-uv@v10` というタグが無い / Node.js 20 の廃止警告 | `@v10.2.0` に固定、`checkout@v7` | CI（lint・3.11〜3.13） |
+| 12 | 実機（利用者） | `OUT=~/x` の `~` が展開されず、一部のコマンドだけ展開されて大半の項目が失敗し、リテラルの `~` ディレクトリができる | `expand_path`（`~`の展開と絶対パス化）、空白を含むパスの拒否 | `test_tilde_in_paths_is_expanded_even_when_the_shell_does_not_expand_it`、`test_paths_with_spaces_are_refused_clearly` |
 | 11 | 実機 | 言語未対応の機能の結果（0件・なし）が「問題なし」と誤読される | 対象外の言語を注記 | `test_language_limited_commands_say_what_they_did_not_check` ほか |
 
 ### AI解説（実際のローカルモデルでの確認）

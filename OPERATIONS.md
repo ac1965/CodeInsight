@@ -259,7 +259,7 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | 変数 | 既定 | 意味 |
 | --- | --- | --- |
 | `TARGET` | （必須） | 対象のディレクトリ |
-| `OUT` | `reading/<対象名>` | 出力先（`TARGET` の外） |
+| `OUT` | `reading/<対象名>` | 出力先（`TARGET` の外）。`~/…` も使える。空白を含むパスは不可 |
 | `TOP` | 8 | 主要な関数の選択数（入口・よく呼ばれる・多くを呼ぶ・大きい、各 `TOP` 件の和集合の上位 `2×TOP` 件） |
 | `COMPILE_DB` | `BUILD` にあれば自動 | Cの `compile_commands.json` のあるディレクトリ |
 | `BUILD` | `OUT/build` | `reading-c-build` のビルド先 |

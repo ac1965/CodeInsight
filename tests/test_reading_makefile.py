@@ -104,3 +104,27 @@ def test_understand_marks_unsupported_sections_instead_of_leaving_them_blank(tmp
     out = capsys.readouterr().out
     assert out.count("対象外") >= 3 and "空欄は「なし」を意味しません" in out
     assert "ありません（静的に追える範囲）" not in out  # 対象外のものを「変更なし」と断定しない
+
+
+def test_tilde_in_paths_is_expanded_even_when_the_shell_does_not_expand_it(tmp_path: Path) -> None:
+    # OUT=~/x のように、シェルが展開しない渡し方（make の変数に ~ がそのまま入る）でも、同じ場所に出力する
+    import os
+
+    target = tmp_path / "target"
+    shutil.copytree(FIXTURES / "layered", target)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home)}
+    result = subprocess.run(
+        ["make", "--no-print-directory", "reading", f"TARGET={target}", "OUT=~/reading_out", "TOP=2"],
+        cwd=ROOT, capture_output=True, text=True, timeout=300, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / "reading_out" / "README.md").is_file() and (home / "reading_out" / "overview.txt").is_file()
+    assert not (ROOT / "~").exists()  # リテラルの「~」ディレクトリを作らない
+    assert "No such file" not in result.stdout + result.stderr
+
+
+def test_paths_with_spaces_are_refused_clearly(tmp_path: Path) -> None:
+    result = _make("reading", f"TARGET={FIXTURES / 'layered'}", f"OUT={tmp_path / 'a b'}")
+    assert result.returncode == 2 and "空白は使えません" in result.stdout + result.stderr

@@ -29,14 +29,21 @@ AI_OPTS   = $(if $(MODEL),--ai-model $(MODEL))
 
 .DEFAULT_GOAL := help
 # --- コードリーディング成果物の設定 ---
-READING_NAME = $(notdir $(abspath $(TARGET)))
+# パスは、先頭の ~ を展開して絶対パスにそろえる（OUT=~/x のように、シェルが展開しない渡し方でも動くように）。
+# コマンドラインの値を上書きするため override を使う。
+expand_path = $(if $(strip $(1)),$(abspath $(patsubst ~/%,$(HOME)/%,$(patsubst ~,$(HOME),$(strip $(1))))))
+override TARGET := $(call expand_path,$(TARGET))
+READING_NAME = $(notdir $(TARGET))
 OUT         ?= reading/$(READING_NAME)
+override OUT := $(call expand_path,$(OUT))
 TOP         ?= 8
 RDB          = $(OUT)/analysis/codeinsight.db
 RCI          = $(CODEINSIGHT)
 RFLAGS       = --db $(RDB)
 BUILD       ?= $(OUT)/build
+override BUILD := $(call expand_path,$(BUILD))
 COMPILE_DB  ?= $(if $(wildcard $(BUILD)/compile_commands.json),$(BUILD),)
+override COMPILE_DB := $(call expand_path,$(COMPILE_DB))
 
 .PHONY: help setup test test-v test-fast check compile clean \
         analyze status overview architecture unresolved \
@@ -222,6 +229,7 @@ export READING_INDEX
 
 reading-check:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading TARGET=../my-repo))
+	@case "$(TARGET)$(OUT)" in *" "*) echo "TARGET / OUT のパスに空白は使えません: $(TARGET) / $(OUT)"; exit 2;; esac
 	@command -v $(firstword $(UV)) >/dev/null 2>&1 || { echo "$(firstword $(UV)) が見つかりません（https://docs.astral.sh/uv/ からインストールするか、UV=... で指定してください）"; exit 2; }
 	@test -d "$(TARGET)" || { echo "TARGET がディレクトリではありません: $(TARGET)"; exit 2; }
 	@case "$$(cd "$(TARGET)" && pwd -P)/" in \
