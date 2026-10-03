@@ -569,3 +569,19 @@ def test_cli_ask_and_explain_file_and_path(cli_env, capsys) -> None:
     assert len(stub.posts()) == 3
     code, _, err = _cli(capsys, "ask", "天気予報の仕組み", *opts)
     assert code == 1 and "AIには問い合わせていません" in err and len(stub.posts()) == 3
+
+
+def test_api_key_is_read_only_from_the_environment(tmp_path: Path) -> None:
+    from codeinsight.ai.config import config_file_warnings
+
+    file_path = tmp_path / "config.toml"
+    file_path.write_text('[ai]\nmodel = "m"\napi_key = "sk-in-file"\n')
+    config = load_ai_config(env={}, file_path=file_path)
+    assert config.model == "m" and config.api_key is None  # ファイルのキーは読まない
+    assert "sk-in-file" not in repr(config)
+    warnings = config_file_warnings(file_path)
+    assert warnings and "CODEINSIGHT_AI_API_KEY" in warnings[0] and "sk-in-file" not in warnings[0]
+
+    assert load_ai_config(env={"CODEINSIGHT_AI_API_KEY": "sk-env"}, file_path=file_path).api_key == "sk-env"
+    file_path.write_text('[ai]\nmodel = "m"\n')
+    assert config_file_warnings(file_path) == []

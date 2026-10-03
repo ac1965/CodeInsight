@@ -92,9 +92,10 @@ def load_ai_config(
     config = AIConfig()
     path = file_path or (default_data_dir() / "config.toml")
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8")).get("ai", {})
+        data = dict(tomllib.loads(path.read_text(encoding="utf-8")).get("ai", {}))
     except (OSError, tomllib.TOMLDecodeError):
         data = {}
+    data.pop("api_key", None)  # 秘密情報はファイルから読まない（環境変数のみ）。config_file_warnings が警告する
     config = _apply(config, data)
 
     env_values: dict[str, object] = {}
@@ -121,3 +122,19 @@ def _apply(config: AIConfig, values: Mapping[str, object]) -> AIConfig:
         elif key in ("base_url", "model", "api_key"):
             changes[key] = str(value)
     return replace(config, **changes)  # type: ignore[arg-type]
+
+
+def config_file_warnings(file_path: Path | None = None) -> list[str]:
+    """設定ファイルに、読み込まない秘密情報（api_key）が書かれている場合の警告。"""
+
+    path = file_path or (default_data_dir() / "config.toml")
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8")).get("ai", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    if "api_key" in data:
+        return [
+            f"{path} の [ai] api_key は使われません（秘密情報をファイルに置かないため）。"
+            "環境変数 CODEINSIGHT_AI_API_KEY を使い、ファイルからは削除してください。"
+        ]
+    return []

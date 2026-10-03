@@ -155,5 +155,5 @@ AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2
 
 * `ai/` は `application`・`infrastructure`・`domain` に依存し、逆の依存はない。`ai/service.py` が、`application` のサービス（読解カード・呼び出し経路・検索）の結果を `ContextBuilder` 経由で根拠にする。
 * 既定では、何も外部へ送信しない。送信には明示的な許可（`--allow-send` または設定）が必要で、送信先がこの計算機の外の場合は、さらに `--allow-remote` が必要（`AIConfig.check_consent`）。`--dry-run` は送信せず、プロンプトを表示する。
-* APIキーは、環境変数または設定ファイルからのみ読み、コマンドライン引数では受け取らない（シェルの履歴に残さないため）。`repr`・表示・例外メッセージには含めない。
-* 設定ファイルは `~/.codeinsight/config.toml` の `[ai]` テーブル（`CODEINSIGHT_DATA_DIR` で場所を変更可）。
+* APIキーは、環境変数 `CODEINSIGHT_AI_API_KEY` からのみ読む。コマンドライン引数（シェルの履歴に残る）でも設定ファイル（平文で残る）でも受け取らない。設定ファイルに `api_key` があっても無視し、`ai-status` が警告する。`repr`・表示・例外メッセージには含めない。
+* 設定ファイル `~/.codeinsight/config.toml` の `[ai]` テーブル（`CODEINSIGHT_DATA_DIR` で場所を変更可）には、送信先・モデル・送信の許可などを書ける（APIキーは除く）。

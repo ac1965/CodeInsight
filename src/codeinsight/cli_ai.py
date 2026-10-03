@@ -5,7 +5,7 @@ import json
 import sys
 
 from codeinsight.ai.citations import CitationStatus, ValidationReport
-from codeinsight.ai.config import AIConfig, ConsentError, load_ai_config
+from codeinsight.ai.config import AIConfig, ConsentError, config_file_warnings, load_ai_config
 from codeinsight.ai.context import ContextError
 from codeinsight.ai.provider import AIProviderError, OpenAICompatibleProvider
 from codeinsight.ai.service import ExplanationResult, ExplanationService
@@ -233,8 +233,11 @@ def _show_explanation(args, service: ExplanationService, project, index, explana
 def _cmd_ai_status(args: argparse.Namespace) -> int:
     cli = _cli()
     config = _config(args)
+    warnings = config_file_warnings()
+    for warning in warnings:
+        print(f"警告: {warning}", file=sys.stderr)
     if args.format == "json":
-        status: dict[str, object] = {"config": config.redacted(), "reachable": False, "models": []}
+        status: dict[str, object] = {"config": config.redacted(), "reachable": False, "models": [], "warnings": warnings}
     else:
         print("AIの設定（APIキーは表示しません）")
         for key, value in config.redacted().items():

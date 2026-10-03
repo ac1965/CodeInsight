@@ -166,7 +166,7 @@ uv run codeinsight ask "キャッシュはどこに保存されますか?" --all
 uv run codeinsight explanations [<ID>]
 ```
 
-* `--allow-send` が無いと、何も送信しません。送信先がこの計算機の外(localhost以外)の場合は、さらに `--allow-remote` が必要です。環境変数 `CODEINSIGHT_AI_ALLOW_SEND=1`・`CODEINSIGHT_AI_BASE_URL`・`CODEINSIGHT_AI_MODEL`、または `~/.codeinsight/config.toml` の `[ai]` でも設定できます。APIキーは環境変数 `CODEINSIGHT_AI_API_KEY` のみで、表示・ログには出しません。
+* `--allow-send` が無いと、何も送信しません。送信先がこの計算機の外(localhost以外)の場合は、さらに `--allow-remote` が必要です。環境変数 `CODEINSIGHT_AI_ALLOW_SEND=1`・`CODEINSIGHT_AI_BASE_URL`・`CODEINSIGHT_AI_MODEL`、または `~/.codeinsight/config.toml` の `[ai]` でも設定できます。APIキーは環境変数 `CODEINSIGHT_AI_API_KEY` のみで読み(設定ファイルに書いても無視し、`ai-status` が警告します)、表示・ログには出しません。
 * `--no-source` は、生のソース行を送らず、解析結果の事実(名前・位置・件数・docstringの先頭行)だけを送ります。
 * 検証できるのは、引用の存在・行範囲・渡した根拠の範囲内であること・ファイルが解析後に変更されていないこと・回答中の名前の実在までです。**根拠が主張を実際に裏付けているかは、利用者が確認してください。**
 * 解説は、根拠にしたファイルが変更されると「古い解説」と示されます。AIに接続できない場合も、AIを使わない機能(`understand` など)は、そのまま使えます。
