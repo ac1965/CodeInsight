@@ -78,3 +78,38 @@ int classify(int c) {
         return 1;
     return IS_UPPER(c) ? 2 : 3;
 }
+
+static void die(const char *message) {
+    fprintf(stderr, "%s\n", message);
+    exit(1);
+}
+
+static void fatal_wrapper(void) {
+    die("fatal");
+}
+
+int uses_fatal(int n) {
+    if (n < 0)
+        fatal_wrapper();
+    return n;
+}
+
+void pong(int n);
+
+void ping(int n) {
+    if (n > 0)
+        pong(n - 1);
+}
+
+void pong(int n) {
+    if (n == 0)
+        abort();
+    ping(n);
+}
+
+typedef void (*handler_t)(int);
+
+int dispatch(handler_t handler, int n) {
+    handler(n);
+    return strlen("x") > 0 ? n : 0;
+}

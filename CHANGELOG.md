@@ -21,6 +21,8 @@
 
 ### 追加
 
+* 呼び出し先の終了の伝播: `exceptions` と読解カードが、解決済みの呼び出しを `--depth` 段たどり、`exit`/`abort`/`longjmp`/`err` 系を直接呼ぶ関数への連鎖を示す（例: `xmalloc →(L151) xmalloc_failed →(L139) xexit → exit()`）。再帰で止まり、関数ごとに最短の連鎖を1つ示す。関数ポインタ等で追えない呼び出しの件数、深さの打ち切り、構文解析できなかった呼び出し先を併記する。`assert` は伝播させない。
+
 * Cの関数に対して、`flow`（制御構造・循環的複雑度）、`dataflow`（定義・使用・伝播、引数を介した呼び出し先への追跡）、`state`（グローバル・静的変数の書き込み、引数のポインタを通じた呼び出し元データの変更）、`exceptions`（終了呼び出し・エラー値の戻り・errno）、`risks`（`unsafe-libc`・`command-exec`・`format-string`・`unchecked-alloc`・`fallthrough`）、`understand`（項目3〜5・7）を提供する。Clang ASTによる流れ非依存の近似で、ポインタ・エイリアス、関数ポインタ先、マクロ内部は「追えない」と示す。
 * 解析時の `compile_commands.json` の場所をプロジェクトに保存する（スキーマv5）。問い合わせ時に同じ設定で再解析する。
 

@@ -181,3 +181,46 @@ def test_unary_operators_expanded_from_macros_do_not_crash(parsed) -> None:
         cf.analyze_variables(function)
         cf.analyze_state(function)
         cf.scan_risks(function)
+
+
+# --- 呼び出し先の終了の伝播 ---
+
+
+def test_exit_through_callees_is_reported_with_the_call_chain(db: str, capsys) -> None:
+    code, out, err = _run(capsys, "exceptions", "uses_fatal", "--db", db)
+    assert code == 0 and "この関数の中には確認できませんでした" in out  # 直接は終了しない
+    assert "uses_fatal →(L93) fatal_wrapper →(L88) die" in out and "die:L84 で exit()" in out
+    assert "条件によっては実際には通りません" in out  # 静的な連鎖であることの注記
+    assert "名前（exit/abort/err 系）で判定" in err
+
+
+def test_propagation_stops_on_recursion_and_reports_each_function_once(db: str, capsys) -> None:
+    code, out, _ = _run(capsys, "exceptions", "ping", "--format", "json", "--db", db)
+    data = json.loads(out)
+    assert code == 0 and len(data["propagated"]) == 1  # ping ⇄ pong の相互再帰でも止まり、重複しない
+    item = data["propagated"][0]
+    assert item["origin"] == "pong" and item["detail"] == "abort()" and [c["symbol"] for c in item["chain"]] == ["pong"]
+
+
+def test_depth_limit_is_reported_instead_of_silently_missing_exits(db: str, capsys) -> None:
+    code, out, _ = _run(capsys, "exceptions", "uses_fatal", "--depth", "1", "--format", "json", "--db", db)
+    data = json.loads(out)
+    assert data["propagated"] == [] and data["truncated"] is True  # 深さの先に調べていない呼び出し先があることを示す
+    code, out, _ = _run(capsys, "exceptions", "uses_fatal", "--depth", "3", "--format", "json", "--db", db)
+    assert json.loads(out)["truncated"] is False and len(json.loads(out)["propagated"]) == 1
+
+
+def test_calls_through_function_pointers_are_counted_as_not_followed(db: str, capsys) -> None:
+    code, out, _ = _run(capsys, "exceptions", "dispatch", "--db", db)
+    assert "呼び出し先を特定できない呼び出しが 1件" in out and "そこからの終了は追えていません" in out
+
+
+def test_understand_shows_exit_through_callees(db: str, capsys) -> None:
+    code, out, _ = _run(capsys, "understand", "uses_fatal", "--db", db)
+    assert "呼び出し先を経由して終了しうる: uses_fatal →(L93) fatal_wrapper →(L88) die → L84 exit()" in out
+
+
+def test_err_family_always_terminates(parsed) -> None:
+    from codeinsight.analysis.c_flow_analysis import _is_exit_call
+
+    assert _is_exit_call("errx") == "terminate" and _is_exit_call("assert") == "assert"

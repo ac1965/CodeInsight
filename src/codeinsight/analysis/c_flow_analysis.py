@@ -20,7 +20,7 @@ from codeinsight.analysis import flow_analysis as fa
 
 CK = ci.CursorKind
 
-_EXIT_CALLS = frozenset({"exit", "_exit", "_Exit", "abort", "quick_exit"})
+_EXIT_CALLS = frozenset({"exit", "_exit", "_Exit", "abort", "quick_exit", "err", "errx", "verr", "verrx"})  # err 系は常にプロセスを終了する（BSD/GNU）
 _JUMP_CALLS = frozenset({"longjmp", "siglongjmp", "_longjmp"})
 _ASSERT_CALLS = frozenset({"assert", "__assert_fail", "__assert_rtn", "__assert", "_assert", "__assert_perror_fail"})
 # 呼び出し元の引数のうち、書き込み先になる引数の位置（libcの代表的な関数）

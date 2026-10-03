@@ -100,20 +100,52 @@ def dataflow(args: argparse.Namespace, project, index, navigation: NavigationSer
 def exceptions(args: argparse.Namespace, project, index, navigation: NavigationService, symbol, stale) -> int:
     service = CFlowService(navigation)
     try:
-        exits = service.exits(project, index, symbol)
+        report = service.exit_report(project, index, symbol, args.depth)
     except FlowAnalysisError as exc:
         raise CliError(str(exc)) from exc
     if args.format == "json":
-        emit_json({"symbol": symbol.qualified_name, "language": "c", "exits": [vars(e) for e in exits]})
+        emit_json({
+            "symbol": symbol.qualified_name, "language": "c", "depth": args.depth, "exits": [vars(e) for e in report.direct],
+            "propagated": [propagated_dict(p) for p in report.propagated],
+            "unresolved_calls": report.unresolved_calls, "skipped": report.skipped, "truncated": report.truncated,
+        })
         return 0
     print(f"{safe(symbol.qualified_name)} の終了・失敗の経路（Cには例外が無いため、終了呼び出し・エラー値の戻り・errno の手がかり）:")
-    for item in exits:
+    for item in report.direct:
         print(f"  L{item.line:<5} {_EXIT_LABELS[item.kind]}: {safe(item.detail)}")
-    if not exits:
+    if not report.direct:
+        print("  この関数の中には確認できませんでした")
+    print(f"\n呼び出し先を経由して終了しうる経路（解決済みの呼び出しを深さ {args.depth} まで。静的な連鎖で、条件によっては実際には通りません）:")
+    for item in report.propagated:
+        print(f"  {_route(symbol, item)}")
+        print(f"      → {safe(item.origin.qualified_name)}:L{item.line} で {safe(item.detail)}（{_EXIT_LABELS[item.kind]}）")
+    if not report.propagated:
         print("  確認できませんでした")
+    if report.unresolved_calls:
+        print(f"  ※ 関数ポインタ・曖昧などで呼び出し先を特定できない呼び出しが {report.unresolved_calls}件あり、そこからの終了は追えていません。")
+    if report.truncated:
+        print(f"  ※ 深さ {args.depth} の先にまだ調べていない呼び出し先があります（--depth で広げられます）。")
+    if report.skipped:
+        print(f"  ※ 構文解析できず、終了の有無を確認できなかった呼び出し先: {', '.join(safe(s) for s in report.skipped[:5])}")
     warn_if_stale(stale)
-    print("※ この関数の中の記述のみです。呼び出し先が終了する場合（exitを呼ぶ関数など）と、呼び出し側がエラー値を確認しているかは追っていません。", file=sys.stderr)
+    print("※ 呼び出し側がエラー値を確認しているかは追っていません。ライブラリ関数の終了は、名前（exit/abort/err 系）で判定します。", file=sys.stderr)
     return 0
+
+
+def _route(symbol, item) -> str:
+    """呼び出しの連鎖: 起点 →(呼び出し行) 呼び出し先 →(…) …"""
+
+    text = safe(symbol.qualified_name)
+    for callee, line in item.chain:
+        text += f" →(L{line}) {safe(callee.qualified_name)}"
+    return text
+
+
+def propagated_dict(item) -> dict:
+    return {
+        "kind": item.kind, "detail": item.detail, "origin": item.origin.qualified_name, "line": item.line,
+        "chain": [{"symbol": s.qualified_name, "call_line": line} for s, line in item.chain],
+    }
 
 
 def state(args: argparse.Namespace, project, index, navigation: NavigationService, symbol, stale) -> int:

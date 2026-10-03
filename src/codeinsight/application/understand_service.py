@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from codeinsight.analysis import c_flow_analysis as cf
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application.boundary_service import BoundaryItem, BoundaryService
-from codeinsight.application.c_flow_service import CFlowService
+from codeinsight.application.c_flow_service import CFlowService, ExitReport
 from codeinsight.application.config_service import ConfigItem, ConfigService
 from codeinsight.application.describe_service import DescribeService
 from codeinsight.application.external_service import (
@@ -90,6 +90,7 @@ class Understanding:
     # 8. なぜ現在の実装になっているのか
     history: SymbolHistory | None = None
     c_exits: list[cf.CExit] = field(default_factory=list)  # C: 終了・エラー戻り値・errno（Cには例外が無い）
+    c_exit_report: ExitReport | None = None  # C: 呼び出し先を経由した終了の経路
     facts_available: bool = False  # 入力・変更・戻り値・失敗時の挙動の解析が、この言語で行われたか
     limitations: list[str] = field(default_factory=list)
 
@@ -159,13 +160,13 @@ class UnderstandService:
             if is_python:
                 self._fill_function_facts(project, index, symbol, result, depth)
             else:
-                self._fill_c_facts(project, index, symbol, result)
+                self._fill_c_facts(project, index, symbol, result, depth)
             result.facts_available = True
         except FlowAnalysisError as exc:
             result.limitations.append(str(exc))
         return result
 
-    def _fill_c_facts(self, project: Project, index: ProjectIndex, symbol: Symbol, result: Understanding) -> None:
+    def _fill_c_facts(self, project: Project, index: ProjectIndex, symbol: Symbol, result: Understanding, depth: int) -> None:
         """Cの関数のAST（Clang）から得る事実。Pythonと違い、例外は無く、終了・エラー戻り値・errno で失敗を表す。"""
 
         facts = self._c.facts(project, index, symbol)
@@ -187,7 +188,8 @@ class UnderstandService:
         result.parameter_mutations = [
             f"L{m.line} 引数 {m.parameter} を通じて、呼び出し元のデータを変更する（{how_label.get(m.how, m.how)}: {m.detail}）" for m in state.parameter_mutations
         ]
-        result.c_exits = self._c.exits(project, index, symbol)
+        result.c_exit_report = self._c.exit_report(project, index, symbol, depth + 1)
+        result.c_exits = result.c_exit_report.direct
         findings, _ = self._c.scan_risks(project, index, only_paths={result.path})
         result.risks = [f for f in findings if symbol.start_line <= f.line <= symbol.end_line and f.rule != "todo-marker"]
         result.todo_comments = [(f.line, f.detail) for f in findings if symbol.start_line <= f.line <= symbol.end_line and f.rule == "todo-marker"]

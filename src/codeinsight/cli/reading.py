@@ -416,6 +416,11 @@ def cmd_understand(args: argparse.Namespace) -> int:
             print(f"  ※ 呼び出し先を特定できない呼び出しが {u.exceptions.unresolved_calls}件あり、そこからの例外は追えていません")
     for c_exit in u.c_exits:
         print(f"  {reading_c._EXIT_LABELS[c_exit.kind]}: L{c_exit.line} {safe(c_exit.detail)}")
+    if u.c_exit_report:
+        for propagated in u.c_exit_report.propagated[:limit]:
+            print(f"  呼び出し先を経由して終了しうる: {reading_c._route(symbol, propagated)} → L{propagated.line} {safe(propagated.detail)}")
+        if u.c_exit_report.unresolved_calls:
+            print(f"  ※ 呼び出し先を特定できない呼び出しが {u.c_exit_report.unresolved_calls}件あり、そこからの終了は追えていません")
     labels = {"retry": "リトライ", "timeout": "タイムアウト指定", "sleep": "待機"}
     for hint in u.resilience:
         print(f"  {labels[hint.kind]}の手がかり: L{hint.line} {safe(hint.detail)}")

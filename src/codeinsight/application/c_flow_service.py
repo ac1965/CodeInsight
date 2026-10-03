@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from collections import defaultdict
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from codeinsight.analysis import c_flow_analysis as cf
@@ -39,6 +40,29 @@ def _guarded(method):
             raise FlowAnalysisError(f"{_UNKNOWN_AST}: {exc}") from exc
 
     return wrapper
+
+
+@dataclass(frozen=True)
+class PropagatedExit:
+    """呼び出し先を経由して終了しうる経路（静的な呼び出しの連鎖。条件によっては実際には通らない）。"""
+
+    kind: str  # terminate / longjmp
+    detail: str  # 例: exit()
+    origin: Symbol  # 終了を直接呼ぶ関数
+    line: int  # origin 内の行
+    chain: tuple[tuple[Symbol, int], ...]  # 呼び出し元から順に (呼び出し先, 直前の関数内の呼び出し行)
+
+
+@dataclass
+class ExitReport:
+    direct: list[cf.CExit]
+    propagated: list[PropagatedExit] = field(default_factory=list)
+    unresolved_calls: int = 0  # 関数ポインタなど、呼び出し先を特定できない呼び出しの数（そこからの終了は追えていない）
+    skipped: list[str] = field(default_factory=list)  # 解析できず、終了の有無を確認できなかった呼び出し先
+    truncated: bool = False  # 深さの上限で打ち切った
+
+
+_PROPAGATING = ("terminate", "longjmp")  # assert は NDEBUG で消えるため、伝播させない
 
 
 class CFlowService:
@@ -105,6 +129,49 @@ class CFlowService:
     @_guarded
     def exits(self, project: Project, index: ProjectIndex, symbol: Symbol) -> list[cf.CExit]:
         return cf.analyze_exits(self.load(project, index, symbol))
+
+    @_guarded
+    def exit_report(self, project: Project, index: ProjectIndex, symbol: Symbol, depth: int = 4) -> ExitReport:
+        """この関数の終了・失敗の経路と、解決済みの呼び出しを `depth` 段たどって終了に至る経路。
+
+        幅優先で、各関数を1度だけ調べる（再帰・相互再帰で止まる）。関数ごとに最短の連鎖を1つ示す。
+        """
+
+        report = ExitReport(self.exits(project, index, symbol))
+        visited = {symbol.symbol_id}
+        queue: deque[tuple[Symbol, tuple[tuple[Symbol, int], ...], int]] = deque([(symbol, (), 0)])
+        while queue:
+            current, chain, level = queue.popleft()
+            for hit in self._navigation.callees(index, current):
+                reference = hit.reference
+                if reference.reference_kind != ReferenceKind.CALL:
+                    continue
+                if hit.target is None:
+                    if reference.resolution_status != ResolutionStatus.EXTERNAL:
+                        report.unresolved_calls += 1  # 関数ポインタ・曖昧など。そこからの終了は追えない
+                    continue
+                callee = hit.target
+                source_file = index.files.get(callee.file_id)
+                if callee.symbol_id in visited or source_file is None or source_file.language != Language.C or callee.kind not in _CALLABLE:
+                    continue
+                visited.add(callee.symbol_id)
+                step = (*chain, (callee, reference.source_location.start_line))
+                try:
+                    callee_exits = self.exits(project, index, callee)
+                except FlowAnalysisError:
+                    report.skipped.append(callee.qualified_name)
+                    continue
+                for item in callee_exits:
+                    if item.kind in _PROPAGATING:
+                        report.propagated.append(PropagatedExit(item.kind, item.detail, callee, item.line, step))
+                if level + 1 < depth:
+                    queue.append((callee, step, level + 1))
+                elif any(
+                    h.reference.reference_kind == ReferenceKind.CALL and h.target is not None and h.target.symbol_id not in visited
+                    for h in self._navigation.callees(index, callee)
+                ):
+                    report.truncated = True  # 深さの上限の先に、まだ調べていない呼び出し先がある
+        return report
 
     @_guarded
     def facts(self, project: Project, index: ProjectIndex, symbol: Symbol) -> dict:
