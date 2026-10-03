@@ -10,6 +10,7 @@ _EXTENSION_TO_LANGUAGE: dict[str, Language] = {
     ".py": Language.PYTHON,
     ".pyi": Language.PYTHON,
     ".el": Language.ELISP,
+    ".org": Language.ELISP,  # リテラルプログラミング。emacs-lisp ブロックのみ解析する
 }
 
 

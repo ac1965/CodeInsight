@@ -1,0 +1,37 @@
+#+TITLE: 設定
+#+PROPERTY: header-args:emacs-lisp :tangle init.el
+
+* 基本
+
+説明文の (括弧 は無視される。(defun not-code () 1)
+
+#+begin_src emacs-lisp
+(require 'subr-x)
+(defun org-greet (who)
+  "WHO に挨拶する。"
+  (message "hello %s" who))
+#+end_src
+
+* 例
+
+#+BEGIN_SRC elisp :tangle no
+(defvar org-counter 0)
+(defun org-bump () (setq org-counter (1+ org-counter)) (org-greet "x"))
+#+END_SRC
+
+#+begin_src python
+def py_only(): pass
+#+end_src
+
+#+begin_src emacs-lisp
+(defun org-noweb ()
+  <<body-part>>
+  (org-greet "n"))
+,* エスケープされた見出し風の行
+#+end_src
+
+* 壊れたブロック
+
+#+begin_src emacs-lisp
+(defun org-broken (
+#+end_src

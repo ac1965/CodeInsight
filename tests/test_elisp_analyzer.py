@@ -97,3 +97,39 @@ def test_resolution_is_inferred_ambiguous_or_external(analyzed) -> None:
     assert plat.resolution_status == ResolutionStatus.AMBIGUOUS  # 条件付きの二重定義。1つを選ばない
     (ext,) = of("extras-call", "undefined-external-fn")
     assert ext.resolution_status == ResolutionStatus.EXTERNAL
+
+
+ORG = Path(__file__).resolve().parent / "fixtures" / "elisp_org"
+
+
+def test_org_blocks_keep_original_line_numbers() -> None:
+    result = ElispAnalyzer().analyze_file(SourceUnit.from_path(str(uuid.uuid4()), ORG / "config.org"))
+    assert result.succeeded, result.errors  # 一部のブロックだけが壊れていても、他は解析する
+    lines = {s.name: s.start_line for s in result.symbols}
+    assert lines["org-greet"] == 10  # config.org 上の行
+    assert lines["org-bump"] == 19
+    assert lines["org-counter"] == 18
+    assert "not-code" not in lines and "py_only" not in lines  # 本文・他言語のブロックは対象外
+    assert lines["org-noweb"] == 27
+    assert any(r.target_name == "org-greet" for r in result.references if r.reference_kind == ReferenceKind.CALL)
+
+
+def test_org_failures_and_limits_are_reported_as_warnings() -> None:
+    result = ElispAnalyzer().analyze_file(SourceUnit.from_path(str(uuid.uuid4()), ORG / "config.org"))
+    assert any("noweb" in w for w in result.warnings)
+    assert any("読み取れず" in w for w in result.warnings)  # 壊れたブロックを黙って飛ばさない
+    assert not any(s.name == "org-broken" for s in result.symbols)
+
+
+def test_org_without_elisp_blocks_warns(tmp_path: Path) -> None:
+    path = tmp_path / "notes.org"
+    path.write_text("* メモ\n(defun x ())\n", encoding="utf-8")
+    result = ElispAnalyzer().analyze_file(SourceUnit.from_path(str(uuid.uuid4()), path))
+    assert result.succeeded and result.warnings
+    assert [s.kind for s in result.symbols] == [SymbolKind.MODULE]
+
+
+def test_org_where_every_block_fails_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "bad.org"
+    path.write_text("#+begin_src emacs-lisp\n(defun a (\n#+end_src\n", encoding="utf-8")
+    assert not ElispAnalyzer().analyze_file(SourceUnit.from_path(str(uuid.uuid4()), path)).succeeded

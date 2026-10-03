@@ -309,14 +309,56 @@ def _decode(content: bytes, result: FileAnalysis) -> str:
     return content.decode("latin-1")  # 到達しない（latin-1 は、すべてのバイトを読める）
 
 
+_BLOCK_BEGIN = re.compile(r"^[ \t]*#\+begin_src[ \t]+(?:emacs-lisp|elisp)(?:[ \t]|$)", re.IGNORECASE)
+_BLOCK_END = re.compile(r"^[ \t]*#\+end_src\b", re.IGNORECASE)
+_NOWEB = re.compile(r"<<[^<>\n]*>>")
+_ORG_COMMA_ESCAPE = re.compile(r"^([ \t]*),(?=\*|#\+)")
+
+
+def org_elisp_blocks(text: str, warnings: list[str] | None = None) -> list[tuple[int, str]]:
+    """Orgの `emacs-lisp` / `elisp` ソースブロックを、(本文の開始行, 行番号を保つための前置の改行つき本文) で返す。
+
+    本文の行は元のファイルと同じ行番号になる。`<<名前>>`（noweb）は展開しない（空白に置き換え、警告に残す）。
+    """
+
+    lines = text.split("\n")
+    blocks: list[tuple[int, str]] = []
+    index = 0
+    while index < len(lines):
+        if not _BLOCK_BEGIN.match(lines[index]):
+            index += 1
+            continue
+        start = index + 1  # 本文の最初の行（0始まり）
+        end = start
+        while end < len(lines) and not _BLOCK_END.match(lines[end]):
+            end += 1
+        body = []
+        for number in range(start, end):
+            line = _ORG_COMMA_ESCAPE.sub(r"\1", lines[number])
+            if _NOWEB.search(line):
+                if warnings is not None:
+                    warnings.append(f"{number + 1}行目: noweb参照 <<…>> は展開しません（その部分は空白として扱います）。")
+                line = _NOWEB.sub(lambda m: " " * len(m.group(0)), line)
+            body.append(line)
+        blocks.append((start + 1, "\n" * start + "\n".join(body)))
+        index = end + 1
+    return blocks
+
+
 class ElispAnalyzer:
     language = Language.ELISP
 
     def analyze_file(self, unit: SourceUnit) -> FileAnalysis:
         result = FileAnalysis()
         text = _decode(unit.content, result)
+        is_org = unit.relative_path.lower().endswith(".org")
         try:
-            forms = read_forms(text)
+            if is_org:
+                forms = self._org_forms(text, result)
+                if forms is None:
+                    return result
+            else:
+                forms = read_forms(text)
         except ElispSyntaxError as exc:
             result.errors.append(f"構文解析に失敗しました: {exc}")
             return result
@@ -324,7 +366,7 @@ class ElispAnalyzer:
         ids = IdAllocator(unit.file_id)
         module = build_symbol(
             ids, unit.file_id, name=stem, qualified_name=stem, kind=SymbolKind.MODULE,
-            start_line=1, end_line=len(text.splitlines()) or 1, summary=_header_summary(text),
+            start_line=1, end_line=len(text.splitlines()) or 1, summary="" if is_org else _header_summary(text),
         )
         result.symbols.append(module)
         collector = _Collector(unit, ids, result, module, _defined_variables(forms))
@@ -332,6 +374,26 @@ class ElispAnalyzer:
             collector.top_level(form)
             collector.dependencies(form)
         return result
+
+    @staticmethod
+    def _org_forms(text: str, result: FileAnalysis) -> list[Form] | None:
+        """Orgのemacs-lispブロックごとに読む。閉じていないブロックは、そのブロックだけ飛ばして警告に残す。"""
+
+        blocks = org_elisp_blocks(text, result.warnings)
+        forms: list[Form] = []
+        failed = 0
+        for line, body in blocks:
+            try:
+                forms.extend(read_forms(body))
+            except ElispSyntaxError as exc:
+                failed += 1
+                result.warnings.append(f"{line}行目から始まるブロックは読み取れず、解析対象から除きました: {exc}")
+        if blocks and failed == len(blocks):
+            result.errors.append("すべての emacs-lisp ブロックの構文解析に失敗しました。")
+            return None
+        if not blocks:
+            result.warnings.append("emacs-lisp / elisp のソースブロックがありません（Orgの本文は解析しません）。")
+        return forms
 
 
 def _defined_variables(forms: list[Form]) -> set[str]:
