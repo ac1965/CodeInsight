@@ -1,0 +1,82 @@
+# 質問応答の検索（関連するシンボルの特定）の評価ケース。AIを使わず、決定論的に採点する。
+# expect: 上位 k 件に含まれるべきシンボル（qualified_name）。
+
+[[case]]
+q = "注文を保存する処理はどこですか?"
+project = "../tests/fixtures/layered"
+expect = ["app.repository.store.save"]
+
+[[case]]
+q = "メールで通知しているのはどの関数ですか?"
+project = "../tests/fixtures/layered"
+expect = ["app.infra.mailer.notify"]
+
+[[case]]
+q = "Where are orders persisted to the database?"
+project = "../tests/fixtures/layered"
+expect = ["app.repository.store.save"]
+
+[[case]]
+q = "How does the web handler dispatch a request?"
+project = "../tests/fixtures/layered"
+expect = ["app.web.routes.handle"]
+
+[[case]]
+q = "What happens when fetch retries?"
+project = "../tests/fixtures/python_flow"
+expect = ["flow.fetch"]
+
+[[case]]
+q = "pickleを読み込んでいるのはどこですか?"
+project = "../tests/fixtures/python_flow"
+expect = ["risky.load"]
+
+[[case]]
+q = "shellを使ってコマンドを実行している箇所は?"
+project = "../tests/fixtures/python_flow"
+expect = ["risky.run"]
+
+[[case]]
+q = "カウンタを増やすメソッドはどれですか?"
+project = "../tests/fixtures/python_flow"
+expect = ["flow.Counter.incr"]
+
+[[case]]
+q = "グローバルの REGISTRY を書き換える関数は?"
+project = "../tests/fixtures/python_flow"
+expect = ["flow.register"]
+
+[[case]]
+q = "環境変数 APP_TOKEN を読む関数は?"
+project = "../tests/fixtures/python_boundary"
+expect = ["app.cmd_run"]
+
+[[case]]
+q = "settings.json を読み込む処理はどこ?"
+project = "../tests/fixtures/python_boundary"
+expect = ["app.cmd_serve"]
+
+[[case]]
+q = "スレッドを起動する処理はどれですか?"
+project = "../tests/fixtures/python_boundary"
+expect = ["app.Worker.start"]
+
+[[case]]
+q = "コマンドライン引数のパーサーを作っているのは?"
+project = "../tests/fixtures/python_boundary"
+expect = ["app.build_parser"]
+
+[[case]]
+q = "再帰でフィボナッチ数を求める関数は?"
+project = "../tests/fixtures/c_callgraph"
+expect = ["fib"]
+
+[[case]]
+q = "How is an operation applied through a function pointer?"
+project = "../tests/fixtures/c_callgraph"
+expect = ["apply"]
+
+[[case]]
+q = "リトライ回数を設定している箇所は?"
+project = "../tests/fixtures/python_boundary"
+expect = ["app.build_parser"]

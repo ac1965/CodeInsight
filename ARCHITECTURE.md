@@ -69,7 +69,8 @@ src/codeinsight/
 ├── ai/                AI解説（解析結果を入力に、解説を生成・検証する。解析器の代替にはしない）
 │   ├── config.py          AIConfig（送信の許可・送信先・APIキーの秘匿）、設定の解決（コマンドライン>環境変数>設定ファイル）
 │   ├── provider.py        AIProvider Protocol、OpenAICompatibleProvider（標準ライブラリのみ。Ollama等）
-│   ├── context.py         ContextBuilder（解析結果の事実とソースを予算内で組み立て、引用してよい位置を記録）、質問の検索
+│   ├── context.py         ContextBuilder（解析結果の事実とソースを予算内で組み立て、引用してよい位置を記録）
+│   ├── retrieval.py       質問に関連するシンボルの検索（名前・パス・docstring・本文の語をBM25風に採点。日本語は用語辞書で英語の語に展開）
 │   ├── prompt.py          PromptBuilder（規則・根拠・課題の組み立て）
 │   ├── citations.py       CitationValidator（引用・識別子・根拠のない主張の機械的な検証）
 │   ├── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存）

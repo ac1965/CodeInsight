@@ -185,3 +185,35 @@ expect_symbols = ["fib"]
 expect_terms = ["再帰", "n"]
 forbidden_terms = ["memo", "cache", "loop"]
 note = "再帰を正しく説明し、メモ化などを作らないか"
+
+# --- 質問応答（検索の改良で特定できるようになった質問）---
+
+[[case]]
+id = "ask-env-token"
+project = "../tests/fixtures/python_boundary"
+kind = "question"
+question = "環境変数 APP_TOKEN を読む関数は何をしますか?"
+expect_symbols = ["app.cmd_run"]
+expect_terms = ["APP_TOKEN", "APP_TIMEOUT"]
+forbidden_terms = ["redis", "sqlite", "PaymentGateway"]
+note = "本文（文字列）の語から関連する関数を特定し、説明できるか"
+
+[[case]]
+id = "ask-pickle"
+project = "../tests/fixtures/python_flow"
+kind = "question"
+question = "pickleを読み込んでいる箇所の問題点は?"
+expect_symbols = ["risky.load"]
+expect_terms = ["pickle", "blob"]
+forbidden_terms = ["json.loads", "sanitize", "検証済み"]
+note = "危険な処理を、コードに無い対策を作らずに説明できるか"
+
+[[case]]
+id = "ask-notify"
+project = "../tests/fixtures/layered"
+kind = "question"
+question = "メールで通知しているのはどの関数ですか?"
+expect_symbols = ["app.infra.mailer.notify"]
+expect_terms = ["notify", "smtplib", "requests"]
+forbidden_terms = ["kafka", "send_sms"]
+note = "日本語の質問から英語の識別子の関数を特定できるか"

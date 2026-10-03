@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, field
 
+from codeinsight.ai.retrieval import retrieve_symbols
 from codeinsight.application.navigation_service import NavigationService
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.understand_service import Understanding, UnderstandService
@@ -271,7 +271,7 @@ class ContextBuilder:
     # --- 質問 ---
 
     def for_question(self, project: Project, index: ProjectIndex, question: str, limit: int = 6) -> Context:
-        candidates = retrieve_symbols(index, question, limit)
+        candidates = retrieve_symbols(index, question, limit, read_lines=lambda path: self._try_read(project, index, path))
         if not candidates:
             raise ContextError("質問に関連するコードを、解析結果から特定できませんでした（AIには問い合わせていません）。")
         context = Context("question", question)
@@ -298,6 +298,14 @@ class ContextBuilder:
         return context
 
     # --- 共通 ---
+
+    def _try_read(self, project: Project, index: ProjectIndex, relative_path: str) -> list[str] | None:
+        """検索用にファイルを読む。読めない・解析後に変更された場合は None（その本文は検索に使わない）。"""
+
+        try:
+            return self._read(project, index, relative_path)
+        except ContextError:
+            return None
 
     def _read(self, project: Project, index: ProjectIndex, relative_path: str) -> list[str]:
         source_file = index.file_by_path(relative_path)
@@ -406,46 +414,3 @@ def _symbol_facts(index: ProjectIndex, symbol: Symbol, card: Understanding, navi
     for text in card.limitations:
         facts.append(f"解析上の制約: {text}")
     return facts, spans
-
-
-_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
-# 日本語は、文字種（漢字・カタカナ）ごとの連続を語とする。ひらがなは助詞・活用が多いため語として使わない。
-_JAPANESE_WORD = re.compile(r"[一-龠々]{2,}|[ァ-ヶー]{2,}")
-_STOP = frozenset({"the", "and", "for", "how", "what", "does", "this", "that", "with", "from", "into", "are", "not", "where", "when"})
-_GENERIC_JAPANESE = frozenset({"処理", "説明", "仕組", "実装", "関数", "動作", "機能", "方法", "場合", "内容", "部分", "全体", "クラス", "メソッド", "コード", "ソース", "プログラム"})
-
-
-def retrieve_symbols(index: ProjectIndex, question: str, limit: int = 4) -> list[Symbol]:
-    """質問から、名前・docstring・パスの一致で、関連するシンボルを機械的に検索する（AIには頼らない）。"""
-
-    latin = {t.lower() for t in _TOKEN.findall(question) if t.lower() not in _STOP}
-    japanese = {t for t in _JAPANESE_WORD.findall(question) if t not in _GENERIC_JAPANESE}
-    if not latin and not japanese:
-        return []
-    scored: list[tuple[int, Symbol]] = []
-    for symbol in index.symbols.values():
-        if symbol.kind in (SymbolKind.LOCAL_VARIABLE, SymbolKind.MODULE, SymbolKind.FUNCTION_DECLARATION, SymbolKind.MACRO):
-            continue
-        name = symbol.name.lower()
-        qualified = symbol.qualified_name.lower()
-        score = 0
-        for token in latin:
-            if name == token:
-                score += 10
-            elif token in name:
-                score += 4
-            elif token in qualified:
-                score += 2
-        summary = symbol.summary
-        for token in japanese:
-            if token in summary:
-                score += 4
-        for token in latin:
-            if token in summary.lower():
-                score += 1
-        if score:
-            if symbol.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD, SymbolKind.CLASS):
-                score += 1
-            scored.append((score, symbol))
-    scored.sort(key=lambda item: (-item[0], item[1].qualified_name))
-    return [s for _, s in scored[:limit]]
