@@ -21,6 +21,11 @@ from codeinsight.domain import (
 )
 
 _BUILTIN_NAMES = frozenset(dir(builtins))
+_BUILTIN_CONTAINER_ANNOTATIONS = frozenset({"list", "dict", "set", "frozenset", "tuple"})
+_LITERAL_RECEIVERS = (
+    ast.Constant, ast.JoinedStr, ast.List, ast.Dict, ast.Set, ast.Tuple,
+    ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp,
+)
 _DYNAMIC_IMPORT_FUNCTIONS = frozenset({"importlib.import_module", "builtins.__import__"})
 
 # 参照の照合キーの接頭辞（ReferenceResolverが解釈する）。
@@ -28,6 +33,8 @@ KEY_DIRECT = "py:"  # 同一モジュール内で定義された名前（修飾�
 KEY_IMPORT = "pyimport:"  # import経由の名前（import元の修飾名）
 KEY_SELF = "pyself:"  # self/cls経由のメソッド呼び出し  pyself:<クラス修飾名>:<属性>
 KEY_SUPER = "pysuper:"  # super()経由のメソッド呼び出し  pysuper:<クラス修飾名>:<属性>
+KEY_EXPORT = "pyexport:"  # モジュールが公開するimport名  pyexport:<公開名>=<import元の修飾名>
+KEY_STAR = "pystar:"  # `from M import *` 経由の名前  pystar:<M;M...>|<名前>
 KEY_TYPED = "pytyped:"  # 型注釈/単一代入で型を推定した変数経由  pytyped:<型の照合キー>|<属性>
 
 
@@ -105,7 +112,9 @@ class PythonAnalyzer:
         module_names = {
             s.name for s in result.symbols if s.parent_symbol_id == module_symbol.symbol_id
         }
-        bindings = self._collect_imports(tree, unit.file_id, module_name, is_init, ids, result)
+        bindings, star_modules = self._collect_imports(
+            tree, unit.file_id, module_name, is_init, ids, result, module_symbol
+        )
         _ReferenceCollector(
             file_id=unit.file_id,
             module_name=module_name,
@@ -114,6 +123,8 @@ class PythonAnalyzer:
             bindings=bindings,
             module_names=module_names,
             module_symbol=module_symbol,
+            star_modules=star_modules,
+            tree=tree,
             result=result,
         ).visit(tree)
         return result
@@ -128,10 +139,34 @@ class PythonAnalyzer:
         is_init: bool,
         ids: IdAllocator,
         result: FileAnalysis,
-    ) -> dict[str, str]:
-        """import文から依存関係を作り、名前->修飾名の対応表を返す。"""
+        module_symbol: Symbol,
+    ) -> tuple[dict[str, str], list[str]]:
+        """import文から依存関係とimport参照を作り、(名前->修飾名の対応表, star import元) を返す。"""
 
         bindings: dict[str, str] = {}
+        star_modules: list[str] = []
+        module_level = _module_level_imports(tree)
+
+        def add_export(node: ast.stmt, exposed: str, dotted: str) -> None:
+            """モジュールが公開する名前としてのimportを、IMPORT参照で記録する。
+
+            再エクスポート（__init__.py経由のimport）やstar importの解決に使う。
+            """
+
+            if id(node) not in module_level:
+                return
+            key = f"{KEY_EXPORT}{exposed}={dotted}"
+            line = node.lineno
+            result.references.append(
+                Reference(
+                    reference_id=ids.reference_id(module_symbol.symbol_id, "import", key, line),
+                    source_symbol_id=module_symbol.symbol_id,
+                    target_name=dotted,
+                    target_key=key,
+                    reference_kind=ReferenceKind.IMPORT,
+                    source_location=SourceLocation(file_id, line, node.end_lineno or line),
+                )
+            )
 
         def add_dependency(
             node: ast.stmt,
@@ -161,9 +196,11 @@ class PythonAnalyzer:
                     add_dependency(node, alias.name)
                     if alias.asname:
                         bindings[alias.asname] = alias.name
+                        add_export(node, alias.asname, alias.name)
                     else:
                         top = alias.name.split(".", 1)[0]
                         bindings[top] = top
+                        add_export(node, top, top)
             elif isinstance(node, ast.ImportFrom):
                 base = self._relative_base(module_name, is_init, node.level, node.module)
                 if base is None:
@@ -183,13 +220,14 @@ class PythonAnalyzer:
                     add_dependency(node, _join(base, alias.name), candidate=True)
                 for alias in node.names:
                     if alias.name == "*":
-                        result.warnings.append(
-                            f"line {node.lineno}: 'from {base} import *' は取り込まれる名前を"
-                            "静的に確定しないため、参照解決の対象外です。"
-                        )
+                        # 取り込まれる名前は、import元モジュールを解析してから解決する。
+                        if base not in star_modules:
+                            star_modules.append(base)
                         continue
-                    bindings[alias.asname or alias.name] = _join(base, alias.name)
-        return bindings
+                    exposed = alias.asname or alias.name
+                    bindings[exposed] = _join(base, alias.name)
+                    add_export(node, exposed, bindings[exposed])
+        return bindings, star_modules
 
     @staticmethod
     def _relative_base(
@@ -303,6 +341,8 @@ class _ReferenceCollector(ast.NodeVisitor):
         bindings: dict[str, str],
         module_names: set[str],
         module_symbol: Symbol,
+        star_modules: list[str],
+        tree: ast.Module,
         result: FileAnalysis,
     ) -> None:
         self._file_id = file_id
@@ -315,7 +355,17 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._symbols: list[Symbol] = [module_symbol]
         self._locals: list[set[str]] = [set()]
         self._self_names: list[str | None] = [None]
+        self._star_modules = star_modules
+        self._class_attr_types: dict[str, dict[str, str]] = {}
         self._types: list[dict[str, str]] = [{}]
+        # モジュール直下で1回だけ代入される変数の型（global宣言で書き換えられるものは除く）。
+        reassigned = {name for n in ast.walk(tree) if isinstance(n, ast.Global) for name in n.names}
+        self._module_types: dict[str, str] = {}  # 推定中に参照されるため、先に空で用意する
+        self._module_types = {
+            name: key
+            for name, key in self._infer_scope(tree.body, []).items()
+            if name not in reassigned
+        }
 
     # --- スコープ追跡 ---
 
@@ -337,6 +387,7 @@ class _ReferenceCollector(ast.NodeVisitor):
         for keyword in node.keywords:
             self.visit(keyword.value)
         if symbol is not None:
+            self._class_attr_types[symbol.qualified_name] = self._infer_class_attributes(node)
             self._symbols.append(symbol)
             self._locals.append(set())
             self._self_names.append(None)
@@ -395,15 +446,22 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._types.pop()
 
     def _infer_types(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
-        """型注釈付きの引数と、1回だけ `x = クラス(...)` で代入される変数の型を推定する。
+        args = node.args
+        params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        return self._infer_scope(node.body, params)
 
-        推定結果は照合キー（クラスの名前解決キー）で返す。再代入される名前や、
-        Optional/Union等の複合的な注釈は、静的に型を決められないため対象外とする。
+    def _infer_scope(self, body: list[ast.stmt], params: list[ast.arg]) -> dict[str, str]:
+        """型注釈付きの引数と、1回だけ代入される変数の型を推定する。
+
+        推定結果は照合キー（クラスの名前解決キー、または ``builtin:<型名>``）で返す。
+        再代入される名前や、Optional/Union等の複合的な注釈は、静的に型を決められない
+        ため対象外とする。
         """
 
         stores: Counter[str] = Counter()
-        constructed: dict[str, ast.Call] = {}
-        stack: list[ast.AST] = list(node.body)
+        assigned: dict[str, ast.expr] = {}
+        annotated: dict[str, str] = {}
+        stack: list[ast.AST] = list(body)
         while stack:
             current = stack.pop()
             if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
@@ -412,30 +470,136 @@ class _ReferenceCollector(ast.NodeVisitor):
                 continue
             if isinstance(current, ast.Name) and isinstance(current.ctx, (ast.Store, ast.Del)):
                 stores[current.id] += 1
+            elif isinstance(current, (ast.Import, ast.ImportFrom)):
+                for alias in current.names:
+                    stores[(alias.asname or alias.name).split(".", 1)[0]] += 1
             elif (
                 isinstance(current, ast.Assign)
                 and len(current.targets) == 1
                 and isinstance(current.targets[0], ast.Name)
-                and isinstance(current.value, ast.Call)
             ):
-                constructed[current.targets[0].id] = current.value
+                assigned[current.targets[0].id] = current.value
+            elif isinstance(current, ast.AnnAssign) and isinstance(current.target, ast.Name):
+                key = self._type_key(self._annotation_parts(current.annotation))
+                if key:
+                    annotated[current.target.id] = key  # `x: T = ...` は注釈の型を優先する
             stack.extend(ast.iter_child_nodes(current))
 
         types: dict[str, str] = {}
-        args = node.args
-        for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+        for arg in params:
             if arg.annotation is None or stores[arg.arg] > 0:
                 continue
             key = self._type_key(self._annotation_parts(arg.annotation))
             if key:
                 types[arg.arg] = key
-        for name, call in constructed.items():
+        for name in assigned.keys() | annotated.keys():
             if stores[name] != 1:
                 continue
-            key = self._type_key(self._dotted_parts(call.func))
+            value = assigned.get(name)
+            key = annotated.get(name) or (self._value_type(value) if value is not None else None)
             if key:
                 types[name] = key
         return types
+
+    def _infer_class_attributes(self, node: ast.ClassDef) -> dict[str, str]:
+        """クラスの属性（クラス直下の定義と `self.X = ...`）のうち、型を静的に決められるもの。
+
+        属性への代入がクラス全体で1回だけの場合に限り、注釈・生成するクラス・リテラル・
+        型注釈付き引数の転記から型を推定する。複数回代入される属性は対象外とする。
+        """
+
+        stores: Counter[str] = Counter()
+        candidates: dict[str, str] = {}
+
+        for statement in node.body:
+            if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+                stores[statement.target.id] += 1
+                key = self._type_key(self._annotation_parts(statement.annotation))
+                if key is None and statement.value is not None:
+                    key = self._value_type(statement.value)
+                if key:
+                    candidates[statement.target.id] = key
+            elif isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    if isinstance(target, ast.Name):
+                        stores[target.id] += 1
+                if len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
+                    key = self._value_type(statement.value)
+                    if key:
+                        candidates[statement.targets[0].id] = key
+
+        for statement in node.body:
+            if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            positional = [*statement.args.posonlyargs, *statement.args.args]
+            if not positional or any(_unparse(d) == "staticmethod" for d in statement.decorator_list):
+                continue
+            self_name = positional[0].arg
+            parameter_types = self._infer_scope(
+                statement.body, [*positional, *statement.args.kwonlyargs]
+            )
+            stack: list[ast.AST] = list(statement.body)
+            while stack:
+                current = stack.pop()
+                if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                    continue
+                for attribute, value, annotation in self._self_attribute_stores(current, self_name):
+                    stores[attribute] += 1
+                    key = None
+                    if annotation is not None:
+                        key = self._type_key(self._annotation_parts(annotation))
+                    if key is None and value is not None:
+                        if isinstance(value, ast.Name) and value.id in parameter_types:
+                            key = parameter_types[value.id]  # self.x = x （xは型注釈付き引数）
+                        else:
+                            key = self._value_type(value)
+                    if key:
+                        candidates[attribute] = key
+                stack.extend(ast.iter_child_nodes(current))
+        return {name: key for name, key in candidates.items() if stores[name] == 1}
+
+    @staticmethod
+    def _self_attribute_stores(node: ast.AST, self_name: str):
+        """`self.X` への代入を (属性名, 代入される式, 型注釈) で列挙する。"""
+
+        def is_self_attribute(target: ast.AST) -> bool:
+            return (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.ctx, ast.Store)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == self_name
+            )
+
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if is_self_attribute(target):
+                    single = len(node.targets) == 1
+                    yield target.attr, (node.value if single else None), None
+        elif isinstance(node, ast.AnnAssign) and is_self_attribute(node.target):
+            yield node.target.attr, node.value, node.annotation
+        elif isinstance(node, (ast.AugAssign,)) and is_self_attribute(node.target):
+            yield node.target.attr, None, None
+        elif isinstance(node, (ast.For, ast.AsyncFor)) and is_self_attribute(node.target):
+            yield node.target.attr, None, None
+
+    def _value_type(self, value: ast.expr) -> str | None:
+        """代入される式から型の照合キーを推定する（クラスの生成・リテラル）。"""
+
+        if isinstance(value, ast.Call):
+            return self._type_key(self._dotted_parts(value.func))
+        if isinstance(value, (ast.List, ast.ListComp)):
+            return "builtin:list"
+        if isinstance(value, (ast.Dict, ast.DictComp)):
+            return "builtin:dict"
+        if isinstance(value, (ast.Set, ast.SetComp)):
+            return "builtin:set"
+        if isinstance(value, ast.Tuple):
+            return "builtin:tuple"
+        if isinstance(value, (ast.JoinedStr,)) or (
+            isinstance(value, ast.Constant) and isinstance(value.value, (str, bytes))
+        ):
+            return "builtin:str"
+        return None
 
     def _annotation_parts(self, annotation: ast.expr) -> list[str] | None:
         if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
@@ -443,14 +607,27 @@ class _ReferenceCollector(ast.NodeVisitor):
                 annotation = ast.parse(annotation.value, mode="eval").body
             except SyntaxError:
                 return None
+        if (
+            isinstance(annotation, ast.Subscript)
+            and isinstance(annotation.value, ast.Name)
+            and annotation.value.id in _BUILTIN_CONTAINER_ANNOTATIONS
+        ):
+            annotation = annotation.value  # list[str] -> list
         return self._dotted_parts(annotation)
 
     def _type_key(self, parts: list[str] | None) -> str | None:
         if parts is None or parts[0] == "super()":
             return None
-        key, _, _ = self._resolve_parts(parts, allow_self=False)
+        key, status, _ = self._resolve_parts(parts, allow_self=False)
         if key and (key.startswith(KEY_DIRECT) or key.startswith(KEY_IMPORT)):
             return key
+        if (
+            key is None
+            and status == ResolutionStatus.EXTERNAL
+            and len(parts) == 1
+            and isinstance(getattr(builtins, parts[0], None), type)
+        ):
+            return f"builtin:{parts[0]}"  # str, list, dict など組み込み型
         return None
 
     # --- 参照の記録 ---
@@ -489,6 +666,23 @@ class _ReferenceCollector(ast.NodeVisitor):
         symbol = self._symbols[-1]
         func = node.func
         parts = self._dotted_parts(func)
+        if parts is None and isinstance(func, ast.Attribute):
+            receiver = func.value
+            if isinstance(receiver, _LITERAL_RECEIVERS):
+                self._add_reference(
+                    ReferenceKind.CALL, node, symbol, _unparse(func)[:80], None,
+                    ResolutionStatus.EXTERNAL, "組み込み型のメソッド",
+                )
+                return
+            if isinstance(receiver, ast.Call):
+                # `クラス(...).メソッド()` は、生成されるクラスのメソッドとして解決する。
+                typed = self._typed(self._type_key(self._dotted_parts(receiver.func)), [func.attr])
+                if typed is not None:
+                    key, status, note = typed
+                    self._add_reference(
+                        ReferenceKind.CALL, node, symbol, _unparse(func)[:80], key, status, note
+                    )
+                    return
         if parts is None:
             note = "呼び出し対象が式の評価結果であり、静的に確定できない"
             if isinstance(func, ast.Call) and self._dotted_parts(func.func) == ["getattr"]:
@@ -570,17 +764,27 @@ class _ReferenceCollector(ast.NodeVisitor):
                 return f"{KEY_SELF}{enclosing_class.qualified_name}:{rest[0]}", (
                     ResolutionStatus.UNRESOLVED
                 ), ""
+            if enclosing_class is not None and len(rest) == 2:
+                attribute_type = self._class_attr_types.get(enclosing_class.qualified_name, {}).get(
+                    rest[0]
+                )
+                typed = self._typed(attribute_type, [rest[1]])
+                if typed is not None:
+                    return typed
             return None, ResolutionStatus.UNRESOLVED, (
                 "self/cls 経由の属性であり、インスタンス属性の型を静的に確定できない"
             )
         if head in self._locals[-1]:
-            type_key = self._types[-1].get(head)
-            if type_key is not None and len(rest) == 1:
-                return f"{KEY_TYPED}{type_key}|{rest[0]}", ResolutionStatus.UNRESOLVED, ""
+            typed = self._typed(self._types[-1].get(head), rest)
+            if typed is not None:
+                return typed
             return None, ResolutionStatus.UNRESOLVED, (
                 "ローカル変数・引数経由であり、実体を静的に確定できない"
             )
         if head in self._module_names:
+            typed = self._typed(self._module_types.get(head), rest)
+            if typed is not None:
+                return typed
             return f"{KEY_DIRECT}{self._module_name}.{head}{suffix}", (
                 ResolutionStatus.UNRESOLVED
             ), ""
@@ -588,7 +792,23 @@ class _ReferenceCollector(ast.NodeVisitor):
             return f"{KEY_IMPORT}{self._bindings[head]}{suffix}", ResolutionStatus.UNRESOLVED, ""
         if head in _BUILTIN_NAMES and not rest:
             return None, ResolutionStatus.EXTERNAL, "組み込み関数・型"
+        if self._star_modules:
+            # `from M import *` で取り込まれた名前かもしれない。M を解析した後に解決する。
+            names = ";".join(self._star_modules)
+            return f"{KEY_STAR}{names}|{'.'.join(parts)}", ResolutionStatus.UNRESOLVED, ""
         return None, ResolutionStatus.UNRESOLVED, "名前を静的に解決できない"
+
+    @staticmethod
+    def _typed(
+        type_key: str | None, rest: list[str]
+    ) -> tuple[str | None, ResolutionStatus, str] | None:
+        """型が分かっている変数のメソッド呼び出しの照合キー。型が不明ならNone。"""
+
+        if type_key is None or len(rest) != 1:
+            return None
+        if type_key.startswith("builtin:"):
+            return None, ResolutionStatus.EXTERNAL, f"組み込み型({type_key[8:]})のメソッド"
+        return f"{KEY_TYPED}{type_key}|{rest[0]}", ResolutionStatus.UNRESOLVED, ""
 
     # --- 動的インポート ---
 
@@ -681,3 +901,19 @@ def _unparse(node: ast.AST) -> str:
         return ast.unparse(node)
     except Exception:
         return "<解析不能>"
+
+
+def _module_level_imports(tree: ast.Module) -> set[int]:
+    """関数・クラスの内側ではない（モジュールの公開名になりうる）import文のid集合。"""
+
+    found: set[int] = set()
+    stack: list[ast.AST] = list(tree.body)
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(current, (ast.Import, ast.ImportFrom)):
+            found.add(id(current))
+            continue
+        stack.extend(ast.iter_child_nodes(current))
+    return found

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
+    KEY_EXPORT,
     KEY_IMPORT,
+    KEY_STAR,
     KEY_SELF,
     KEY_SUPER,
     KEY_TYPED,
@@ -28,6 +31,17 @@ _TRANSPARENT_DECORATORS = frozenset(
     {"staticmethod", "classmethod", "property", "abstractmethod", "abc.abstractmethod",
      "dataclass", "dataclasses.dataclass"}
 )
+_MAX_REEXPORT_DEPTH = 6
+
+
+@dataclass(frozen=True)
+class _Lookup:
+    """名前解決の結果。targetがNoneなら、statusとnoteが解決できなかった理由を表す。"""
+
+    status: ResolutionStatus
+    target: Symbol | None = None
+    note: str = ""
+    confidence: Confidence = Confidence.CONFIRMED
 _INHERITANCE_NOTE = "サブクラスでのオーバーライドにより、実際の呼び出し先が異なる可能性がある"
 
 
@@ -69,6 +83,14 @@ class ReferenceResolver:
         self._py_name_components = {part for qn in self._py_by_qname for part in qn.split(".")}
         self._bases: dict[str, list[Symbol]] = defaultdict(list)
         self._unresolved_bases: set[str] = set()
+        # モジュールが公開するimport名（再エクスポート・star importの解決用）
+        self._exports: dict[str, dict[str, str]] = defaultdict(dict)
+        for reference in references:
+            key = reference.target_key or ""
+            source = self._symbols_by_id.get(reference.source_symbol_id)
+            if key.startswith(KEY_EXPORT) and source is not None:
+                exposed, _, dotted = key[len(KEY_EXPORT):].partition("=")
+                self._exports[source.qualified_name][exposed] = dotted
 
         for dependency in dependencies:
             self._resolve_dependency(dependency)
@@ -264,7 +286,12 @@ class ReferenceResolver:
 
     def _resolve_python(self, reference: Reference) -> None:
         key = reference.target_key or ""
-        if key.startswith(KEY_TYPED):
+        if key.startswith(KEY_EXPORT):
+            _, _, dotted = key[len(KEY_EXPORT):].partition("=")
+            self._resolve_python_name(reference, dotted, imported=True)
+        elif key.startswith(KEY_STAR):
+            self._resolve_python_star(reference, key[len(KEY_STAR):])
+        elif key.startswith(KEY_TYPED):
             self._resolve_python_typed(reference, key[len(KEY_TYPED):])
         elif key.startswith(KEY_SELF) or key.startswith(KEY_SUPER):
             self._resolve_python_method(reference, key)
@@ -289,16 +316,30 @@ class ReferenceResolver:
             self._py_suffix_index = index
         return self._py_suffix_index.get(dotted, []), True
 
-    def _resolve_python_name(self, reference: Reference, dotted: str, imported: bool) -> None:
+    def _resolve_python_name(
+        self, reference: Reference, dotted: str, imported: bool, depth: int = 0
+    ) -> None:
+        outcome = self._lookup_name(dotted, imported, depth)
+        if outcome.target is not None:
+            self._resolved(reference, outcome.target, outcome.note, outcome.confidence)
+        else:
+            self._set(reference, outcome.status, outcome.note)
+
+    def _lookup_name(self, dotted: str, imported: bool, depth: int = 0) -> "_Lookup":
+        """修飾名をプロジェクト内のシンボルに解決する（再エクスポートもたどる）。"""
+
         candidates, by_suffix = self._python_lookup(dotted)
         if len(candidates) == 1:
-            note = "ソースルートが不明なため、末尾一致で解決した" if by_suffix else ""
-            confidence = Confidence.INFERRED if by_suffix else Confidence.CONFIRMED
-            self._resolved(reference, candidates[0], note, confidence)
-            return
+            if by_suffix:
+                return _Lookup(
+                    ResolutionStatus.RESOLVED,
+                    candidates[0],
+                    "ソースルートが不明なため、末尾一致で解決した",
+                    Confidence.INFERRED,
+                )
+            return _Lookup(ResolutionStatus.RESOLVED, candidates[0])
         if len(candidates) > 1:
-            self._set(reference, ResolutionStatus.AMBIGUOUS, "同名の候補が複数あり、一意に決まらない")
-            return
+            return _Lookup(ResolutionStatus.AMBIGUOUS, None, "同名の候補が複数あり、一意に決まらない")
 
         # 最長の接頭辞が解決できれば、その先が見つからない理由を示す。
         parts = dotted.split(".")
@@ -308,26 +349,38 @@ class ReferenceResolver:
                 continue
             prefix = prefix_candidates[0]
             rest = ".".join(parts[length:])
+            if prefix.kind == SymbolKind.MODULE and depth < _MAX_REEXPORT_DEPTH:
+                # `__init__.py` などが `from .x import Name` で再エクスポートしている名前をたどる。
+                first, _, tail = rest.partition(".")
+                exported = self._exports.get(prefix.qualified_name, {}).get(first)
+                if exported is not None:
+                    followed = exported + ("." + tail if tail else "")
+                    if followed != dotted:
+                        outcome = self._lookup_name(followed, True, depth + 1)
+                        if outcome.target is not None and not outcome.note:
+                            return _Lookup(
+                                outcome.status, outcome.target, "再エクスポート経由で解決した",
+                                outcome.confidence,
+                            )
+                        return outcome
             if prefix.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.CLASS_VARIABLE):
                 note = f"変数 {prefix.qualified_name} 経由であり、型を静的に確定できない"
             elif prefix.kind == SymbolKind.MODULE and imported:
                 note = (
                     f"{prefix.qualified_name} に {rest} の定義が見つからない"
-                    "（__init__.py経由の再エクスポートの可能性）"
+                    "（動的な再エクスポートの可能性）"
                 )
             else:
                 note = f"{prefix.qualified_name} に {rest} の定義が見つからない"
-            self._set(reference, ResolutionStatus.UNRESOLVED, note)
-            return
+            return _Lookup(ResolutionStatus.UNRESOLVED, None, note)
 
         if imported and parts[0] not in self._py_name_components:
-            self._set(
-                reference,
+            return _Lookup(
                 ResolutionStatus.EXTERNAL,
+                None,
                 "プロジェクト外（標準/外部ライブラリ）と考えられる",
             )
-        else:
-            self._set(reference, ResolutionStatus.UNRESOLVED, "プロジェクト内に定義が見つからない")
+        return _Lookup(ResolutionStatus.UNRESOLVED, None, "プロジェクト内に定義が見つからない")
 
     def _resolve_python_method(self, reference: Reference, key: str) -> None:
         is_super = key.startswith(KEY_SUPER)
@@ -359,16 +412,42 @@ class ReferenceResolver:
             note = f"{class_qn} と継承元に {attribute} のメソッド定義が見つからない（インスタンス属性の可能性）"
         self._set(reference, ResolutionStatus.UNRESOLVED, note)
 
+    def _resolve_python_star(self, reference: Reference, body: str) -> None:
+        """`from M import *` で取り込まれた名前を、M の定義とimportから探して解決する。"""
+
+        modules_text, _, dotted = body.partition("|")
+        head, _, tail = dotted.partition(".")
+        tail_part = "." + tail if tail else ""
+        for module_name in modules_text.split(";"):
+            modules = self._modules_named(module_name)
+            if len(modules) != 1:
+                continue
+            module_qn = modules[0].qualified_name
+            if self._py_by_qname.get(f"{module_qn}.{head}"):
+                self._resolve_python_name(reference, f"{module_qn}.{dotted}", imported=False)
+                return
+            exported = self._exports.get(module_qn, {}).get(head)
+            if exported is not None:
+                self._resolve_python_name(reference, exported + tail_part, imported=True, depth=1)
+                if reference.resolution_status == ResolutionStatus.RESOLVED and not reference.note:
+                    reference.note = "star importで取り込まれた名前"
+                return
+        self._set(
+            reference,
+            ResolutionStatus.UNRESOLVED,
+            "名前を静的に解決できない（star import元に定義が見つからない）",
+        )
+
     def _resolve_python_typed(self, reference: Reference, body: str) -> None:
         """型注釈/単一代入で推定した型のメソッド呼び出しを解決する（常にINFERRED）。"""
 
         type_key, _, attribute = body.rpartition("|")
         imported = type_key.startswith(KEY_IMPORT)
         dotted = type_key[len(KEY_IMPORT if imported else KEY_DIRECT):]
-        candidates, _ = self._python_lookup(dotted)
-        classes = [s for s in candidates if s.kind == SymbolKind.CLASS]
-        if len(classes) != 1:
-            if not candidates and imported and dotted.split(".", 1)[0] not in self._py_name_components:
+        outcome = self._lookup_name(dotted, imported)
+        target = outcome.target
+        if target is None or target.kind != SymbolKind.CLASS:
+            if outcome.status == ResolutionStatus.EXTERNAL:
                 self._set(
                     reference,
                     ResolutionStatus.EXTERNAL,
@@ -382,7 +461,7 @@ class ReferenceResolver:
                 )
             return
         note = "型注釈または単一代入から推定した型に基づく（実際の型はサブクラスの可能性がある）"
-        for cls in self._linearize(classes[0]):
+        for cls in self._linearize(target):
             found = [
                 s
                 for s in self._py_by_qname.get(f"{cls.qualified_name}.{attribute}", [])
@@ -397,7 +476,7 @@ class ReferenceResolver:
         self._set(
             reference,
             ResolutionStatus.UNRESOLVED,
-            f"推定した型 {classes[0].qualified_name} と継承元に {attribute} のメソッド定義が見つからない",
+            f"推定した型 {target.qualified_name} と継承元に {attribute} のメソッド定義が見つからない",
         )
 
     def _linearize(self, cls: Symbol) -> list[Symbol]:

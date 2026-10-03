@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from codeinsight import __version__
+from codeinsight.analysis.fingerprint import analyzer_fingerprint
 from codeinsight.analysis.language import detect_language
 from codeinsight.analysis.language_adapter import SourceUnit
 from codeinsight.analysis.reference_resolver import ReferenceResolver
@@ -23,7 +24,8 @@ from codeinsight.infrastructure.analysis_repository import AnalysisRepository
 from codeinsight.infrastructure.file_scanner import FileScanner, ScannedFile
 from codeinsight.infrastructure.git_repository import GitRepository
 
-ANALYZER_VERSION = __version__
+# パッケージのバージョンに、解析ロジックの指紋を付けて「解析器のバージョン」とする。
+ANALYZER_VERSION = f"{__version__}+{analyzer_fingerprint()}"
 
 
 @dataclass(frozen=True)

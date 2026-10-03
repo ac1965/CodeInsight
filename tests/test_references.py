@@ -219,3 +219,110 @@ def test_python_untyped_or_unknown_type_stays_unresolved(analyzed, python_pkg_di
         (ref,) = find(ReferenceKind.CALL, "app.util.untyped", name)
         assert ref.resolution_status == ResolutionStatus.UNRESOLVED
         assert ref.target_symbol_id is None
+
+
+def test_python_reexport_through_package_init_is_followed(
+    analyzed, python_reexport_dir: Path
+) -> None:
+    repo, project, result = analyzed(python_reexport_dir)
+    _, _, _, find, target = _view(repo, project)
+
+    (ctor,) = find(ReferenceKind.CALL, "main", "Widget", "main.py")
+    assert target(ctor) == "lib.models.Widget"
+    assert ctor.confidence == Confidence.CONFIRMED
+    assert "再エクスポート" in ctor.note
+
+    (make,) = find(ReferenceKind.CALL, "main.go", "make_widget")
+    assert target(make) == "lib.models.make_widget"
+
+    # import文そのものも、定義先へ解決されるIMPORT参照として記録される
+    (imported,) = [
+        r
+        for r in find(ReferenceKind.IMPORT, "main", "lib.Widget")
+    ]
+    assert target(imported) == "lib.models.Widget"
+
+
+def test_python_receiver_type_follows_reexported_class(
+    analyzed, python_reexport_dir: Path
+) -> None:
+    repo, project, result = analyzed(python_reexport_dir)
+    _, _, _, find, target = _view(repo, project)
+
+    (via_variable,) = find(ReferenceKind.CALL, "main.go", "widget.run")  # モジュール変数 widget = Widget()
+    assert target(via_variable) == "lib.models.Widget.run"
+    assert via_variable.confidence == Confidence.INFERRED
+    (via_constructed,) = find(ReferenceKind.CALL, "main.go", "Widget().run")
+    assert target(via_constructed) == "lib.models.Widget.run"
+
+
+def test_python_star_import_names_are_resolved_via_source_module(
+    analyzed, python_reexport_dir: Path
+) -> None:
+    repo, project, result = analyzed(python_reexport_dir)
+    _, _, _, find, target = _view(repo, project)
+
+    (helper,) = find(ReferenceKind.CALL, "lib.cli.main", "shared_helper")
+    assert target(helper) == "lib._shared.shared_helper"
+
+    # star import元にも無い名前は、推測せず未解決のまま
+    (unknown,) = find(ReferenceKind.CALL, "lib.cli.main", "undefined_name")
+    assert unknown.resolution_status == ResolutionStatus.UNRESOLVED
+    assert unknown.target_symbol_id is None
+
+
+def test_python_builtin_and_external_receivers_are_not_reported_as_unresolved(
+    analyzed, python_reexport_dir: Path
+) -> None:
+    repo, project, result = analyzed(python_reexport_dir)
+    _, _, _, find, _ = _view(repo, project)
+
+    for source, name, expected in (
+        ("lib.cli.main", "names.append", "組み込み型(list)"),  # names = [] の単一代入
+        ("lib.cli.main", "', '.join", "組み込み型"),  # リテラルのメソッド
+        ("lib.cli", "app.command", "extlib.Typer"),  # app = extlib.Typer() （外部ライブラリの型）
+    ):
+        (ref,) = find(ReferenceKind.CALL, source, name)
+        assert ref.resolution_status == ResolutionStatus.EXTERNAL
+        assert expected in ref.note
+
+
+def test_python_instance_attribute_types_are_inferred_only_when_unambiguous(
+    analyzed, python_reexport_dir: Path
+) -> None:
+    repo, project, result = analyzed(python_reexport_dir)
+    _, _, _, find, target = _view(repo, project)
+    holder_go = "lib.models.Holder.go"
+
+    # 型注釈付き引数の転記 / 生成するクラス
+    (via_param,) = find(ReferenceKind.CALL, holder_go, "self.widget.run")
+    assert target(via_param) == "lib.models.Widget.run"
+    assert via_param.confidence == Confidence.INFERRED
+    (via_constructed,) = find(ReferenceKind.CALL, holder_go, "self.other.run")
+    assert target(via_constructed) == "lib.models.Widget.run"
+
+    # 組み込み型（リテラル・注釈）のメソッドは外部として分類する
+    for name in ("self.label.upper", "self.cache.get", "self.items.append"):
+        (builtin,) = find(ReferenceKind.CALL, holder_go, name)
+        assert builtin.resolution_status == ResolutionStatus.EXTERNAL
+
+    # 複数回代入される属性（self.counter += 1）は、型を推定せず未解決のまま
+    (reassigned,) = find(ReferenceKind.CALL, holder_go, "self.counter.bit_length")
+    assert reassigned.resolution_status == ResolutionStatus.UNRESOLVED
+
+
+def test_python_module_level_chained_assignments_do_not_break_analysis(
+    analyzed, tmp_path: Path
+) -> None:
+    # 回帰: モジュール変数の型推定中に、別のモジュール変数のメソッド呼び出しを評価する
+    root = tmp_path / "chain"
+    root.mkdir()
+    (root / "m.py").write_text(
+        "class K:\n    def make(self):\n        return K()\n\n\n"
+        "k = K()\nvalue = k.make()\nitems = []\ncount = len(items)\n"
+    )
+    repo, project, result = analyzed(root)
+    assert not result.errors, result.errors
+    _, _, _, find, target = _view(repo, project)
+    (make,) = find(ReferenceKind.CALL, "m", "k.make")
+    assert target(make) == "m.K.make"

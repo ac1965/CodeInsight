@@ -189,3 +189,12 @@ def test_analyzer_version_change_triggers_reanalysis(tmp_path: Path, monkeypatch
         (after,) = repo.list_source_files(project.project_id)
 
     assert before.analyzer_version != after.analyzer_version == "99.0.0"
+
+
+def test_analyzer_version_includes_a_fingerprint_of_the_analysis_code() -> None:
+    from codeinsight import __version__
+    from codeinsight.analysis.fingerprint import analyzer_fingerprint
+    from codeinsight.application.analysis_coordinator import ANALYZER_VERSION
+
+    assert ANALYZER_VERSION == f"{__version__}+{analyzer_fingerprint()}"
+    assert len(analyzer_fingerprint()) == 8

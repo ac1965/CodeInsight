@@ -49,3 +49,8 @@ def analyzed(tmp_path: Path):
     yield build
     for repo in repositories:
         repo.close()
+
+
+@pytest.fixture
+def python_reexport_dir() -> Path:
+    return FIXTURES_DIR / "python_reexport"
