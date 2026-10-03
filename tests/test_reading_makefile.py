@@ -105,3 +105,9 @@ def test_understand_marks_unsupported_sections_instead_of_leaving_them_blank(tmp
     out = capsys.readouterr().out
     assert out.count("対象外") >= 3 and "空欄は「なし」を意味しません" in out
     assert "ありません（静的に追える範囲）" not in out  # Cで「変更なし」と断定しない
+
+
+def test_makefile_is_not_overridden_by_the_ci_environment_variable() -> None:
+    # GitHub Actions などは環境変数 CI=true を設定する。Makefile の変数名が CI だと、コマンドが `true` に置き換わってしまう
+    result = subprocess.run(["make", "-n", "status"], cwd=ROOT, capture_output=True, text=True, env={**__import__("os").environ, "CI": "true"})
+    assert result.returncode == 0 and "codeinsight status" in result.stdout and not result.stdout.startswith("true")

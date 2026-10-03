@@ -21,7 +21,7 @@
 
 UV      ?= uv
 PYTEST  ?= $(UV) run pytest
-CI      ?= $(UV) run codeinsight
+CODEINSIGHT ?= $(UV) run codeinsight
 
 # 読み取り系コマンドに付ける共通オプション（DB・PROJECT は指定されたときだけ）
 READ_OPTS = $(if $(DB),--db $(DB)) $(if $(PROJECT),--project $(PROJECT))
@@ -33,7 +33,7 @@ READING_NAME = $(notdir $(abspath $(TARGET)))
 OUT         ?= reading/$(READING_NAME)
 TOP         ?= 8
 RDB          = $(OUT)/analysis/codeinsight.db
-RCI          = $(CI)
+RCI          = $(CODEINSIGHT)
 RFLAGS       = --db $(RDB)
 BUILD       ?= $(OUT)/build
 COMPILE_DB  ?= $(if $(wildcard $(BUILD)/compile_commands.json),$(BUILD),)
@@ -77,44 +77,44 @@ clean: ## 生成物（キャッシュ・ビルド成果物）を削除する。�
 
 analyze: ## 対象を解析して保存する（TARGET=ディレクトリ が必須）
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make analyze TARGET=../my-repo))
-	$(CI) analyze $(TARGET) $(if $(DB),--db $(DB))
+	$(CODEINSIGHT) analyze $(TARGET) $(if $(DB),--db $(DB))
 
 status: ## 解析状況と、解析後に変更されたファイルを表示する
-	$(CI) status $(READ_OPTS)
+	$(CODEINSIGHT) status $(READ_OPTS)
 
 overview: ## リポジトリの全体像（主要モジュール・エントリポイント・中心となる関数）
-	$(CI) overview $(READ_OPTS)
+	$(CODEINSIGHT) overview $(READ_OPTS)
 
 architecture: ## コンポーネント構成・層構造・循環・外部連携
-	$(CI) architecture $(READ_OPTS)
+	$(CODEINSIGHT) architecture $(READ_OPTS)
 
 unresolved: ## 静的に確定できなかった参照・依存関係（理由別）
-	$(CI) unresolved $(READ_OPTS)
+	$(CODEINSIGHT) unresolved $(READ_OPTS)
 
 understand: ## 関数の読解カード（NAME=関数名 が必須）
 	$(if $(NAME),,$(error NAME を指定してください。例: make understand NAME=main))
-	$(CI) understand $(NAME) $(READ_OPTS)
+	$(CODEINSIGHT) understand $(NAME) $(READ_OPTS)
 
 # --- AI解説（既定では何も送信しない。送信にはAI_SEND=1が必要） ---
 
 ai-status: ## AIの設定と接続を確認する（ソースは送らない）
-	$(CI) ai-status $(AI_OPTS) $(if $(DB),--db $(DB))
+	$(CODEINSIGHT) ai-status $(AI_OPTS) $(if $(DB),--db $(DB))
 
 explain-dry: ## AIへ送信される内容を表示する（送信しない。NAME・MODEL が必須）
 	$(if $(NAME),,$(error NAME を指定してください))
 	$(if $(MODEL),,$(error MODEL を指定してください。例: MODEL=qwen3-coder:latest))
-	$(CI) explain $(NAME) --dry-run $(AI_OPTS) $(READ_OPTS)
+	$(CODEINSIGHT) explain $(NAME) --dry-run $(AI_OPTS) $(READ_OPTS)
 
 explain: ## AIで解説する（NAME・MODEL・AI_SEND=1 が必須。ローカルLLMなら送信はこの計算機の中で完結）
 	$(if $(NAME),,$(error NAME を指定してください))
 	$(if $(MODEL),,$(error MODEL を指定してください。例: MODEL=qwen3-coder:latest))
 	$(if $(filter 1,$(AI_SEND)),,$(error ソースコードをAIへ送信します。許可する場合は AI_SEND=1 を付けてください。内容は make explain-dry で確認できます))
-	$(CI) explain $(NAME) --allow-send $(AI_OPTS) $(READ_OPTS)
+	$(CODEINSIGHT) explain $(NAME) --allow-send $(AI_OPTS) $(READ_OPTS)
 
 ai-eval: ## AI解説を評価ケース(eval/ai_cases.toml)で採点する（MODEL・AI_SEND=1 が必須。サンプルのみを送信）
 	$(if $(MODEL),,$(error MODEL を指定してください。例: MODEL=qwen3-coder:latest))
 	$(if $(filter 1,$(AI_SEND)),,$(error サンプルのソースをAIへ送信します。許可する場合は AI_SEND=1 を付けてください。ケースの一覧は codeinsight ai-eval --list))
-	$(CI) ai-eval --allow-send $(AI_OPTS)
+	$(CODEINSIGHT) ai-eval --allow-send $(AI_OPTS)
 
 
 # ============================================================
