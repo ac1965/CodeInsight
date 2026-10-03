@@ -199,6 +199,7 @@ uv run codeinsight graph call --format html -o call.html                 # 自�
 
 ```bash
 uv run pytest -v   # または make test
+make lint          # ruff と mypy(CIと同じ)
 ```
 
 詳細は [TESTING.md](TESTING.md) を参照してください。

@@ -4,7 +4,7 @@ import hashlib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from codeinsight import __version__
 from codeinsight.analysis.fingerprint import analyzer_fingerprint
@@ -43,7 +43,7 @@ ProgressCallback = Callable[[AnalysisProgress], None]
 def derive_file_id(project_id: str, relative_path: str) -> str:
     """プロジェクトと相対パスから決定的にfile_idを作る（再登録しても同じIDになる）。"""
 
-    digest = hashlib.sha256(f"{project_id}\x00{relative_path}".encode("utf-8"))
+    digest = hashlib.sha256(f"{project_id}\x00{relative_path}".encode())
     return digest.hexdigest()[:32]
 
 
@@ -120,7 +120,7 @@ class AnalysisCoordinator:
                 analysis_id=str(uuid.uuid4()),
                 project_id=project.project_id,
                 analyzer_version=ANALYZER_VERSION,
-                analysis_timestamp=datetime.now(timezone.utc),
+                analysis_timestamp=datetime.now(UTC),
                 status=overall_status,
                 warnings=tuple(_format_warnings(warnings_by_message)),
                 errors=tuple(errors),
@@ -195,7 +195,7 @@ class AnalysisCoordinator:
                 relative_path=scanned.relative_path,
                 language=language,
                 content_hash=content_hash,
-                last_analyzed_at=datetime.now(timezone.utc),
+                last_analyzed_at=datetime.now(UTC),
                 analysis_status=(
                     AnalysisFileStatus.ANALYZED if succeeded else AnalysisFileStatus.FAILED
                 ),
@@ -231,7 +231,7 @@ class AnalysisCoordinator:
                 relative_path=scanned.relative_path,
                 language=language,
                 content_hash=content_hash,
-                last_analyzed_at=datetime.now(timezone.utc),
+                last_analyzed_at=datetime.now(UTC),
                 analysis_status=AnalysisFileStatus.FAILED,
                 analyzer_version=ANALYZER_VERSION,
             )

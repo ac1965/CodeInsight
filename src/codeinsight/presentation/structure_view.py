@@ -14,7 +14,7 @@ class TreeNode:
     path: str | None = None
     line: int | None = None
     status: str | None = None  # 解析に失敗したファイルなどの注記
-    children: list["TreeNode"] = field(default_factory=list)
+    children: list[TreeNode] = field(default_factory=list)
 
 
 _VARIABLE_KINDS = frozenset(

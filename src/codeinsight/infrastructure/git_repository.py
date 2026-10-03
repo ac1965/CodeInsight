@@ -48,7 +48,7 @@ class GitRepository:
 
     def commits_for_lines(
         self, root: Path, relative_path: str, start: int, end: int, limit: int = 10, timeout: int = 20
-    ) -> list["Commit"] | None:
+    ) -> list[Commit] | None:
         """指定の行範囲に触れたコミット（新しい順）。履歴を取得できなければ None。
 
         `git log -L` による読み取り専用の取得。行範囲は HEAD のファイル内容に対するものなので、
@@ -63,7 +63,7 @@ class GitRepository:
         )
         return None if output is None else _parse_commits(output)
 
-    def file_history(self, root: Path, max_commits: int = 2000, timeout: int = 60) -> list["Commit"] | None:
+    def file_history(self, root: Path, max_commits: int = 2000, timeout: int = 60) -> list[Commit] | None:
         """最近のコミットと、それぞれが変更したファイル（読み取り専用）。"""
 
         output = self._run(

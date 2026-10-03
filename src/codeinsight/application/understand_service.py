@@ -24,7 +24,7 @@ from codeinsight.application.impact_service import ImpactReport, ImpactService
 from codeinsight.application.navigation_service import NavigationService, ReferenceHit
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.risk_service import Finding, RiskService
-from codeinsight.application.test_map_service import TestMapService, TestMapping
+from codeinsight.application.test_map_service import TestMapping, TestMapService
 from codeinsight.domain import Language, Project, Symbol, SymbolKind
 
 _INPUT_CATEGORIES = ("filesystem", "network", "database", "config", "process", "persistence")
@@ -273,11 +273,11 @@ def _parameters(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Parame
     positional = [*args.posonlyargs, *args.args]
     defaults: list[ast.expr | None] = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
     parameters = [
-        Parameter(a.arg, fa.unparse(a.annotation, 40), fa.unparse(d, 30), "positional") for a, d in zip(positional, defaults)
+        Parameter(a.arg, fa.unparse(a.annotation, 40), fa.unparse(d, 30), "positional") for a, d in zip(positional, defaults, strict=False)
     ]
     if args.vararg:
         parameters.append(Parameter(args.vararg.arg, fa.unparse(args.vararg.annotation, 40), "", "*args"))
-    for a, d in zip(args.kwonlyargs, args.kw_defaults):
+    for a, d in zip(args.kwonlyargs, args.kw_defaults, strict=True):
         parameters.append(Parameter(a.arg, fa.unparse(a.annotation, 40), fa.unparse(d, 30), "keyword-only"))
     if args.kwarg:
         parameters.append(Parameter(args.kwarg.arg, fa.unparse(args.kwarg.annotation, 40), "", "**kwargs"))
@@ -311,5 +311,5 @@ def _parameter_mutations(function: ast.FunctionDef | ast.AsyncFunctionDef, varia
         for target in targets:
             base = target.value if isinstance(target, (ast.Attribute, ast.Subscript)) else None
             if isinstance(base, ast.Name) and base.id in params:
-                found.append(f"L{node.lineno} 引数 {base.id} の属性/要素に書き込む（{fa.unparse(target, 40)}）")
+                found.append(f"L{getattr(node, 'lineno', 0)} 引数 {base.id} の属性/要素に書き込む（{fa.unparse(target, 40)}）")
     return sorted(set(found), key=lambda text: int(text[1:].split(" ", 1)[0]))

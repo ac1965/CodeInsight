@@ -133,7 +133,7 @@ class OverviewService:
 
         return Overview(
             languages=dict(languages),
-            symbol_counts=dict(symbol_counts),
+            symbol_counts={kind: count for kind, count in symbol_counts.items()},
             modules=modules[:top],
             entry_points=entry_points,
             most_called=ranked(callers),

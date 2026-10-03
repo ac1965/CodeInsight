@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+from codeinsight.application import CfgBuilder, FlowAnalysisError, FlowService, NavigationService, ProjectIndex
 from codeinsight.application.architecture_service import ArchitectureService
 from codeinsight.application.external_service import ExternalService
-from codeinsight.application import CfgBuilder, FlowAnalysisError, FlowService, NavigationService, ProjectIndex
 from codeinsight.application.graph_builder import GraphBuilder, GraphModel, Traversal
+from codeinsight.cli.common import CliError, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.domain import Project
 from codeinsight.presentation import render_html, to_dot, to_json, to_mermaid
-from codeinsight.cli.common import CliError, prepare_read, resolve_symbol_arg, warn_if_stale, safe
 
 
 def _build_graph(

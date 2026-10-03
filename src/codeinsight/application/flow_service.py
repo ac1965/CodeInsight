@@ -41,7 +41,7 @@ class VariableTrace:
     is_param: bool
     definitions: list[fa.Definition]
     uses: list[int]
-    flows: list["TraceFlow"] = field(default_factory=list)
+    flows: list[TraceFlow] = field(default_factory=list)
 
 
 @dataclass
@@ -63,7 +63,7 @@ class UpstreamNode:
     path: str
     line: int
     argument: str
-    children: list["UpstreamNode"] = field(default_factory=list)
+    children: list[UpstreamNode] = field(default_factory=list)
 
 
 @dataclass

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from codeinsight.domain import (
@@ -29,7 +29,7 @@ def test_save_and_reload_project_source_file_and_symbols(tmp_path: Path) -> None
                 relative_path="main.py",
                 language=Language.PYTHON,
                 content_hash="abc123",
-                last_analyzed_at=datetime.now(timezone.utc),
+                last_analyzed_at=datetime.now(UTC),
                 analysis_status=AnalysisFileStatus.ANALYZED,
             )
         )
@@ -52,7 +52,7 @@ def test_save_and_reload_project_source_file_and_symbols(tmp_path: Path) -> None
                 analysis_id="a1",
                 project_id="p1",
                 analyzer_version="0.1.0",
-                analysis_timestamp=datetime.now(timezone.utc),
+                analysis_timestamp=datetime.now(UTC),
                 status=AnalysisStatus.SUCCESS,
             )
         )

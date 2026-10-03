@@ -83,7 +83,7 @@ class AnalysisRepository:
     def close(self) -> None:
         self._connection.close()
 
-    def __enter__(self) -> "AnalysisRepository":
+    def __enter__(self) -> AnalysisRepository:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

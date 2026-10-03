@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application.paths import is_test_path
 from codeinsight.application.project_index import ProjectIndex
-from codeinsight.application.source_scan import ScanResult, ScannedFile, iter_python_files
-from codeinsight.domain import Project, ReferenceKind, ResolutionStatus, Symbol, SymbolKind
+from codeinsight.application.source_scan import ScannedFile, ScanResult, iter_python_files
+from codeinsight.domain import Project, ReferenceKind, ResolutionStatus, SymbolKind
 
 _ENV_READ = frozenset({"os.getenv", "getenv", "os.environ.get", "environ.get"})
 _ENV_WRITE = frozenset({"os.environ.setdefault", "environ.setdefault", "os.putenv"})
@@ -255,7 +256,7 @@ def _dest(names: list[str]) -> str | None:
     return chosen.lstrip("-").replace("-", "_") or None
 
 
-def _cli_detail(keyword: dict[str, ast.AST]) -> str:
+def _cli_detail(keyword: Mapping[str, ast.AST]) -> str:
     parts = []
     if "action" in keyword:
         parts.append(f"action={fa.unparse(keyword['action'], 20)}")
@@ -274,7 +275,7 @@ def _is_literal(node: ast.AST) -> bool:
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
         return all(_is_literal(e) for e in node.elts)
     if isinstance(node, ast.Dict):
-        return all(k is not None and _is_literal(k) and _is_literal(v) for k, v in zip(node.keys, node.values))
+        return all(k is not None and _is_literal(k) and _is_literal(v) for k, v in zip(node.keys, node.values, strict=True))
     if isinstance(node, ast.UnaryOp):
         return _is_literal(node.operand)
     return False

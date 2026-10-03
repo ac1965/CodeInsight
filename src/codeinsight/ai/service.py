@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import builtins
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from codeinsight.ai.citations import CitationValidator, ValidationReport
 from codeinsight.ai.config import AIConfig
@@ -87,7 +88,7 @@ class ExplanationService:
             project_id=project.project_id,
             target_kind=context.target_kind,
             target=context.target if context.target_kind != "question" else (question or context.target),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             provider=provider.name,
             model=completion.model or provider.model,
             prompt_hash=PromptBuilder.digest(messages),
@@ -116,7 +117,7 @@ class ExplanationService:
         return self._repository.get_explanation(project.project_id, id_prefix)
 
     @staticmethod
-    def stale_paths(project: Project, index: ProjectIndex, explanation: Explanation) -> list[str]:
+    def stale_paths(project: Project, index: ProjectIndex, explanation: Explanation) -> builtins.list[str]:
         """解説の根拠にしたファイルのうち、生成時から変更された（または無くなった）もの。"""
 
         freshness = FreshnessService()

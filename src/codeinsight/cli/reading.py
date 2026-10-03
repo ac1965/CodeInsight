@@ -5,14 +5,15 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter, defaultdict
+
 from codeinsight.analysis import flow_analysis as fa
-from codeinsight.application.understand_service import UnderstandService
+from codeinsight.application import FlowAnalysisError, FlowService, NavigationService, RiskService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.external_service import CATEGORY_LABELS
-from codeinsight.application import FlowAnalysisError, FlowService, NavigationService, RiskService
-from codeinsight.domain import SymbolKind
-from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, warn_if_stale, safe
+from codeinsight.application.understand_service import UnderstandService
+from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.cli.project import OPERATION_LABELS, group_uses, lines_text
+from codeinsight.domain import Language, SymbolKind
 
 
 def _flow_service(args: argparse.Namespace):
@@ -206,12 +207,12 @@ def cmd_exceptions(args: argparse.Namespace) -> int:
         )
         return 0
     print(f"{safe(symbol.qualified_name)} から呼び出し元へ出うる例外（明示的な raise のみ、深さ {args.depth}）:")
-    for exc in sorted(report.propagated, key=lambda e: (e.exception, e.raised_line)):
-        origin = index.path_of(exc.raised_in.file_id)
-        print(f"  {safe(exc.exception)}   raise: {safe(origin)}:{exc.raised_line}  {safe(exc.raised_in.qualified_name)}")
-        if exc.chain:
+    for item in sorted(report.propagated, key=lambda e: (e.exception, e.raised_line)):
+        origin = index.path_of(item.raised_in.file_id)
+        print(f"  {safe(item.exception)}   raise: {safe(origin)}:{item.raised_line}  {safe(item.raised_in.qualified_name)}")
+        if item.chain:
             route = safe(symbol.qualified_name) + "".join(
-                f" →(L{line}) {safe(callee.qualified_name)}" for callee, line in exc.chain
+                f" →(L{line}) {safe(callee.qualified_name)}" for callee, line in item.chain
             )
             print(f"      経路: {route}")
     if not report.propagated:
@@ -315,10 +316,10 @@ def cmd_understand(args: argparse.Namespace) -> int:
             print(f"  引数 {safe(p.name)}{ann}{default}{kind}{actual}")
     elif u.language == Language.PYTHON and symbol.kind.value in ("function", "method"):
         print("  引数なし")
-    for item in u.config_reads:
-        default = f" 既定値 {safe(item.default)}" if item.default else ""
-        print(f"  設定値: {CONFIG_LABELS[item.kind]} {safe(item.name)}{default}  ({safe(item.path)}:{item.line})")
-    for library, category, operation, inferred, lines in group_uses(u.external_inputs)[:limit]:
+    for config in u.config_reads:
+        default = f" 既定値 {safe(config.default)}" if config.default else ""
+        print(f"  設定値: {CONFIG_LABELS[config.kind]} {safe(config.name)}{default}  ({safe(config.path)}:{config.line})")
+    for library, category, operation, _inferred, lines in group_uses(u.external_inputs)[:limit]:
         print(f"  外部からの入力の可能性（直接）: [{CATEGORY_LABELS[category]}・{OPERATION_LABELS[operation]}] {safe(library)}  {lines_text(lines)}")
     if u.effects:
         seen_reads: set[tuple] = set()
@@ -335,15 +336,15 @@ def cmd_understand(args: argparse.Namespace) -> int:
     for text in u.parameter_mutations:
         print(f"  引数: {safe(text)}")
     if u.effects:
-        for library, category, operation, inferred, lines in group_uses(u.effects.direct):
+        for library, category, operation, _inferred, lines in group_uses(u.effects.direct):
             count = f" ×{len(lines)}" if len(lines) > 1 else ""
             print(f"  外部への副作用の候補（直接）: [{CATEGORY_LABELS[category]}・{OPERATION_LABELS[operation]}] {safe(library)}{count}  {lines_text(lines)}")
         seen = set()
         for use, route in u.effects.reachable:
-            key = (use.category, use.library, route[-1])
-            if key in seen:
+            effect_key = (use.category, use.library, route[-1])
+            if effect_key in seen:
                 continue
-            seen.add(key)
+            seen.add(effect_key)
             print(f"  外部への副作用の候補（呼び出し先経由）: [{CATEGORY_LABELS[use.category]}・{OPERATION_LABELS[use.operation]}] {safe(use.library)}  経路: {' → '.join(safe(r) for r in route)}")
     if not (u.state_changes or u.parameter_mutations or (u.effects and (u.effects.direct or u.effects.reachable))):
         print("  確認できる状態変更・引数の変更・外部への副作用はありません（静的に追える範囲）")

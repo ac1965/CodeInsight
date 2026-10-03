@@ -127,9 +127,9 @@ def test_exporters_render_styles_and_escape_untrusted_labels() -> None:
     assert "-->" in mermaid and "-.->" in mermaid
     assert 'evil"' not in mermaid  # 引用符はエスケープされる
     assert "\n</script>" not in mermaid
-    node_lines = [l for l in mermaid.splitlines() if l.strip().startswith("n0[")]
+    node_lines = [ln for ln in mermaid.splitlines() if ln.strip().startswith("n0[")]
     assert len(node_lines) == 1  # 改行がノード定義を分断しない
-    assert all(not l.startswith("%%") or "\n" not in l for l in mermaid.splitlines())
+    assert all(not ln.startswith("%%") or "\n" not in ln for ln in mermaid.splitlines())
 
     dot = to_dot(model)
     assert 'style="solid"' in dot and 'style="dashed"' in dot and 'style="dotted"' in dot

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      - name: 依存のインストール
+        run: uv sync --extra dev --python ${{ matrix.python-version }}
+      - name: テスト（AIへの送信は行わない。HTTPはこの計算機内のスタブのみ）
+        run: uv run --python ${{ matrix.python-version }} pytest -q tests
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - name: ruff
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy

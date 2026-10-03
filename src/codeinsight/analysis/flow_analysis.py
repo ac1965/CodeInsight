@@ -11,6 +11,7 @@ import ast
 import builtins
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import cast
 
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 MUTATING_METHODS = frozenset(
@@ -172,22 +173,23 @@ def analyze_control_flow(
                 if _loop_retries(statement):
                     summary.hints.append(Hint("retry", statement.lineno, "ループ内のtry/exceptで例外を受けて繰り返す（リトライの可能性）"))
             elif isinstance(statement, ast.Try) or statement.__class__.__name__ == "TryStar":
-                types_per_handler = tuple(exception_types_of(h) for h in statement.handlers)
+                try_stmt = cast("ast.Try", statement)
+                types_per_handler = tuple(exception_types_of(h) for h in try_stmt.handlers)
                 add("try", statement, depth)
-                summary.tries.append(TryRange(statement.lineno, end_line_of(statement.body[-1]), types_per_handler))
-                walk(statement.body, depth + 1, (_flatten(types_per_handler), *handler_stack))
-                for handler in statement.handlers:
+                summary.tries.append(TryRange(statement.lineno, end_line_of(try_stmt.body[-1]), types_per_handler))
+                walk(try_stmt.body, depth + 1, (_flatten(types_per_handler), *handler_stack))
+                for handler in try_stmt.handlers:
                     decisions += 1
                     types = exception_types_of(handler)
                     add("except", handler, depth, ", ".join(types))
                     summary.handlers.append(handler_info(statement, handler, types))
                     walk(handler.body, depth + 1, handler_stack)
-                if statement.orelse:
-                    walk(statement.orelse, depth + 1, handler_stack)
-                if statement.finalbody:
-                    summary.items.append(FlowItem("finally", statement.finalbody[0].lineno, end_line_of(statement.finalbody[-1]), depth, ""))
+                if try_stmt.orelse:
+                    walk(try_stmt.orelse, depth + 1, handler_stack)
+                if try_stmt.finalbody:
+                    summary.items.append(FlowItem("finally", try_stmt.finalbody[0].lineno, end_line_of(try_stmt.finalbody[-1]), depth, ""))
                     counts["finally"] += 1
-                    walk(statement.finalbody, depth + 1, handler_stack)
+                    walk(try_stmt.finalbody, depth + 1, handler_stack)
             elif isinstance(statement, (ast.With, ast.AsyncWith)):
                 add("with", statement, depth, ", ".join(unparse(i.context_expr, 40) for i in statement.items))
                 expression_items(statement, depth)
@@ -405,12 +407,12 @@ def analyze_variables(function: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[
                 info(name_node.id).definitions.append(Definition(node.lineno, "for", unparse(node.iter, 60), sources))
                 _add_value_flows(info, sources, name_node.id, node.iter, node.lineno)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
-            for item in node.items:
-                if item.optional_vars is not None:
-                    sources = names_in(item.context_expr)
-                    for name_node in target_names(item.optional_vars):
-                        info(name_node.id).definitions.append(Definition(node.lineno, "with", unparse(item.context_expr, 60), sources))
-                        _add_value_flows(info, sources, name_node.id, item.context_expr, node.lineno)
+            for with_item in node.items:
+                if with_item.optional_vars is not None:
+                    sources = names_in(with_item.context_expr)
+                    for name_node in target_names(with_item.optional_vars):
+                        info(name_node.id).definitions.append(Definition(node.lineno, "with", unparse(with_item.context_expr, 60), sources))
+                        _add_value_flows(info, sources, name_node.id, with_item.context_expr, node.lineno)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 info((alias.asname or alias.name).split(".", 1)[0]).definitions.append(Definition(node.lineno, "import", "", ()))
@@ -439,7 +441,7 @@ def _collect_nested_uses(scope: ast.AST, info, variables) -> None:
             info(node.id).uses.append(node.lineno)
 
 
-def _add_value_flows(info, sources: tuple[str, ...], target: str, value: ast.AST, line: int) -> None:
+def _add_value_flows(info, sources: tuple[str, ...], target: str, value: ast.AST | None, line: int) -> None:
     kind = "copy" if isinstance(value, ast.Name) else "derive"
     for source in sources:
         info(source).flows.append(Flow(kind, line, target))

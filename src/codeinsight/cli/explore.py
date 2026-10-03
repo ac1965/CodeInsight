@@ -7,15 +7,46 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
 from codeinsight.analysis.call_graph import Direction
-from codeinsight.application import AnalysisCoordinator, AnalysisProgress, DescribeService, FreshnessService, MatchMode, NavigationService, OverviewService, ProjectManager, SearchService, SymbolNotFoundError
+from codeinsight.application import (
+    AnalysisCoordinator,
+    AnalysisProgress,
+    DescribeService,
+    FreshnessService,
+    MatchMode,
+    NavigationService,
+    OverviewService,
+    ProjectManager,
+    SearchService,
+    SymbolNotFoundError,
+)
 from codeinsight.application.search_service import SymbolHit
 from codeinsight.bootstrap import build_symbol_extractor
+from codeinsight.cli.common import (
+    STATIC_NOTE,
+    STATUS_LABEL,
+    CliError,
+    NoteTable,
+    dependency_dict,
+    emit_json,
+    format_reference,
+    open_project_context,
+    prepare_read,
+    print_call_tree,
+    reference_dict,
+    resolve_db_path,
+    resolve_symbol_arg,
+    safe,
+    stale_file_paths,
+    status_text,
+    symbol_dict,
+    symbol_not_found,
+    warn_if_stale,
+)
 from codeinsight.domain import AnalysisStatus, Confidence, FileFreshness, ResolutionStatus, SymbolKind
 from codeinsight.infrastructure import AnalysisRepository
 from codeinsight.presentation import build_structure_tree, render_tree_text, tree_to_dict
-from codeinsight.cli.common import CliError, NoteTable, STATIC_NOTE, STATUS_LABEL, open_project_context, resolve_db_path, dependency_dict, emit_json, format_reference, symbol_not_found, prepare_read, print_call_tree, reference_dict, resolve_symbol_arg, stale_file_paths, status_text, symbol_dict, warn_if_stale, safe
-
 
 # --- コマンド ---
 
@@ -170,7 +201,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     search = SearchService(repository)
     if args.files:
         files = search.search_files(project, args.query)
-        payload = [{"kind": "file", "path": f.relative_path, "language": f.language.value} for f in files]
+        payload: list[dict[str, object]] = [{"kind": "file", "path": f.relative_path, "language": f.language.value} for f in files]
         lines = [f"{safe(f.relative_path)}\t{f.language.value}" for f in files]
         stale: list[str] = []
     elif args.text:

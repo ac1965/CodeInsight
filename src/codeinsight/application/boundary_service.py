@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application.project_index import ProjectIndex
-from codeinsight.application.source_scan import ScanResult, ScannedFile, iter_python_files
+from codeinsight.application.source_scan import ScannedFile, ScanResult, iter_python_files
 from codeinsight.domain import Language, Project, Symbol, SymbolKind
 
 KIND_LABELS = {

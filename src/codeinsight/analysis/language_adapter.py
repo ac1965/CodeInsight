@@ -23,7 +23,7 @@ class SourceUnit:
     @classmethod
     def from_path(
         cls, file_id: str, absolute_path: Path, relative_path: str | None = None
-    ) -> "SourceUnit":
+    ) -> SourceUnit:
         return cls(
             file_id=file_id,
             absolute_path=absolute_path,

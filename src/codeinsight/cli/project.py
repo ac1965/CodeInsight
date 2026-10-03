@@ -5,18 +5,21 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
+
+from codeinsight.application import NavigationService
+from codeinsight.application.architecture_service import ROLE_LABELS, ArchitectureService
+from codeinsight.application.boundary_service import KIND_LABELS as BOUNDARY_LABELS
+from codeinsight.application.boundary_service import BoundaryService
+from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
+from codeinsight.application.config_service import ConfigService
 from codeinsight.application.environment_service import EnvironmentService
-from codeinsight.application.spec_check_service import SpecCheckService
+from codeinsight.application.external_service import CATEGORY_LABELS, ExternalService
 from codeinsight.application.history_service import HistoryService
 from codeinsight.application.impact_service import ImpactService
+from codeinsight.application.spec_check_service import SpecCheckService
 from codeinsight.application.test_map_service import TestMapService
 from codeinsight.application.unused_service import UnusedService
-from codeinsight.application.boundary_service import KIND_LABELS as BOUNDARY_LABELS, BoundaryService
-from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS, ConfigService
-from codeinsight.application.architecture_service import ROLE_LABELS, ArchitectureService
-from codeinsight.application.external_service import CATEGORY_LABELS, ExternalService
-from codeinsight.application import NavigationService
-from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, warn_if_stale, safe
+from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 
 
 def cmd_externals(args: argparse.Namespace) -> int:

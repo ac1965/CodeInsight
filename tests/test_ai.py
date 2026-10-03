@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import shutil
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -18,7 +16,6 @@ from codeinsight.ai.service import ExplanationService
 from codeinsight.application import NavigationService
 from codeinsight.cli import main
 from codeinsight.domain import ExplanationStatus
-
 
 # --- テスト用のAI ---
 

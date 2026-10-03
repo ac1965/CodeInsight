@@ -5,19 +5,34 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+
+from codeinsight.application import MatchMode
 from codeinsight.application.boundary_service import KIND_LABELS as BOUNDARY_LABELS
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.external_service import CATEGORY_LABELS
-from codeinsight.application import MatchMode
-from codeinsight.application.risk_service import RULES as RISK_RULES
 from codeinsight.application.graph_builder import Traversal
-from codeinsight.domain import SymbolKind
-from codeinsight.cli.common import CliError, OPENED
-from codeinsight.cli.explore import cmd_analyze, cmd_def, cmd_deps, cmd_describe, cmd_overview, cmd_path, cmd_search, cmd_show, cmd_status, cmd_symbols, cmd_trace, cmd_tree, cmd_unresolved, reference_command
+from codeinsight.application.risk_service import RULES as RISK_RULES
+from codeinsight.cli.common import OPENED, CliError
+from codeinsight.cli.explore import (
+    cmd_analyze,
+    cmd_def,
+    cmd_deps,
+    cmd_describe,
+    cmd_overview,
+    cmd_path,
+    cmd_search,
+    cmd_show,
+    cmd_status,
+    cmd_symbols,
+    cmd_trace,
+    cmd_tree,
+    cmd_unresolved,
+    reference_command,
+)
 from codeinsight.cli.graph import cmd_graph
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
 from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_risks, cmd_state, cmd_understand
-
+from codeinsight.domain import SymbolKind
 
 # --- パーサー ---
 

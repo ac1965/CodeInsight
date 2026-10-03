@@ -127,9 +127,9 @@ class ArchitectureService:
             file_of_symbol = {s.symbol_id: s.file_id for s in index.symbols.values()}
             file_by_path = {f.relative_path: fid for fid, f in index.files.items()}
             for use in externals.uses:
-                fid = file_of_symbol.get(use.source_id or "") or file_by_path.get(use.path)
-                if fid in component_of:
-                    components[component_of[fid]].externals[use.category] += 1
+                owner_file = file_of_symbol.get(use.source_id or "") or file_by_path.get(use.path)
+                if owner_file in component_of:
+                    components[component_of[owner_file]].externals[use.category] += 1
 
         for name, component in components.items():
             for target in component.depends_on:

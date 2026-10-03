@@ -8,13 +8,13 @@ import json
 import re
 import sys
 from pathlib import Path
+
 from codeinsight.analysis.call_graph import CallNode
 from codeinsight.application import AmbiguousSymbolError, FreshnessService, NavigationService, ProjectIndex, SymbolNotFoundError
 from codeinsight.application.navigation_service import DependencyHit, ReferenceHit
 from codeinsight.application.search_service import SymbolHit
 from codeinsight.domain import Confidence, FileFreshness, Project, ResolutionStatus, SymbolKind
 from codeinsight.infrastructure import AnalysisRepository, default_db_path
-
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 

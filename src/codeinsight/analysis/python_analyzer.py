@@ -5,6 +5,7 @@ import builtins
 import sys
 from collections import Counter
 from pathlib import PurePosixPath
+from typing import TypeGuard
 
 from codeinsight.analysis.ids import IdAllocator, build_symbol
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
@@ -588,7 +589,7 @@ class _ReferenceCollector(ast.NodeVisitor):
     def _self_attribute_stores(node: ast.AST, self_name: str):
         """`self.X` への代入を (属性名, 代入される式, 型注釈) で列挙する。"""
 
-        def is_self_attribute(target: ast.AST) -> bool:
+        def is_self_attribute(target: ast.AST) -> TypeGuard[ast.Attribute]:
             return (
                 isinstance(target, ast.Attribute)
                 and isinstance(target.ctx, ast.Store)

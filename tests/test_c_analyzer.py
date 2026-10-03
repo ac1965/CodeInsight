@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from codeinsight.analysis.language_adapter import SourceUnit
 from codeinsight.analysis.c_analyzer import CAnalyzer
+from codeinsight.analysis.language_adapter import SourceUnit
 from codeinsight.domain import SymbolKind
 
 

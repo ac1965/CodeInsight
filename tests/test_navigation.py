@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def test_search_files_and_text_report_staleness(
     stale = [h for h in search.search_text(project, "fib(") if h.path == "ops.c"]
     assert stale and all(h.freshness == FileFreshness.STALE for h in stale)
 
-    with pytest.raises(Exception):
+    with pytest.raises(re.error):
         search.search_text(project, "(", regex=True)
 
 

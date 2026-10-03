@@ -23,7 +23,7 @@ AI_OPTS   = $(if $(MODEL),--ai-model $(MODEL))
 .DEFAULT_GOAL := help
 .PHONY: help setup test test-v test-fast check compile clean \
         analyze status overview architecture unresolved \
-        understand explain-dry explain ai-status ai-eval
+        understand explain-dry explain ai-status ai-eval lint
 
 help: ## 使えるタスクの一覧を表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -45,7 +45,11 @@ test-fast: ## 最初に失敗したところで止めて実行する
 compile: ## 構文エラーが無いかを確認する
 	$(UV) run python -m compileall -q src
 
-check: compile test ## 構文の確認とテストをまとめて実行する
+lint: ## ruff と mypy で静的検査する（CIと同じ）
+	$(UV) run ruff check .
+	$(UV) run mypy
+
+check: compile lint test ## 構文の確認・静的検査・テストをまとめて実行する
 
 clean: ## 生成物（キャッシュ・ビルド成果物）を削除する。解析結果DB(~/.codeinsight)は消さない
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null; true

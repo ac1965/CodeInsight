@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+from typing import cast
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application.graph_builder import EdgeStyle, GraphEdge, GraphModel, GraphNode
@@ -113,7 +114,7 @@ class CfgBuilder:
         if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
             return self._loop(statement, entering)
         if isinstance(statement, ast.Try) or statement.__class__.__name__ == "TryStar":
-            return self._try(statement, entering)
+            return self._try(cast("ast.Try", statement), entering)
         if isinstance(statement, (ast.With, ast.AsyncWith)):
             node = self._node("block", f"L{statement.lineno}: with {', '.join(fa.unparse(i.context_expr, 30) for i in statement.items)}", statement.lineno)
             self._connect(entering, node)

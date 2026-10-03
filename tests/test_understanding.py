@@ -383,3 +383,15 @@ def test_docs_check_understands_boolean_option_pairs_and_ignores_file_names(anal
     project, nav, index = _setup(analyzed, root)
     report = SpecCheckService().check(project, index)
     assert report.missing_in_code == []
+
+
+def test_cli_understand_handles_a_python_function_without_parameters(tmp_path: Path, capsys) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "tool.py").write_text("def ping():\n    return 1\n")
+    db = str(tmp_path / "p.sqlite")
+    main(["analyze", str(root), "--db", db])
+    capsys.readouterr()
+
+    assert main(["understand", "tool.ping", "--db", db]) == 0
+    assert "引数なし" in capsys.readouterr().out

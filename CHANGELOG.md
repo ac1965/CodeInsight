@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## CI・静的検査（未リリース）
+
+### 追加
+
+* GitHub Actions（`.github/workflows/ci.yml`）: Python 3.11〜3.13 のテスト、ruff、mypy。
+* `make lint`。`make check` は構文確認・静的検査・テストをまとめて実行する。
+
+### 修正
+
+* mypy が見つけた不具合: `understand` が、引数を持たないPython関数で `Language` の未定義により異常終了する。
+* `requires-python` を `>=3.11` に修正（設定ファイルの読み込みに `tomllib` を使うため。従来の `>=3.10` は誤り）。
+
 ## AI解説の評価セット（未リリース）
 
 ### 追加

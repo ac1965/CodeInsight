@@ -31,7 +31,7 @@ class ProjectIndex:
     _dependencies: list[Dependency] | None = field(default=None, repr=False)
 
     @classmethod
-    def load(cls, repository: AnalysisRepository, project_id: str) -> "ProjectIndex":
+    def load(cls, repository: AnalysisRepository, project_id: str) -> ProjectIndex:
         files = {f.file_id: f for f in repository.list_source_files(project_id)}
         return cls(
             project_id=project_id,
@@ -44,7 +44,7 @@ class ProjectIndex:
             _paths={f.relative_path: f for f in files.values()},
         )
 
-    def materialize(self) -> "ProjectIndex":
+    def materialize(self) -> ProjectIndex:
         """参照・依存関係を今すぐ読み込む。リポジトリを閉じた後も索引を使う場合に呼ぶ。"""
 
         _ = self.references, self.dependencies
@@ -62,7 +62,7 @@ class ProjectIndex:
             self._dependencies = self._load_dependencies()
         return self._dependencies
 
-    def excluding(self, patterns: Iterable[str]) -> "ProjectIndex":
+    def excluding(self, patterns: Iterable[str]) -> ProjectIndex:
         """パスが除外パターン（fnmatch形式、例: ``tests/*``）に一致するファイルを取り除いた索引。
 
         表示を絞り込むための操作で、保存済みの解析結果は変更しない。
@@ -79,7 +79,7 @@ class ProjectIndex:
             }
         )
 
-    def under(self, prefix: str) -> "ProjectIndex":
+    def under(self, prefix: str) -> ProjectIndex:
         """指定のファイルまたはディレクトリ（相対パス）の配下だけに絞った索引。"""
 
         prefix = prefix.rstrip("/")
@@ -91,7 +91,7 @@ class ProjectIndex:
             }
         )
 
-    def _without(self, dropped: set[str]) -> "ProjectIndex":
+    def _without(self, dropped: set[str]) -> ProjectIndex:
         """指定ファイルのシンボルを取り除く。それらのファイル内の参照・依存関係、およびそれらの
         シンボルを指す参照・依存関係も取り除く。"""
 

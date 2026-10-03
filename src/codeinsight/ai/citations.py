@@ -188,7 +188,7 @@ class CitationValidator:
             source_file = self._index.file_by_path(path)
             try:
                 data = (self._project.root_path / path).read_bytes()
-                self._fresh[path] = bool(source_file) and hashlib.sha256(data).hexdigest() == source_file.content_hash
+                self._fresh[path] = source_file is not None and hashlib.sha256(data).hexdigest() == source_file.content_hash
                 self._line_counts[path] = len(data.decode("utf-8", errors="replace").splitlines())
             except OSError:
                 self._fresh[path] = False

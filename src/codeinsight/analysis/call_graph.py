@@ -24,7 +24,7 @@ class CallNode:
     symbol: Symbol | None
     label: str
     reference: Reference | None = None  # 親からこのノードへの辺の根拠
-    children: list["CallNode"] = field(default_factory=list)
+    children: list[CallNode] = field(default_factory=list)
     recursive: bool = False  # 祖先に同じシンボルがあり、再帰（循環）になっている
     truncated: bool = False  # 深さ制限で子の展開を打ち切った
 

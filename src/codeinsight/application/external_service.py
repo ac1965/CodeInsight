@@ -298,11 +298,11 @@ class ExternalService:
             language = index.files[source.file_id].language
             path = index.path_of(source.file_id)
             if reference.resolution_status == ResolutionStatus.EXTERNAL:
-                name = external_name(reference) if language == Language.PYTHON else reference.target_name
-                category = (categorize(name, language) if language == Language.PYTHON else categorize_c_function(name)) if name else None
-                operation = classify_operation(name) if name else "call"
+                callee = external_name(reference) if language == Language.PYTHON else reference.target_name
+                category = (categorize(callee, language) if language == Language.PYTHON else categorize_c_function(callee)) if callee else None
+                operation = classify_operation(callee) if callee else "call"
                 if category and category not in ("other",) and operation != "pure":  # 純粋な計算・例外クラスは外部への操作ではない
-                    report.uses.append(ExternalUse(category, name, operation, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "confirmed"))
+                    report.uses.append(ExternalUse(category, callee or "", operation, source.symbol_id, source.qualified_name, path, reference.source_location.start_line, "call", "confirmed"))
             elif reference.resolution_status == ResolutionStatus.UNRESOLVED and reference.reference_kind == ReferenceKind.CALL:
                 method = reference.target_name.rsplit(".", 1)[-1]
                 if "." in reference.target_name and (method in _EFFECT_METHODS or method in _READ_METHODS):

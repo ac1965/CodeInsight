@@ -8,8 +8,8 @@ from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
     KEY_EXPORT,
     KEY_IMPORT,
-    KEY_STAR,
     KEY_SELF,
+    KEY_STAR,
     KEY_SUPER,
     KEY_TYPED,
 )
@@ -333,7 +333,7 @@ class ReferenceResolver:
         else:
             self._set(reference, outcome.status, outcome.note)
 
-    def _lookup_name(self, dotted: str, imported: bool, depth: int = 0) -> "_Lookup":
+    def _lookup_name(self, dotted: str, imported: bool, depth: int = 0) -> _Lookup:
         """修飾名をプロジェクト内のシンボルに解決する（再エクスポートもたどる）。"""
 
         candidates, by_suffix = self._python_lookup(dotted)
