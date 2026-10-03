@@ -46,3 +46,30 @@
   (core-greet "mode"))
 
 (provide 'core)
+
+(defvar core-log nil)
+
+(defun core-risky (x)
+  "フロー解析の例。"
+  (let ((total 0) (local-only nil))
+    (condition-case err
+        (progn
+          (when (null x)
+            (user-error "x is nil"))
+          (dolist (i x)
+            (setq total (+ total i))
+            (push i core-log))
+          (cond ((> total 10) (error "too big: %d" total))
+                ((= total 0) (setq local-only t))
+                (t (core-greet "ok"))))
+      (error (message "failed: %s" err) nil))
+    (unwind-protect
+        (setq core-counter total)
+      (setq local-only nil))
+    (core-fail)
+    (ignore-errors (core-fail))
+    total))
+
+(defun core-fail ()
+  (signal 'wrong-type-argument '(x))
+  (kill-emacs 1))

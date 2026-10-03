@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Emacs Lispの関数単位の解析（未リリース）
+
+* `flow` / `exceptions` / `state` がEmacs Lispに対応（`analysis/elisp_flow_analysis.py`、`application/elisp_flow_service.py`、`cli/reading_el.py`）。制御フロー、シグナルと `condition-case` 等の保護、呼び出し先を経由した送出の連鎖（推定）、グローバル変数への書き込み。`dataflow` は未対応と明示して拒否する。
+* Emacs本体の `lisp/` の53,117関数で、異常終了0件（頑健性の確認）。この実行で見つけた `condition-case-unless-debug` の未対応を修正。
+
 ## Emacs Lispアダプター（未リリース）
 
 * `.el` のシンボル・呼び出し・`require` の依存を抽出（`analysis/elisp_analyzer.py`）。解決は名前の一致による推定として、確定と区別する。

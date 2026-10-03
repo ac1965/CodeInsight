@@ -12,7 +12,7 @@ from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.external_service import CATEGORY_LABELS
 from codeinsight.application.understand_service import UnderstandService
-from codeinsight.cli import reading_c
+from codeinsight.cli import reading_c, reading_el
 from codeinsight.cli.common import CliError, coverage_note, emit_json, not_covered, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.cli.project import OPERATION_LABELS, group_uses, lines_text
 from codeinsight.domain import Language, SymbolKind
@@ -32,11 +32,17 @@ def _is_c(index, symbol) -> bool:
     return index.files[symbol.file_id].language == Language.C
 
 
+def _is_elisp(index, symbol) -> bool:
+    return index.files[symbol.file_id].language == Language.ELISP
+
+
 def cmd_flow(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)
     if _is_c(index, symbol):
         return reading_c.flow(args, project, index, navigation, symbol, stale)
+    if _is_elisp(index, symbol):
+        return reading_el.flow(args, project, index, navigation, symbol, stale)
     try:
         summary = service.control_flow(project, index, symbol)
     except FlowAnalysisError as exc:
@@ -124,6 +130,8 @@ def cmd_dataflow(args: argparse.Namespace) -> int:
     symbol = _flow_symbol(args, navigation, index, project)
     if _is_c(index, symbol):
         return reading_c.dataflow(args, project, index, navigation, symbol, stale)
+    if _is_elisp(index, symbol):
+        raise CliError("dataflow は、Emacs Lispでは未対応です（制御フロー flow・例外 exceptions・状態 state は対応しています）。")
     try:
         if args.variable is None:
             variables = service.variables(project, index, symbol)
@@ -156,6 +164,8 @@ def cmd_state(args: argparse.Namespace) -> int:
     symbol = _flow_symbol(args, navigation, index, project)
     if _is_c(index, symbol) and symbol.kind == SymbolKind.FUNCTION:
         return reading_c.state(args, project, index, navigation, symbol, stale)
+    if _is_elisp(index, symbol) and symbol.kind in (SymbolKind.FUNCTION, SymbolKind.MACRO):
+        return reading_el.state(args, project, index, navigation, symbol, stale)
     try:
         if symbol.kind == SymbolKind.CLASS:
             accesses = service.class_state(project, index, symbol)
@@ -199,6 +209,8 @@ def cmd_exceptions(args: argparse.Namespace) -> int:
     symbol = _flow_symbol(args, navigation, index, project)
     if _is_c(index, symbol):
         return reading_c.exceptions(args, project, index, navigation, symbol, stale)
+    if _is_elisp(index, symbol):
+        return reading_el.exceptions(args, project, index, navigation, symbol, stale)
     try:
         report = service.exceptions(project, index, symbol, args.depth)
     except FlowAnalysisError as exc:
