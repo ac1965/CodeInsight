@@ -42,8 +42,9 @@ pytest -v
 | `test_config_boundaries.py` | 8 | 環境変数・CLI引数と使用箇所・定数・設定ファイル、エントリポイント・CLI・HTTP・イベント・スレッド・非同期・キャッシュ | 結合 |
 | `test_understanding.py` | 17 | 操作の分類（純粋な計算の除外）、未使用候補の確度、テスト対応、影響範囲、Git履歴（一時リポジトリ）、読解カード（8つの問い）、実行環境、文書との照合 | 結合 |
 | `test_dynamic.py` | 11 | 動的解析のスタブ: 許可モデル（既定は拒否・許可とコマンドの両方が必要・隔離なしは追加の許可・不正値の拒否）、隔離の既定が最も厳しいこと、ドメイン・収集器、**実行系の呼び出しが無いことの検査**、許可の有無にかかわらず実行されないこと、`dynamic-plan`/`dynamic-run` のCLI |
+| `test_reading_report.py` | 12 | 1ファイル版のレポート: 表紙・目次・章・CSP、対象由来の文字列のエスケープ、打ち切りと省略の明示、図のSVG埋め込み、AI解説の区別、**PDFの完成で返りブラウザが終了しなくても止まる**（偽のブラウザ）、ブラウザの失敗の報告、CLI、`make reading` での生成と目次への掲載、実ブラウザでのPDF生成 |
 | `test_c_flow.py` | 20 | Cの関数単位の解析: 制御構造・循環的複雑度・三項演算子・フォールスルー、データフロー（定義・使用・伝播・呼び出し先の仮引数）、状態（グローバル・静的・引数のポインタ）、終了経路、環境変数、リスク、マクロ呼び出しを含む式、古いソースの拒否、compile_commands の保存、呼び出し先の終了の伝播（連鎖・再帰での停止・深さの打ち切り・関数ポインタ・err系） |
-| `test_reading_makefile.py` | 9 | `make reading`: 資料一式と目次の生成・対象を変更しない・出力先が対象内のときの拒否・`reading-c-build` の許可制。言語によって対応範囲が異なるコマンド（`risks`・`config`・`environment`・`boundaries`・`understand`）が、検査していないことを注記し、「問題なし」と誤読させない |
+| `test_reading_makefile.py` | 11 | `make reading`: 資料一式と目次の生成・対象を変更しない・出力先が対象内のときの拒否・`reading-c-build` の許可制。言語によって対応範囲が異なるコマンド（`risks`・`config`・`environment`・`boundaries`・`understand`）が、検査していないことを注記し、「問題なし」と誤読させない |
 | `test_tui.py` | 11 | TUI: 表示幅（全角）、ツリー操作、呼び出し関係の状態表示と移動・履歴、未解決・外部へ移動できない理由、検索、終了・ヘルプ、画面の組み立て（注記・強調・古いファイル・小さい端末・画面外に描かない）、端末なしでの拒否、疑似端末での起動と終了 |
 | `test_retrieval.py` | 7 | 質問の検索: 識別子の分割・正規化、日本語の用語の展開、本文からの検索と古いファイルの除外、評価ケース（16問）の再現率が基準（85%）以上であること |
 | `test_ai.py` | 44 | AI解説: 設定の優先順位・同意（既定で送信しない、外部は追加の許可）・APIキーの秘匿、プロバイダー（HTTPスタブで要求・応答・エラー・キーの非漏えい）、根拠の組み立て（予算・ソース無し・古いソース・日本語の質問の検索）、プロンプトの規則、引用の検証（実在・範囲・渡した範囲外・古さ・根拠なし・存在しない名前・ファイル名の誤検出）、保存の分離・古さの検出・CLI結合 | 結合 |
@@ -57,7 +58,7 @@ pytest -v
 ## 実行結果（最終確認時点）
 
 ```
-296 passed
+308 passed
 ```
 
 全テストが成功している。
@@ -200,6 +201,7 @@ GCCの経路考慮の静的アナライザを、`risks` の補助にできるか
 | 9 | 実機（最小のLinux） | `make reading` が `python3` に依存し、無い環境で目次が作れず、失敗が隠れる | `uv run python` に統一、失敗を表示 | `test_makefile_does_not_depend_on_a_bare_python3`、Docker（python3なし・`CI=true`）での完走 |
 | 10 | CI | `setup-uv@v10` というタグが無い / Node.js 20 の廃止警告 | `@v10.2.0` に固定、`checkout@v7` | CI（lint・3.11〜3.13） |
 | 12 | 実機（利用者） | `OUT=~/x` の `~` が展開されず、一部のコマンドだけ展開されて大半の項目が失敗し、リテラルの `~` ディレクトリができる | `expand_path`（`~`の展開と絶対パス化）、空白を含むパスの拒否 | `test_tilde_in_paths_is_expanded_even_when_the_shell_does_not_expand_it`、`test_paths_with_spaces_are_refused_clearly` |
+| 13 | 実機 | Chrome（安定版）が、PDFを書いた後も補助プロセスが残って終了せず、PDF変換が180秒のタイムアウトになる | PDFの完成（先頭 `%PDF`・末尾 `%%EOF`・サイズ安定）を監視し、ブラウザをプロセスグループごと止める | `test_pdf_is_returned_as_soon_as_it_is_complete_even_if_the_browser_never_exits` |
 | 11 | 実機 | 言語未対応の機能の結果（0件・なし）が「問題なし」と誤読される | 対象外の言語を注記 | `test_language_limited_commands_say_what_they_did_not_check` ほか |
 
 ### AI解説（実際のローカルモデルでの確認）

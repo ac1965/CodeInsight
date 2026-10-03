@@ -93,6 +93,8 @@ make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1   # AIの解�
 make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure + ビルド記録(対象のconfigure/makeを実行するため許可が必須)
 ```
 
+`OUT/<名前>-reading.pdf` が、**全体を1つにまとめたPDF**です（表紙・目次・言語別の対応範囲・全体像と図・入口と境界・主要な関数の読解カード・注意して読む箇所・背景・付録。ページ番号つき）。PDFにはヘッドレスのブラウザ（Chrome・Chromium・Edge。環境変数 `CODEINSIGHT_BROWSER` で指定可）を使います。ブラウザが無い場合は、HTML（`<名前>-reading.html`）を残し、理由を示します（ブラウザで開いて「PDFとして保存」もできます）。`PDF=0` で作らない、`make reading-pdf OUT=…` で成果物から作り直せます。
+
 `OUT/README.md` が目次で、全体像 → 入口と境界 → 処理を追う(図・主要な関数の読解カード) → 注意して読む箇所 → 背景の順に読めます。取得できなかった項目は目次とログ(`logs/`)に記録します。**言語ごとの対応範囲も目次に明記します**(「0件」が、対応していない言語では「問題なし」を意味しないため)。
 
 ## 使い方(CLI)

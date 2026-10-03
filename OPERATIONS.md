@@ -265,11 +265,28 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | `BUILD` | `OUT/build` | `reading-c-build` のビルド先 |
 | `MODEL` / `AI_SEND` | なし | 両方あるときだけAI解説を作る |
 | `UV` | `uv` | uv コマンド |
+| `PDF` | （作る） | `PDF=0` で1ファイルのPDFを作らない |
+
+### 7.1.1 1ファイルのPDF
+
+`make reading` は、最後に成果物を1つのPDF（`OUT/<名前>-reading.pdf`）にまとめます。
+
+| 項目 | 内容 |
+| --- | --- |
+| 構成 | 表紙（対象・リビジョン・言語・解決状況）→ 目次 → 1. 読み方（言語別の対応範囲）→ 2. 全体像（図つき）→ 3. 入口と境界 → 4. 主要な関数の読解カード → 5. 注意して読む箇所 → 6. 背景 → （AI解説があれば）→ 付録（用語・警告・省略したもの） |
+| 変換 | 自己完結の印刷用HTMLを組み立て、ヘッドレスのブラウザでPDFにする。HTMLはスクリプトを含まず、Content-Security-Policy で外部通信を遮断する。対象の文字列はすべてエスケープする |
+| 図 | graphviz（`dot`）があれば、ノードが 60 個以下の図をSVGで埋め込む。多い図（例: 全体の呼び出しグラフ）は省略し、理由と、対話的な `graphs/*.html` の場所を示す |
+| 打ち切り | 各項目は先頭 400 行まで。超えたら、その旨と元のファイルを載せ、付録にも記録する（`reading-report --max-lines` で変更） |
+| ブラウザ | 環境変数 `CODEINSIGHT_BROWSER`、macOSのChrome/Chromium/Edge/Brave、PATH の順に探す。無ければ、HTMLを残して理由を示す（`make reading` 自体は失敗にしない） |
+| 再生成 | `make reading-pdf OUT=…`、または `codeinsight reading-report --out OUT [--format html] [--output FILE]` |
+
+ブラウザは、CodeInsight が生成したHTMLを描画するためだけに使います（対象のプログラムは実行しません）。一時的なプロファイルを使い、利用者のブラウザの設定・履歴には触れません。
 
 ### 7.2 出力の構成
 
 ```
 OUT/
+├── <名前>-reading.pdf     全体を1つにまとめたPDF（<名前>-reading.html も残る）
 ├── README.md              目次（読む順序、言語別の対応範囲、取得できなかった項目）
 ├── overview.txt / .json   全体像
 ├── architecture.txt       構成・層・循環・外部連携
@@ -429,6 +446,8 @@ timeout = 600
 | Cで解析が `partial`（失敗ファイルあり） | 他OS向けコード、未対応構文、記録に無い領域 | 失敗の理由は `analyze` の出力と `status`。「正常に解析した」ものとは扱われない。必要なら記録を拡充する |
 | Cの `risks` / 関数解析が「解析できません（libclangのバージョン差）」 | Python版libclangが知らないASTノード | 該当ファイルは検査済みとして扱われない。libclang パッケージを更新して再試行 |
 | `flow` などが「定義をソースから特定できません」 | 条件付きコンパイルで除外された定義、またはヘッダー内の定義で取り込み元が無い | 記録を拡充する、または別の定義を指定する |
+| PDFを作れなかった（「ブラウザが見つかりません」） | Chrome・Chromium・Edge が無い | 入れる、または `CODEINSIGHT_BROWSER` で指定する。HTMLは残るので、ブラウザで開いて「PDFとして保存」もできる |
+| PDFの図が「省略」になる | ノードが多い、または graphviz（`dot`）が無い | 対話的な `graphs/*.html` を使う。`reading-report --max-graph-nodes` で上限を上げられる |
 | `tui` が「端末でのみ使えます」 | 標準入出力が端末でない | 対話的な端末で実行する |
 | AIが「送信する許可が設定されていません」 | 既定では送信しない | 内容を `--dry-run` で確認し、よければ `--allow-send` |
 | AIが「接続できません」 | Ollama が起動していない・モデルが無い | `ai-status` で確認。AI以外の機能には影響しない |
@@ -496,6 +515,7 @@ make test-fast    # 最初の失敗で止める
 | 関数を読む | `understand`, `flow`, `dataflow`, `state`, `exceptions`, `risks` |
 | 品質・履歴 | `history`, `tests`, `impact`, `unused`, `docs-check` |
 | AI | `explain`, `explain-file`, `explain-path`, `ask`, `explanations`, `ai-status`, `ai-eval` |
+| 資料の1ファイル化 | `reading-report` |
 | 動的解析（スタブ） | `dynamic-plan`（実行しない計画の表示）, `dynamic-run`（許可の確認のみ。実行は未実装） |
 
 共通オプション: `--db`, `--project`, `--format {text,json}`, `--exclude GLOB`。詳細は各コマンドの `--help`。
@@ -507,7 +527,7 @@ make test-fast    # 最初の失敗で止める
 | `setup` / `check` / `test` / `lint` / `clean` | 開発 |
 | `analyze` / `status` / `overview` / `architecture` / `unresolved` / `understand` | 解析結果の確認（`TARGET`・`NAME`・`DB`・`PROJECT`） |
 | `ai-status` / `explain-dry` / `explain` / `ai-eval` | AI（`MODEL`・`AI_SEND=1`） |
-| `reading` / `reading-c-build` / `reading-clean` | コードリーディング資料（[7](#7-コードリーディング資料を作るmake-reading)） |
+| `reading` / `reading-pdf` / `reading-c-build` / `reading-clean` | コードリーディング資料（[7](#7-コードリーディング資料を作るmake-reading)） |
 
 ### 14.3 環境変数
 

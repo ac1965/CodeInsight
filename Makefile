@@ -48,7 +48,7 @@ override COMPILE_DB := $(call expand_path,$(COMPILE_DB))
 .PHONY: help setup test test-v test-fast check compile clean \
         analyze status overview architecture unresolved \
         understand explain-dry explain ai-status ai-eval lint \
-        reading reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
+        reading reading-pdf reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
 
 help: ## 使えるタスクの一覧を表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -212,6 +212,9 @@ for title, items in steps:
         else:
             lines.append(f"* {rel} — {desc}（生成されていません）")
     lines.append("")
+pdfs = sorted(f for f in os.listdir(out) if f.endswith("-reading.pdf") or f.endswith("-reading.html"))
+if pdfs:
+    lines += ["## 1ファイル版", ""] + [f"* [{f}]({f}) — 全体を1つにまとめた資料" for f in pdfs] + [""]
 ai = os.path.join(out, "ai")
 lines += ["## AIの解説", ""]
 if os.path.isdir(ai) and os.listdir(ai):
@@ -263,6 +266,7 @@ reading-graphs: reading-analyze ## [資料] 呼び出し・依存・構成の図
 	@for kind in call deps arch; do \
 	  $(RCI) graph $$kind --format html -o $(OUT)/graphs/$$kind.html $(RFLAGS) 2>> $(OUT)/logs/graph-$$kind.log || echo "  ! 取得できなかった項目: graphs/$$kind.html"; \
 	  $(RCI) graph $$kind --format mermaid -o $(OUT)/graphs/$$kind.mmd $(RFLAGS) 2>> $(OUT)/logs/graph-$$kind.log || true; \
+	  $(RCI) graph $$kind --format dot -o $(OUT)/graphs/$$kind.dot $(RFLAGS) 2>> $(OUT)/logs/graph-$$kind.log || true; \
 	  [ -s $(OUT)/logs/graph-$$kind.log ] || rm -f $(OUT)/logs/graph-$$kind.log; \
 	done
 
@@ -290,8 +294,16 @@ reading-index: ## [資料] 目次（README.md）を作る
 	@mkdir -p $(OUT)/logs
 	@$(UV) run python -c "$$READING_INDEX" "$(OUT)" "$(TARGET)" "$(TOP)"
 
-reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] 対象のコードリーディング資料一式を OUT に作る（TARGET 必須）
+reading-pdf: ## [資料] OUT の成果物を、1ファイルのPDFにまとめる（ブラウザが必要。NAME= でファイル名の基）
+	$(if $(OUT),,$(error OUT を指定してください))
+	@$(UV) run codeinsight reading-report --out "$(OUT)" --target "$(TARGET)" $(if $(READING_NAME_OPT),--name $(READING_NAME_OPT))
+
+reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] 対象のコードリーディング資料一式を OUT に作る（TARGET 必須。PDF=0 でPDFを作らない）
 	@$(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP)
+	@if [ "$(PDF)" != "0" ]; then \
+	  $(UV) run codeinsight reading-report --out "$(OUT)" --target "$(TARGET)" || echo "  ! PDFは作れませんでした。他の成果物は作成済みです（HTMLがあればブラウザで印刷→PDF保存もできます）"; \
+	  $(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP); \
+	fi
 	@echo "完了: $(OUT)/README.md から読み始められます"
 
 reading-c-build: reading-check ## [資料] autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）

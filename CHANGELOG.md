@@ -17,6 +17,17 @@
 * mypy が見つけた不具合: `understand` が、引数を持たないPython関数で `Language` の未定義により異常終了する。
 * `requires-python` を `>=3.11` に修正（設定ファイルの読み込みに `tomllib` を使うため。従来の `>=3.10` は誤り）。
 
+## コードリーディング資料の1ファイル化（PDF）（未リリース）
+
+### 追加
+
+* `make reading` が、成果物を1つのPDF（`OUT/<名前>-reading.pdf`）にまとめる。表紙・目次・言語別の対応範囲・全体像と図・入口と境界・主要な関数の読解カード・注意して読む箇所・背景・（AI解説）・付録、ページ番号つき。`codeinsight reading-report`（`--format html`・`--max-lines`・`--max-graph-nodes`）と `make reading-pdf`、`PDF=0` で作らない。
+* 自己完結の印刷用HTMLを組み立て（スクリプトなし・Content-Security-Policy で外部通信を遮断・対象由来の文字列はすべてエスケープ）、ヘッドレスのブラウザ（Chrome・Chromium・Edge。`CODEINSIGHT_BROWSER`）でPDFにする。新しい依存は無い。graphviz があれば図をSVGで埋め込み、多すぎる図・長すぎる出力は、省略・打ち切りを明示する。ブラウザが無い場合は、HTMLを残して理由を示す。
+
+### 修正
+
+* Chrome（安定版）は、PDFを書いた後も補助プロセスが残って終了しない。プロセスの終了でなく、PDFの完成（先頭が `%PDF`・末尾が `%%EOF`・サイズが安定）を待ち、ブラウザをプロセスグループごと止める（実機で発見。以前は180秒のタイムアウトになった）。
+
 ## `make reading` のパス指定の修正（未リリース）
 
 ### 修正

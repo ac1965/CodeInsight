@@ -66,6 +66,8 @@ src/codeinsight/
 ├── presentation/      表示・出力形式
 │   ├── graph_export.py    Mermaid / DOT / JSON への出力
 │   ├── html_viewer.py     自己完結型のローカルHTMLビューアー
+│   ├── reading_report.py  make reading の成果物を1つの印刷用HTMLにまとめる（エスケープ・CSP・図のSVG埋め込み・打ち切りの明示）
+│   ├── pdf_export.py      HTMLをヘッドレスのブラウザでPDFにする（PDFの完成を監視し、終了しないブラウザを止める）
 │   ├── structure_view.py  ディレクトリ・ファイル・シンボルの階層表示
 │   ├── labels.py          解決状態の表示ラベル（CLI・TUIで共用）
 │   ├── tui_model.py       TUIの状態とキー操作（cursesに依存しない）
@@ -97,6 +99,7 @@ src/codeinsight/
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── reading_c.py       Cの関数の読解コマンド（flow / dataflow / exceptions / state）の表示
+    ├── report.py          reading-report（成果物を1ファイルのPDF/HTMLにまとめる）
     ├── dynamic_commands.py 動的解析のコマンド（dynamic-plan / dynamic-run。スタブ）
     ├── graph.py           グラフ出力（graph）
     ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status / ai-eval）
