@@ -52,7 +52,7 @@ pytest -v
 ## 実行結果（最終確認時点）
 
 ```
-234 passed
+235 passed
 ```
 
 全テストが成功している。
@@ -141,7 +141,7 @@ Ollama（`localhost:11434`、送信はこの計算機の中で完結）のモデ
 * 1回の実行（qwen3-coderのみ2回）であり、出力は毎回揺れる。ケースは18件で、モデルの優劣を断定する根拠にはならない。機械的な指標であり、内容の正しさを保証するものではない。
 * 評価で見つかった不具合: Pythonのシンボルの範囲にデコレータが含まれず、AIが `@lru_cache` を見られなかった（`sample-circle-area` の語の再現率が低い原因）。AIに渡す根拠の範囲を、直前のデコレータ行まで広げて修正した。
 * 評価の採点の修正: 禁止語（作り話の罠）を単語境界で照合する（`ORM` が `transform` に誤って一致していた）。`ConnectionError` はOSErrorの下位クラスで、推論として述べるのは妥当なため禁止語から外した。
-* 既知の偽陽性の傾向: 「存在を確認できない名前」には、渡した範囲の外にあるが同じファイルでimportされている名前（`argparse`、`concurrent.futures.ThreadPoolExecutor`、`functools.lru_cache` など）が含まれる。厳しめの判定であり、緩める場合は検証の規則と合わせて検討する。
+* 偽陽性の見直し（上記の表の測定後に対応）: 渡した範囲の外でも、プロジェクトがimport・呼び出している外部の名前（`argparse`、`concurrent.futures.ThreadPoolExecutor`、`functools.lru_cache` など）は、実在する名前として扱うようにした。上の表の数値は修正前のもので、未再測定である（`requests.exceptions.RequestException` のように、プロジェクトが使っていない名前は引き続き指摘する）。
 
 評価ロジックはスタブ／偽プロバイダーで `tests/test_ai_eval.py` が検証する。
 

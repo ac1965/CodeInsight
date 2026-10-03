@@ -19,6 +19,10 @@
 
 ## 質問応答の検索改善（未リリース）
 
+### 修正
+
+* AI解説の検証で、渡した根拠の範囲外でも、プロジェクトがimport・呼び出している外部の名前（`functools.lru_cache`、`concurrent.futures.ThreadPoolExecutor` など）を「存在を確認できない名前」としない。プロジェクトが使っていない外部の名前（`requests.exceptions.RequestException` など）と存在しない名前は、従来どおり指摘する。
+
 ### 変更
 
 * `ask` の検索を `ai/retrieval.py` に分離し、名前・docstringだけでなく、パスと本文（識別子・文字列・コメント）の語を使う。snake_case・camelCaseの分割、複数形・活用の正規化、希少な語の重み付けと長さの正規化（BM25風）、日本語の用語の英語への展開（小さな辞書）、テストコードの減点を行う。決定論的で、AIは使わない。

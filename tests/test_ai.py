@@ -595,3 +595,19 @@ def test_context_source_includes_the_decorator_lines_above_a_definition(tmp_path
     lines = (root / "m.py").read_text().splitlines()
     assert _include_decorators(lines, 6) == 4  # 2つのデコレータまで広げる
     assert _include_decorators(lines, 4) == 4 and _include_decorators(lines, 1) == 1
+
+
+def test_names_the_project_imports_are_real_even_outside_the_given_context(analyzed, tmp_path: Path) -> None:
+    root = tmp_path / "imports"
+    root.mkdir()
+    (root / "a.py").write_text("import threading\nfrom functools import lru_cache\n\n\ndef start():\n    return 1\n")
+    (root / "b.py").write_text("import concurrent.futures\n\n\ndef pool():\n    return concurrent.futures.ThreadPoolExecutor()\n")
+    _, project, nav, index = _setup(analyzed, root)
+    context = ContextBuilder(nav).for_symbol(project, index, _symbol(nav, index, "a.start"))  # b.py は根拠に含まれない
+    validator = CitationValidator(project, index, context)
+    report = validator.validate(
+        "## 処理の詳細\n- `functools.lru_cache` と `threading` と `concurrent.futures.ThreadPoolExecutor` を使います [a.py:5]。\n"
+        "- `requests.exceptions.RequestException` と `PaymentGateway` も使います [a.py:5]。\n"
+    )
+    # プロジェクトが実際にimportしている名前は、創作ではない。importしていない外部の名前や、存在しない名前は従来どおり指摘する
+    assert [name for _, name in report.unknown_identifiers] == ["requests.exceptions.RequestException", "PaymentGateway"]

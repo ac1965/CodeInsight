@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from codeinsight.ai.context import Context
 from codeinsight.ai.prompt import INFERENCE_MARK, SECTIONS
 from codeinsight.application.project_index import ProjectIndex
-from codeinsight.domain import ExplanationStatus, Project
+from codeinsight.domain import ExplanationStatus, Project, ResolutionStatus
 
 CITATION = re.compile(r"\[([^\[\]\s:]+):(\d+)(?:-(\d+))?\]")
 _BACKTICK = re.compile(r"`([^`\n]{1,80})`")
@@ -84,6 +84,24 @@ class ValidationReport:
         }
 
 
+def _imported_names(index: ProjectIndex) -> set[str]:
+    """プロジェクトがimport・呼び出している外部の名前（`functools.lru_cache`、`concurrent.futures` など）。
+
+    渡した根拠の範囲外でも、プロジェクトの別の場所で実際に使われている名前であり、AIの創作ではない。
+    `requests.exceptions.RequestException` のように、プロジェクトが使っていない名前は含めない。
+    """
+
+    names: set[str] = set()
+    targets = [d.target_name for d in index.dependencies if d.target_name]
+    targets += [r.target_name for r in index.references if r.resolution_status == ResolutionStatus.EXTERNAL and r.target_name]
+    for target in targets:
+        parts = target.split(".")
+        for end in range(1, len(parts) + 1):
+            names.add(".".join(parts[:end]))  # os.environ.setdefault → os / os.environ / os.environ.setdefault
+        names.add(parts[-1])
+    return names
+
+
 class CitationValidator:
     """AIの回答の根拠を、機械的に検証する（AGENTS.md §3.8・Phase 4の完了条件）。
 
@@ -105,7 +123,7 @@ class CitationValidator:
         self._fresh: dict[str, bool] = {}
         symbol_names = {s.name for s in index.symbols.values()}
         qualified = {s.qualified_name for s in index.symbols.values()}
-        self._known_names = symbol_names | qualified | {f.relative_path for f in index.files.values()}
+        self._known_names = symbol_names | qualified | {f.relative_path for f in index.files.values()} | _imported_names(index)
         self._context_words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", context.text + " " + context.render()))
 
     def validate(self, text: str) -> ValidationReport:
