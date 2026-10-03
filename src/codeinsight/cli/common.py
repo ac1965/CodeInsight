@@ -13,7 +13,7 @@ from codeinsight.analysis.call_graph import CallNode
 from codeinsight.application import AmbiguousSymbolError, FreshnessService, NavigationService, ProjectIndex, SymbolNotFoundError
 from codeinsight.application.navigation_service import DependencyHit, ReferenceHit
 from codeinsight.application.search_service import SymbolHit
-from codeinsight.domain import Confidence, FileFreshness, Project, ResolutionStatus, SymbolKind
+from codeinsight.domain import Confidence, FileFreshness, Language, Project, ResolutionStatus, SymbolKind
 from codeinsight.infrastructure import AnalysisRepository, default_db_path
 from codeinsight.presentation.labels import STATIC_NOTE, STATUS_LABEL, status_text  # noqa: F401  (他のCLIモジュールが共通部品として参照する)
 
@@ -88,6 +88,47 @@ def stale_file_paths(project: Project, index: ProjectIndex) -> list[str]:
         for fid, state in states.items()
         if state in (FileFreshness.STALE, FileFreshness.MISSING)
     )
+
+
+def not_covered(index: ProjectIndex, covered: tuple[Language, ...] = (Language.PYTHON,)) -> dict[str, int]:
+    """その機能が対応していない言語と、そのファイル数。"""
+
+    counts: dict[str, int] = {}
+    for source_file in index.files.values():
+        if source_file.language not in covered:
+            counts[source_file.language.value] = counts.get(source_file.language.value, 0) + 1
+    return counts
+
+
+def coverage_note(index: ProjectIndex, what: str, partial: dict[str, str] | None = None) -> str | None:
+    """言語によって対応範囲が異なる機能の結果に添える注記。
+
+    「0件」「確認できませんでした」が、検査していないだけなのに「問題なし」と読まれるのを防ぐ。
+    `partial` は、一部だけ対応している言語（言語名 → 対応している範囲）。
+    """
+
+    partial = partial or {}
+    covered = (Language.PYTHON, *(Language(name) for name in partial))
+    counts = not_covered(index, covered)
+    parts = []
+    if counts:
+        parts.append(
+            f"※ {what}はPythonのみ対応です。{', '.join(f'{k} {v}件' for k, v in counts.items())} のファイルは検査していません。"
+            "結果が0件・空でも、「問題なし」を意味しません。"
+        )
+    for name, scope in partial.items():
+        n = sum(1 for f in index.files.values() if f.language.value == name)
+        if n:
+            parts.append(f"※ {what}は、{name} では{scope}のみ対応です（{name} {n}件）。それ以外は検査していません。")
+    return "\n".join(parts) or None
+
+
+def print_coverage(args: argparse.Namespace, index: ProjectIndex, what: str, partial: dict[str, str] | None = None) -> None:
+    """注記を、テキスト出力では標準出力に、JSON出力では（形式を変えないよう）標準エラーに出す。"""
+
+    note = coverage_note(index, what, partial)
+    if note:
+        print(("\n" if args.format != "json" else "") + note, file=sys.stderr if args.format == "json" else sys.stdout)
 
 
 def warn_if_stale(stale: list[str]) -> None:

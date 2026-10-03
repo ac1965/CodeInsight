@@ -19,7 +19,7 @@ from codeinsight.application.impact_service import ImpactService
 from codeinsight.application.spec_check_service import SpecCheckService
 from codeinsight.application.test_map_service import TestMapService
 from codeinsight.application.unused_service import UnusedService
-from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe, warn_if_stale
+from codeinsight.cli.common import CliError, emit_json, not_covered, prepare_read, print_coverage, resolve_symbol_arg, safe, warn_if_stale
 
 
 def cmd_externals(args: argparse.Namespace) -> int:
@@ -179,6 +179,7 @@ def cmd_config(args: argparse.Namespace) -> int:
                 for i in items
             ]
         )
+        print_coverage(args, index, "設定値の検出")
         return 0
     print("設定値の定義箇所と、使われる箇所（文字列リテラルで書かれた名前のみ。使用箇所は静的な近似）")
     for kind, label in CONFIG_LABELS.items():
@@ -208,6 +209,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     if skipped:
         print(f"解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
     warn_if_stale(stale)
+    print_coverage(args, index, "設定値の検出")
     return 0
 
 
@@ -226,6 +228,7 @@ def cmd_boundaries(args: argparse.Namespace) -> int:
                 for i in items
             ]
         )
+        print_coverage(args, index, "入口と境界の検出", {"c": "main 関数"})
         return 0
     print("プログラムの入口と境界（フレームワークの規約・構文パターンから検出）")
     for kind, label in BOUNDARY_LABELS.items():
@@ -246,6 +249,7 @@ def cmd_boundaries(args: argparse.Namespace) -> int:
         print(f"解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
     warn_if_stale(stale)
     print("※ フレームワークの規約に基づく検出です。独自の登録方法・動的な登録は検出できません。", file=sys.stderr)
+    print_coverage(args, index, "入口と境界の検出", {"c": "main 関数"})
     return 0
 
 
@@ -400,7 +404,9 @@ def cmd_environment(args: argparse.Namespace) -> int:
             "unused_declared": report.unused_declared, "frameworks": report.frameworks,
             "platform_checks": [vars(x) for x in report.platform_checks],
             "executables": [vars(x) for x in report.executables], "c_system_headers": report.c_system_headers,
+            "not_covered_languages": not_covered(index),
         })
+        print_coverage(args, index, "実行環境の前提の抽出")
         return 0
     print("実行環境の前提（pyproject/requirements・import・OS判定・外部コマンドから）")
     print(f"\n■ 言語のバージョン\n  Python: {safe(report.python_requirement) or '宣言なし（pyproject.tomlのrequires-python）'}")
@@ -428,6 +434,7 @@ def cmd_environment(args: argparse.Namespace) -> int:
         print(f"\n■ Cのシステムヘッダー: {', '.join(safe(h) for h in report.c_system_headers)}")
     warn_if_stale(stale)
     print("※ 実行はしていません。静的に確認できる前提のみです（ライブラリの実際のバージョンやOSの設定は確認できません）。", file=sys.stderr)
+    print_coverage(args, index, "実行環境の前提の抽出")
     return 0
 
 

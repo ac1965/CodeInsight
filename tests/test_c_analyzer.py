@@ -105,3 +105,28 @@ def test_output_producing_options_are_removed_so_analysis_never_writes_files() -
 
     args = ["-MMD", "-MF", "deps/x.d", "-MT", "x.o", "-o", "x.o", "-MFdeps/y.d", "-DA=1", "-I.", "-c", "-Wall", "-pipe", "-Werror", "-Werror=format", "-pedantic-errors"]
     assert _strip_output_options(args) == ["-DA=1", "-I.", "-c", "-Wall"]
+
+
+def test_header_is_analyzed_in_the_context_of_the_source_that_includes_it(tmp_path: Path) -> None:
+    import json
+
+    src = tmp_path / "src"
+    build = tmp_path / "build"
+    src.mkdir()
+    build.mkdir()
+    (build / "config.h").write_text("#define COUNT_TYPE long\n")  # 生成されるヘッダー（ソースの外）
+    # 単独では解析できないヘッダー: config.h が先に取り込まれていることを前提に、COUNT_TYPE を使う
+    (src / "util.h").write_text('#ifndef HAVE_CONFIG_H\n#error "Please include config.h first."\n#endif\nCOUNT_TYPE total(COUNT_TYPE a);\n')
+    (src / "main.c").write_text('#include <config.h>\n#include "util.h"\nCOUNT_TYPE total(COUNT_TYPE a) { return a; }\n')
+    (build / "compile_commands.json").write_text(json.dumps([
+        {"directory": str(build), "file": str(src / "main.c"), "arguments": ["cc", "-DHAVE_CONFIG_H", "-I.", "-c", str(src / "main.c")]},
+    ]))
+
+    standalone = CAnalyzer().analyze_file(SourceUnit.from_path(str(uuid.uuid4()), src / "util.h"))
+    assert not standalone.succeeded  # 設定なしでは解析できない（従来の挙動）
+
+    in_context = CAnalyzer(compile_commands_dir=build).analyze_file(SourceUnit.from_path(str(uuid.uuid4()), src / "util.h"))
+    assert in_context.succeeded, in_context.errors
+    assert [s.name for s in in_context.symbols if s.kind.value == "function_declaration"] == ["total"]
+    assert any("main.c" in w and "推定" in w for w in in_context.warnings)  # 取り込む側の文脈で解析したことを注記する
+    assert all(s.start_line <= 4 for s in in_context.symbols)  # 位置はヘッダー自身のもの（取り込む側のものではない）

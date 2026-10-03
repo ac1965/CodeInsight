@@ -11,7 +11,7 @@ from codeinsight.application import FlowAnalysisError, FlowService, NavigationSe
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.external_service import CATEGORY_LABELS
 from codeinsight.application.understand_service import UnderstandService
-from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe, warn_if_stale
+from codeinsight.cli.common import CliError, coverage_note, emit_json, not_covered, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.cli.project import OPERATION_LABELS, group_uses, lines_text
 from codeinsight.domain import Language, SymbolKind
 
@@ -239,8 +239,9 @@ def cmd_risks(args: argparse.Namespace) -> int:
     findings, skipped = RiskService().scan(project, index, rules)
     order = ("low", "medium", "high")
     findings = [f for f in findings if order.index(f.severity) >= order.index(args.min_severity)]
+    note = coverage_note(index, "リスクの検出")
     if args.format == "json":
-        emit_json({"skipped": skipped, "findings": [{**vars(f), "message": f.message} for f in findings]})
+        emit_json({"skipped": skipped, "not_covered_languages": not_covered(index), "findings": [{**vars(f), "message": f.message} for f in findings]})
         return 0
     counts = Counter(f.rule for f in findings)
     print(f"潜在的な問題の手がかり {len(findings)}件（バグの断定ではありません。意図的な実装の場合があります）")
@@ -255,6 +256,8 @@ def cmd_risks(args: argparse.Namespace) -> int:
             print(f"  {safe(f.path)}:{f.line}{where}{detail}")
         if len(items) > args.limit:
             print(f"  … ほか {len(items) - args.limit}件（--limit / --all）")
+    if note:
+        print(f"\n{note}")
     if skipped:
         print(f"\n解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
     return 0
@@ -306,6 +309,9 @@ def cmd_understand(args: argparse.Namespace) -> int:
             print(f"  入口からの到達: {' → '.join(safe(x) for x in a.route)}")
 
     _print_section("3. 何を入力するのか")
+    unsupported = u.language != Language.PYTHON
+    if unsupported:
+        print(f"  （対象外: {u.language.value} は、入力・戻り値・失敗時の挙動の解析に未対応です。空欄は「なし」を意味しません。ソースを直接読んでください）")
     if u.parameters:
         for p in u.parameters:
             ann = f": {safe(p.annotation)}" if p.annotation else ""
@@ -346,10 +352,14 @@ def cmd_understand(args: argparse.Namespace) -> int:
                 continue
             seen.add(effect_key)
             print(f"  外部への副作用の候補（呼び出し先経由）: [{CATEGORY_LABELS[use.category]}・{OPERATION_LABELS[use.operation]}] {safe(use.library)}  経路: {' → '.join(safe(r) for r in route)}")
-    if not (u.state_changes or u.parameter_mutations or (u.effects and (u.effects.direct or u.effects.reachable))):
+    if unsupported:
+        print("  （状態・引数の変更は対象外です。上記の外部への副作用の候補は、呼び出し先の名前による分類のみです）")
+    elif not (u.state_changes or u.parameter_mutations or (u.effects and (u.effects.direct or u.effects.reachable))):
         print("  確認できる状態変更・引数の変更・外部への副作用はありません（静的に追える範囲）")
 
     _print_section("5. 何を返すのか")
+    if unsupported:
+        print("  （対象外）")
     if u.return_annotation:
         print(f"  戻り値の型注釈: {safe(u.return_annotation)}")
     for number, text in u.returns[:limit]:
@@ -372,6 +382,8 @@ def cmd_understand(args: argparse.Namespace) -> int:
         print(f"  届くテスト: 直接 {len(direct)}件、間接 {len(u.tests.reaches) - len(direct)}件（静的な呼び出しの連鎖）")
 
     _print_section("7. 失敗するとどうなるのか")
+    if unsupported:
+        print("  （対象外）")
     if u.exceptions:
         for e in sorted(u.exceptions.propagated, key=lambda x: (x.exception, x.raised_line)):
             caught, total = u.caught_by_callers.get(e.exception, (0, 0))

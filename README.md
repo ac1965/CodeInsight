@@ -80,6 +80,20 @@ make explain-dry NAME=main MODEL=qwen3-coder:latest   # AIへ送る内容の確�
 make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の許可が必要)
 ```
 
+### コードリーディング資料を一式作る(`make reading`)
+
+対象のリポジトリから、読むための資料を出力ディレクトリにまとめて作ります。対象のソースは変更せず(出力先が対象の中だとエラー)、対象のプログラムは実行しません。
+
+```bash
+make reading TARGET=../my-repo                         # reading/my-repo/ に資料一式と目次(README.md)
+make reading TARGET=../my-repo OUT=/tmp/out TOP=12     # 出力先・主要な関数の数
+make reading TARGET=../c-proj COMPILE_DB=/tmp/build    # Cで compile_commands.json がある場合
+make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1   # AIの解説(ai/)も加える。既定では送信しない
+make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure + ビルド記録(対象のconfigure/makeを実行するため許可が必須)
+```
+
+`OUT/README.md` が目次で、全体像 → 入口と境界 → 処理を追う(図・主要な関数の読解カード) → 注意して読む箇所 → 背景の順に読めます。取得できなかった項目は目次とログ(`logs/`)に記録します。**言語ごとの対応範囲も目次に明記します**(Cは構造・呼び出し関係・参照までで、制御フロー・データフロー・例外・リスクはPythonのみ)。
+
 ## 使い方(CLI)
 
 解析結果は、既定で `~/.codeinsight/codeinsight.db` に保存されます(対象リポジトリには書き込みません。`--db` または環境変数 `CODEINSIGHT_DATA_DIR` で変更できます)。登録したプロジェクトが複数ある場合は `--project`(ID・名前・ルートパス)で指定します。多くのコマンドは `--format json` と、表示から除くパスを指定する `--exclude 'tests/*'` に対応します。
@@ -202,9 +216,24 @@ uv run codeinsight graph call --format html -o call.html                 # 自�
 
 `graph` の種類は `call`・`deps`・`inherit`・`flow`(`--root` 必須)・`arch`。`--root`・`--depth`・`--direction out|in|both` で部分グラフに絞れます。実線は確定、破線は推定、点線は未解決・外部の関係です。ノードが多い全体グラフは読みにくいため、`--root`・`--depth`・`--exclude` で絞ることを推奨します。
 
-名前が複数のシンボルに一致する場合は、候補を表示して終了します(修飾名か `--file` で絞り込みます)。静的な呼び出し関係は、実行順序や実際に通る経路を示すものではない点に注意してください。
+名前が複数のシンボルに一致する場合は、候補を表示して終了します(修飾名・`--file`、または同名の定義が同じファイルにある場合は `名前@行番号` で絞り込みます)。静的な呼び出し関係は、実行順序や実際に通る経路を示すものではない点に注意してください。
 
-`compile_commands.json` が解析対象ディレクトリにある場合は自動的に利用されます。無い場合は最小限のデフォルト引数で解析し、その旨を警告として表示します(詳細は [ANALYSIS.md](ANALYSIS.md))。
+`compile_commands.json` が解析対象ディレクトリにある場合は自動的に利用されます(別の場所は `analyze --compile-commands <ディレクトリ>`)。無い場合は最小限のデフォルト引数で解析し、その旨を警告として表示します(詳細は [ANALYSIS.md](ANALYSIS.md))。
+
+### autotools系のCのプロジェクトを解析する
+
+`configure` で生成される `config.h` などが無いと、Cのファイルの多くは解析に失敗します(`config.h` が見つからない等)。CodeInsightは対象に対して `configure` やビルドを自動実行しないため、利用者が**別のディレクトリ(out-of-tree)**で実行し、ビルドの記録を渡します。対象のソースは変更されません。
+
+```bash
+mkdir -p /tmp/build && cd /tmp/build
+/path/to/project/configure                 # config.h を生成(ビルドディレクトリに)
+bear -- make -j8                           # compile_commands.json を作る
+uv run codeinsight analyze /path/to/project --compile-commands /tmp/build
+```
+
+* 相対パス(`-I.`)の解決、システムヘッダーの探索、ファイルを書き出すオプション(`-MMD -MF` など)の除去を、CodeInsightが補います。
+* 記録に載っていないファイルやヘッダーは、近隣の設定・取り込む側のソースの設定を使って解析します。その場合は「推定」と警告に記録します。
+* 実測(gccのlibiberty: 解析できたファイル 10 → 131 / 139)は [TESTING.md](TESTING.md)。
 
 ## テスト
 

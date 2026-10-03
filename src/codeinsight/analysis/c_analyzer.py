@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -51,6 +52,9 @@ def _compiler_builtin_include_args() -> list[str]:
     return []
 
 
+_HEADER_SUFFIXES = frozenset({".h", ".hh", ".hpp", ".hxx"})
+_INCLUDE_LINE = re.compile(r'^\s*#\s*include\s*["<]([^">]+)[">]', re.MULTILINE)
+
 # 後ろにパスを取るオプション（`-I dir` のように別の引数で渡される形と、`-Idir` のように連結した形の両方がある）
 _PATH_OPTIONS = ("-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros", "-isysroot", "-F", "-iframework")
 
@@ -58,6 +62,13 @@ _PATH_OPTIONS = ("-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacro
 # 解析には不要で、ファイルを書き出す（または書き出そうとする）オプション。取り除く（対象の環境に書き込まない: AGENTS.md 1.1-4）
 _OUTPUT_FLAGS = frozenset({"-M", "-MM", "-MD", "-MMD", "-MP", "-MG", "-save-temps", "-pipe"})
 _OUTPUT_OPTIONS_WITH_VALUE = frozenset({"-o", "-MF", "-MT", "-MQ", "-MJ", "-Xclang"})
+
+
+def _command_file(command: cindex.CompileCommand) -> str:
+    """コンパイルコマンドの対象ファイルの絶対パス。`file` が相対パスの場合は `directory` 基準。"""
+
+    path = Path(command.filename)
+    return str((path if path.is_absolute() else Path(command.directory) / path).resolve())
 
 
 def _strip_output_options(args: list[str]) -> list[str]:
@@ -209,19 +220,32 @@ class CAnalyzer:
                 self._compilation_database = None
         self._index = cindex.Index.create()
         self._listed: set[str] | None = None
+        self._includers: dict[str, list[tuple[Path, str]]] | None = None
         self._system_args = _system_include_args()
         self._default_args = [*self._system_args, *_DEFAULT_ARGS]
 
     def analyze_file(self, unit: SourceUnit) -> FileAnalysis:
         result = FileAnalysis()
         absolute_path = unit.absolute_path
-        args, args_warning = self._resolve_args(absolute_path)
-        if args_warning:
-            result.warnings.append(args_warning)
+        target_name = str(Path(str(absolute_path)).resolve())
+        parse_path = absolute_path
+        includer = self._includer_of(absolute_path) if absolute_path.suffix in _HEADER_SUFFIXES else None
+        if includer is not None:
+            # ヘッダーは、取り込む側のソースが前提とするマクロ・型（config.h など）を持たず、単独では解析できないことが多い。
+            # コンパイルデータベース（configure とビルドの記録）にある、取り込む側のソースの設定と文脈で解析する。
+            args, _ = self._resolve_args(includer)
+            parse_path = includer
+            result.warnings.append(
+                f"ヘッダーを、取り込む側の{includer.name}のコンパイル設定と文脈で解析しました（推定。他の取り込み元では内容が異なる可能性があります）。"
+            )
+        else:
+            args, args_warning = self._resolve_args(absolute_path)
+            if args_warning:
+                result.warnings.append(args_warning)
 
         try:
             translation_unit = self._index.parse(
-                str(absolute_path),
+                str(parse_path),
                 args=args,
                 unsaved_files=[(str(absolute_path), unit.content)],
                 options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
@@ -230,21 +254,33 @@ class CAnalyzer:
             result.errors.append(f"構文解析に失敗しました: {exc}")
             return result
 
+        def own_diagnostic(diag: cindex.Diagnostic) -> bool:
+            """取り込む側の文脈で解析した場合、ヘッダー自身の診断だけを、このファイルの成否に関わるものとして扱う。"""
+
+            if parse_path == absolute_path:
+                return True
+            location_file = diag.location.file
+            return location_file is not None and _resolved(location_file.name) == target_name
+
         fatal_diagnostics = [
             diag
             for diag in translation_unit.diagnostics
-            if diag.severity >= cindex.Diagnostic.Error
+            if diag.severity >= cindex.Diagnostic.Error and own_diagnostic(diag)
         ]
         if fatal_diagnostics:
             for diag in fatal_diagnostics:
                 result.errors.append(f"{diag.location}: {diag.spelling}")
             return result
 
+        outside = 0
         for diag in translation_unit.diagnostics:
-            if diag.severity == cindex.Diagnostic.Warning:
+            if not own_diagnostic(diag):
+                outside += diag.severity >= cindex.Diagnostic.Error
+            elif diag.severity == cindex.Diagnostic.Warning:
                 result.warnings.append(f"{diag.location}: {diag.spelling}")
+        if outside:
+            result.warnings.append(f"取り込む側の{parse_path.name}の解析で、ヘッダー以外の場所に{outside}件のエラーがありました（このヘッダーの結果には含めていません）。")
 
-        target_name = str(Path(str(absolute_path)).resolve())
         project_root = self._project_root(unit)
         ids = IdAllocator(unit.file_id)
         seen_locations: set[tuple[SymbolKind, str, int, int]] = set()
@@ -463,6 +499,37 @@ class CAnalyzer:
                     ResolutionStatus.UNRESOLVED,
                 )
 
+    def _includer_of(self, header: Path) -> Path | None:
+        """compile_commands.json に載っているソースのうち、このヘッダーを `#include` しているもの（決定的に1つ）。
+
+        取り込み元が複数ある場合は、同じディレクトリのもの、次にパス順で最初のものを選ぶ。
+        """
+
+        if self._compilation_database is None:
+            return None
+        if self._includers is None:
+            self._includers = {}
+            for listed in sorted(self._listed_files()):
+                path = Path(listed)
+                if path.suffix in _HEADER_SUFFIXES:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for match in _INCLUDE_LINE.finditer(text):
+                    spec = match.group(1)
+                    self._includers.setdefault(Path(spec).name, []).append((path, spec))
+        candidates = []
+        parts = header.resolve().parts
+        for source, spec in self._includers.get(header.name, []):
+            tail = [p for p in Path(spec).parts if p not in ("..", ".")]
+            if tuple(parts[len(parts) - len(tail):]) == tuple(tail):
+                candidates.append(source)
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda c: (c.resolve().parent != header.resolve().parent, str(c)))[0]
+
     def _resolve_args(self, absolute_path: Path) -> tuple[list[str], str | None]:
         """解析に使う引数と、精度に関する注記（コンパイルコマンドが完全に対応していれば None）。
 
@@ -497,7 +564,7 @@ class CAnalyzer:
 
         if self._listed is None:
             assert self._compilation_database is not None
-            self._listed = {str(Path(c.filename).resolve()) for c in self._compilation_database.getAllCompileCommands() or []}
+            self._listed = {_command_file(c) for c in self._compilation_database.getAllCompileCommands() or []}
         return self._listed
 
     def _build_symbol(
