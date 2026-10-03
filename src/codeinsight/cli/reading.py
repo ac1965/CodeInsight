@@ -8,9 +8,11 @@ from collections import Counter, defaultdict
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application import FlowAnalysisError, FlowService, NavigationService, RiskService
+from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.external_service import CATEGORY_LABELS
 from codeinsight.application.understand_service import UnderstandService
+from codeinsight.cli import reading_c
 from codeinsight.cli.common import CliError, coverage_note, emit_json, not_covered, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.cli.project import OPERATION_LABELS, group_uses, lines_text
 from codeinsight.domain import Language, SymbolKind
@@ -26,9 +28,15 @@ def _flow_symbol(args, navigation, index, project):
     return resolve_symbol_arg(args, navigation, index, args.name, project).symbol
 
 
+def _is_c(index, symbol) -> bool:
+    return index.files[symbol.file_id].language == Language.C
+
+
 def cmd_flow(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)
+    if _is_c(index, symbol):
+        return reading_c.flow(args, project, index, navigation, symbol, stale)
     try:
         summary = service.control_flow(project, index, symbol)
     except FlowAnalysisError as exc:
@@ -114,6 +122,8 @@ def _print_upstream(nodes, prefix: str = "") -> None:
 def cmd_dataflow(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)
+    if _is_c(index, symbol):
+        return reading_c.dataflow(args, project, index, navigation, symbol, stale)
     try:
         if args.variable is None:
             variables = service.variables(project, index, symbol)
@@ -144,6 +154,8 @@ def cmd_dataflow(args: argparse.Namespace) -> int:
 def cmd_state(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)
+    if _is_c(index, symbol) and symbol.kind == SymbolKind.FUNCTION:
+        return reading_c.state(args, project, index, navigation, symbol, stale)
     try:
         if symbol.kind == SymbolKind.CLASS:
             accesses = service.class_state(project, index, symbol)
@@ -185,6 +197,8 @@ def cmd_state(args: argparse.Namespace) -> int:
 def cmd_exceptions(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)
+    if _is_c(index, symbol):
+        return reading_c.exceptions(args, project, index, navigation, symbol, stale)
     try:
         report = service.exceptions(project, index, symbol, args.depth)
     except FlowAnalysisError as exc:
@@ -237,11 +251,14 @@ def cmd_risks(args: argparse.Namespace) -> int:
     repository, project, index, stale = prepare_read(args)
     rules = set(args.rule) if args.rule else None
     findings, skipped = RiskService().scan(project, index, rules)
+    c_findings, c_skipped = CFlowService(NavigationService(repository)).scan_risks(project, index)
+    findings = [*findings, *(f for f in c_findings if rules is None or f.rule in rules)]
+    skipped = [*skipped, *c_skipped]
     order = ("low", "medium", "high")
     findings = [f for f in findings if order.index(f.severity) >= order.index(args.min_severity)]
-    note = coverage_note(index, "リスクの検出")
+    note = coverage_note(index, "リスクの検出", covered=(Language.PYTHON, Language.C))
     if args.format == "json":
-        emit_json({"skipped": skipped, "not_covered_languages": not_covered(index), "findings": [{**vars(f), "message": f.message} for f in findings]})
+        emit_json({"skipped": skipped, "not_covered_languages": not_covered(index, (Language.PYTHON, Language.C)), "findings": [{**vars(f), "message": f.message} for f in findings]})
         return 0
     counts = Counter(f.rule for f in findings)
     print(f"潜在的な問題の手がかり {len(findings)}件（バグの断定ではありません。意図的な実装の場合があります）")
@@ -309,9 +326,9 @@ def cmd_understand(args: argparse.Namespace) -> int:
             print(f"  入口からの到達: {' → '.join(safe(x) for x in a.route)}")
 
     _print_section("3. 何を入力するのか")
-    unsupported = u.language != Language.PYTHON
+    unsupported = not u.facts_available
     if unsupported:
-        print(f"  （対象外: {u.language.value} は、入力・戻り値・失敗時の挙動の解析に未対応です。空欄は「なし」を意味しません。ソースを直接読んでください）")
+        print("  （対象外、または解析できませんでした。理由は末尾の「確認できなかったこと」を参照してください。空欄は「なし」を意味しません）")
     if u.parameters:
         for p in u.parameters:
             ann = f": {safe(p.annotation)}" if p.annotation else ""
@@ -320,7 +337,7 @@ def cmd_understand(args: argparse.Namespace) -> int:
             passed = u.caller_arguments.get(p.name)
             actual = f"   ← 呼び出し元が渡す値: {', '.join(safe(a) for a in passed[:4])}" if passed else ""
             print(f"  引数 {safe(p.name)}{ann}{default}{kind}{actual}")
-    elif u.language == Language.PYTHON and symbol.kind.value in ("function", "method"):
+    elif u.facts_available and symbol.kind.value in ("function", "method"):
         print("  引数なし")
     for config in u.config_reads:
         default = f" 既定値 {safe(config.default)}" if config.default else ""
@@ -368,8 +385,8 @@ def cmd_understand(args: argparse.Namespace) -> int:
         print("  ジェネレータ（yield で値を順次返す）")
     if u.is_async:
         print("  async 関数（awaitable を返す）")
-    if not u.returns and not u.is_generator and u.language == Language.PYTHON and symbol.kind.value in ("function", "method"):
-        print("  明示的な return はありません（None を返す）")
+    if not u.returns and not u.is_generator and u.facts_available and symbol.kind.value in ("function", "method"):
+        print("  明示的な return はありません" + ("（None を返す）" if u.language == Language.PYTHON else ""))
 
     _print_section("6. 誰に影響するのか")
     if u.impact:
@@ -397,6 +414,8 @@ def cmd_understand(args: argparse.Namespace) -> int:
             print(f"  関数内の例外処理: L{h.line} except {safe(', '.join(h.types))} — {traits}")
         if u.exceptions.unresolved_calls:
             print(f"  ※ 呼び出し先を特定できない呼び出しが {u.exceptions.unresolved_calls}件あり、そこからの例外は追えていません")
+    for c_exit in u.c_exits:
+        print(f"  {reading_c._EXIT_LABELS[c_exit.kind]}: L{c_exit.line} {safe(c_exit.detail)}")
     labels = {"retry": "リトライ", "timeout": "タイムアウト指定", "sleep": "待機"}
     for hint in u.resilience:
         print(f"  {labels[hint.kind]}の手がかり: L{hint.line} {safe(hint.detail)}")

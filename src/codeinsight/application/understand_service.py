@@ -4,8 +4,10 @@ import ast
 import re
 from dataclasses import dataclass, field
 
+from codeinsight.analysis import c_flow_analysis as cf
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application.boundary_service import BoundaryItem, BoundaryService
+from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.config_service import ConfigItem, ConfigService
 from codeinsight.application.describe_service import DescribeService
 from codeinsight.application.external_service import (
@@ -87,6 +89,8 @@ class Understanding:
     risks: list[Finding] = field(default_factory=list)
     # 8. なぜ現在の実装になっているのか
     history: SymbolHistory | None = None
+    c_exits: list[cf.CExit] = field(default_factory=list)  # C: 終了・エラー戻り値・errno（Cには例外が無い）
+    facts_available: bool = False  # 入力・変更・戻り値・失敗時の挙動の解析が、この言語で行われたか
     limitations: list[str] = field(default_factory=list)
 
 
@@ -94,6 +98,7 @@ class UnderstandService:
     def __init__(self, navigation: NavigationService) -> None:
         self._navigation = navigation
         self._flow = FlowService(navigation)
+        self._c = CFlowService(navigation)
 
     def understand(self, project: Project, index: ProjectIndex, symbol: Symbol, depth: int = 3) -> Understanding:
         source_file = index.files[symbol.file_id]
@@ -143,18 +148,53 @@ class UnderstandService:
         # --- 8. なぜ現在の実装か ---
         result.history = HistoryService().symbol_history(project, index, symbol)
 
-        if not is_python:
-            result.limitations.append("入力・変更・戻り値・失敗時の挙動の解析は、現在はPythonのみ対応です（Cは呼び出し元・影響範囲・外部連携・履歴・テストのみ）。")
+        if not is_python and source_file.language != Language.C:
+            result.limitations.append(f"入力・変更・戻り値・失敗時の挙動の解析は、{source_file.language.value} には未対応です（Python・Cのみ）。")
             return result
         if not callable_symbol:
             result.limitations.append(f"{symbol.kind.value} のため、入力・戻り値・失敗時の解析は対象外です（関数・メソッドのみ）。")
             return result
 
         try:
-            self._fill_function_facts(project, index, symbol, result, depth)
+            if is_python:
+                self._fill_function_facts(project, index, symbol, result, depth)
+            else:
+                self._fill_c_facts(project, index, symbol, result)
+            result.facts_available = True
         except FlowAnalysisError as exc:
             result.limitations.append(str(exc))
         return result
+
+    def _fill_c_facts(self, project: Project, index: ProjectIndex, symbol: Symbol, result: Understanding) -> None:
+        """Cの関数のAST（Clang）から得る事実。Pythonと違い、例外は無く、終了・エラー戻り値・errno で失敗を表す。"""
+
+        facts = self._c.facts(project, index, symbol)
+        result.parameters = [Parameter(p.name, p.type, "", "positional") for p in facts["parameters"]]
+        result.return_annotation = facts["return_type"]
+        result.returns = facts["returns"]
+        result.config_reads = [
+            ConfigItem("env", name or "<動的な名前>", result.path, line, symbol.qualified_name, detail=call)
+            for line, name, call in facts["environment"]
+        ]
+        state = self._c.state(project, index, symbol)
+        scope_label = {"global": "グローバル変数", "static": "静的変数（ファイル内）"}
+        for access in state.accesses:
+            if access.mode in ("write", "mutate"):
+                verb = "書き込む" if access.mode == "write" else "書き換える可能性がある"
+                detail = f"（{access.detail}）" if access.detail else ""
+                result.state_changes.append(f"L{access.line} {scope_label[access.scope]} {access.name} を{verb}{detail}")
+        how_label = {"field_store": "構造体のフィールドに書き込む", "deref_store": "ポインタ経由で書き込む", "subscript_store": "配列の要素に書き込む", "libc_call": "書き込み先として渡す"}
+        result.parameter_mutations = [
+            f"L{m.line} 引数 {m.parameter} を通じて、呼び出し元のデータを変更する（{how_label.get(m.how, m.how)}: {m.detail}）" for m in state.parameter_mutations
+        ]
+        result.c_exits = self._c.exits(project, index, symbol)
+        findings, _ = self._c.scan_risks(project, index, only_paths={result.path})
+        result.risks = [f for f in findings if symbol.start_line <= f.line <= symbol.end_line and f.rule != "todo-marker"]
+        result.todo_comments = [(f.line, f.detail) for f in findings if symbol.start_line <= f.line <= symbol.end_line and f.rule == "todo-marker"]
+        result.limitations.append(
+            "Cの関数内の解析は、実行順序・値を考慮しない近似です。ポインタを介した書き込み先の実体（エイリアス）、関数ポインタ経由の呼び出し、"
+            "マクロ展開の内部は追えません。Cには例外が無いため、失敗は終了・エラー戻り値・errno の手がかりで示します（呼び出し側が確認しているかは別）。"
+        )
 
     # --- 関数のASTから得る事実 ---
 

@@ -87,6 +87,8 @@ def _strip_output_options(args: list[str]) -> list[str]:
             continue
         elif arg == "-pedantic-errors" or arg == "-Werror" or arg.startswith("-Werror="):
             continue  # 警告をエラーに格上げするビルド設定は、解析では警告のままにする（エラーは構文解析の失敗として扱うため）
+        elif arg.startswith("-W") and not arg.startswith(("-Wp,", "-Wl,", "-Wa,")):
+            continue  # 警告の選択は構文解析に影響しない。コンパイラ固有の警告（-Wshadow=local など）は、libclangが警告を出力して騒がしくなる
         else:
             result.append(arg)
     return result

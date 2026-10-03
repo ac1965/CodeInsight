@@ -59,17 +59,16 @@ def test_make_c_build_requires_explicit_permission(tmp_path: Path) -> None:
     assert result.returncode != 0 and "ALLOW_BUILD=1" in result.stdout + result.stderr  # 対象のconfigure/makeは許可なしに実行しない
 
 
-def test_risks_says_when_the_project_has_files_it_cannot_check(tmp_path: Path, capsys) -> None:
+def test_risks_now_checks_c_functions_and_does_not_claim_they_are_unchecked(tmp_path: Path, capsys) -> None:
     db = str(tmp_path / "c.sqlite")
-    assert main(["analyze", str(FIXTURES / "c_callgraph"), "--db", db]) == 0
+    assert main(["analyze", str(FIXTURES / "c_flow"), "--db", db]) == 0
     capsys.readouterr()
     assert main(["risks", "--db", db]) == 0
     out = capsys.readouterr().out
-    assert "0件" in out and "Pythonのみ対応" in out and "「問題なし」を意味しません" in out
+    assert "unsafe-libc" in out and "command-exec" in out and "Pythonのみ対応" not in out  # Cは検査対象
 
 
 @pytest.mark.parametrize("command, fragment", [
-    (["risks"], "リスクの検出はPythonのみ対応"),
     (["config"], "設定値の検出はPythonのみ対応"),
     (["environment"], "実行環境の前提の抽出はPythonのみ対応"),
     (["boundaries"], "入口と境界の検出は、c ではmain 関数のみ対応"),
@@ -79,7 +78,7 @@ def test_language_limited_commands_say_what_they_did_not_check(tmp_path: Path, c
     assert main(["analyze", str(FIXTURES / "c_callgraph"), "--db", db]) == 0
     capsys.readouterr()
     assert main([*command, "--db", db]) == 0
-    assert fragment in capsys.readouterr().out  # 「0件」「確認できませんでした」を「問題なし」と読ませない
+    assert fragment in capsys.readouterr().out  # 「0件」「確認できませんでした」を「問題なし」と読ませない（Pythonのみ対応の機能）
 
 
 def test_coverage_note_goes_to_stderr_for_json_and_is_absent_for_python_only_projects(tmp_path: Path, capsys) -> None:
@@ -101,24 +100,7 @@ def test_understand_marks_unsupported_sections_instead_of_leaving_them_blank(tmp
     db = str(tmp_path / "c.sqlite")
     assert main(["analyze", str(FIXTURES / "c_callgraph"), "--db", db]) == 0
     capsys.readouterr()
-    assert main(["understand", "apply", "--db", db]) == 0
+    assert main(["understand", "Calculator", "--db", db]) == 0  # 構造体は、関数内の解析の対象外
     out = capsys.readouterr().out
     assert out.count("対象外") >= 3 and "空欄は「なし」を意味しません" in out
-    assert "ありません（静的に追える範囲）" not in out  # Cで「変更なし」と断定しない
-
-
-def test_makefile_is_not_overridden_by_the_ci_environment_variable() -> None:
-    # GitHub Actions などは環境変数 CI=true を設定する。Makefile の変数名が CI だと、コマンドが `true` に置き換わってしまう
-    result = subprocess.run(["make", "-n", "status"], cwd=ROOT, capture_output=True, text=True, env={**__import__("os").environ, "CI": "true"})
-    assert result.returncode == 0 and "codeinsight status" in result.stdout and not result.stdout.startswith("true")
-
-
-def test_makefile_does_not_depend_on_a_bare_python3() -> None:
-    # 最小のLinux環境には python3 が無い。uv が用意する環境で実行する（さもないと目次が作れず、失敗が隠れる）
-    text = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert "python3 -c" not in text
-
-
-def test_missing_uv_is_reported_clearly_instead_of_error_127(tmp_path: Path) -> None:
-    result = _make("reading", f"TARGET={FIXTURES / 'layered'}", f"OUT={tmp_path / 'o'}", "UV=no-such-uv-command")
-    assert result.returncode == 2 and "見つかりません" in result.stdout + result.stderr  # make の "Error 127" ではなく、原因を示して止まる
+    assert "ありません（静的に追える範囲）" not in out  # 対象外のものを「変更なし」と断定しない

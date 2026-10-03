@@ -25,6 +25,7 @@ src/codeinsight/
 │   ├── reference_resolver.py プロジェクト横断の参照・依存関係の解決
 │   ├── call_graph.py        CallGraph（呼び出し階層・経路検索）、強連結成分（循環検出）
 │   ├── flow_analysis.py     関数/クラス単位の制御フロー・例外・変数の定義使用・状態変化（Python AST、問い合わせ時に実行）
+│   ├── c_flow_analysis.py   Cの関数単位の制御フロー・データフロー・状態・終了経路・リスク（Clang AST、問い合わせ時に実行）
 │   └── fingerprint.py       解析ロジックの指紋（解析器バージョンに含める）
 │
 ├── application/       ユースケースの実行
@@ -36,6 +37,7 @@ src/codeinsight/
 │   ├── freshness_service.py     解析結果と現在のソースの一致判定（古さの検出）
 │   ├── describe_service.py      シンボルの詳細（宣言・要約・メンバ・件数）
 │   ├── overview_service.py      リポジトリの全体像
+│   ├── c_flow_service.py      Cの関数単位の解析（制御フロー・データフロー・状態・終了経路・リスク。Clang AST）
 │   ├── flow_service.py          制御フロー・データフロー・状態・例外経路（ソースの鮮度を確認して実行）
 │   ├── risk_service.py          潜在的な問題の手がかり
 │   ├── external_service.py      外部連携の分類・副作用の候補
@@ -88,6 +90,7 @@ src/codeinsight/
     ├── explore.py         探索・参照（tui / analyze / status / symbols / tree / search / def / refs / callers / trace / path / deps / show / describe / overview / unresolved）
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
+    ├── reading_c.py       Cの関数の読解コマンド（flow / dataflow / exceptions / state）の表示
     ├── graph.py           グラフ出力（graph）
     ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status / ai-eval）
     ├── parser.py          コマンドの登録（argparse）とエントリポイント `main`
@@ -135,7 +138,7 @@ cli ──> ai ──────────> application
 2. `FreshnessService` が現在のファイルのハッシュと解析時のハッシュを比較し、変更されたファイルがあれば警告を出す。
 3. `NavigationService` / `SearchService` / `GraphBuilder` が結果を返し、`presentation` と `cli` が整形して出力する。
 
-## 保存データ（SQLite、スキーマバージョン4）
+## 保存データ（SQLite、スキーマバージョン5）
 
 | テーブル | 内容 |
 |---|---|
@@ -150,6 +153,8 @@ cli ──> ai ──────────> application
 スキーマには `PRAGMA user_version` でバージョンを持たせ、Phase 1のDB（バージョン未設定）は開く際に列・テーブルを追加して移行する。移行したDBは解析器バージョンが空になるため、次回の解析で全ファイルが再解析される。新しいバージョンのDBは開かない。
 
 AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2-2）であり、専用の `explanations` テーブルに保存する。解析結果のテーブル（シンボル・参照・依存関係）には書き込まず、再解析でも解説は消えない（根拠にしたファイルが変わると「古い解説」と示す）。
+
+* v5: `projects.compile_commands_dir`（解析時に使った compile_commands.json の場所。Cの関数単位の解析が、問い合わせ時に同じ設定で再解析するため）。旧版のDBは開いた時に列を追加して移行する。
 
 ## 非侵襲性の実装
 

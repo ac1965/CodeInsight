@@ -251,6 +251,7 @@ make lint          # ruff と mypy(CIと同じ)
 * [ANALYSIS.md](ANALYSIS.md) — 解析方式と既知の制約
 * [REQUIREMENTS.md](REQUIREMENTS.md) — 要件に対する実装状況の要約
 * [TESTING.md](TESTING.md) — テスト方法と実行結果
+* [OPERATIONS.md](OPERATIONS.md) — 運用ガイド（導入・日常の運用・言語別の手順・資料の作成・AI解説の安全な運用・結果の読み方・トラブルシューティング・保守）
 * [CHANGELOG.md](CHANGELOG.md) — 変更履歴
 
 ## ライセンス

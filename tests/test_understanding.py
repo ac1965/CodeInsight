@@ -239,9 +239,14 @@ def test_understand_answers_the_eight_questions_with_evidence(analyzed, tmp_path
 def test_understand_reports_what_it_cannot_cover(analyzed, c_callgraph_dir: Path) -> None:
     project, nav, index = _setup(analyzed, c_callgraph_dir)
     u = UnderstandService(nav).understand(project, index, _symbol(nav, index, "fib"))
-    assert u.language == Language.C and u.parameters == [] and u.exceptions is None
-    assert any("Pythonのみ対応" in text for text in u.limitations)
+    assert u.language == Language.C and u.facts_available and [p.name for p in u.parameters] == ["n"]
+    assert u.exceptions is None and any(e.kind == "error_return" for e in u.c_exits) is False  # Cには例外が無い
+    assert any("近似" in text and "エイリアス" in text for text in u.limitations)  # Cの解析の限界を明示する
     assert {h.source.name for h in u.callers} == {"main", "fib"}  # 呼び出し元・影響は、Cでも得られる
+
+    # 関数でないシンボル（構造体）は、関数内の解析の対象外であることを明示する
+    struct = UnderstandService(nav).understand(project, index, _symbol(nav, index, "Calculator"))
+    assert not struct.facts_available and any("対象外" in text for text in struct.limitations)
 
 
 # --- CLI ---

@@ -90,6 +90,9 @@ def stale_file_paths(project: Project, index: ProjectIndex) -> list[str]:
     )
 
 
+_LANGUAGE_NAMES = {Language.PYTHON: "Python", Language.C: "C"}
+
+
 def not_covered(index: ProjectIndex, covered: tuple[Language, ...] = (Language.PYTHON,)) -> dict[str, int]:
     """その機能が対応していない言語と、そのファイル数。"""
 
@@ -100,7 +103,9 @@ def not_covered(index: ProjectIndex, covered: tuple[Language, ...] = (Language.P
     return counts
 
 
-def coverage_note(index: ProjectIndex, what: str, partial: dict[str, str] | None = None) -> str | None:
+def coverage_note(
+    index: ProjectIndex, what: str, partial: dict[str, str] | None = None, covered: tuple[Language, ...] = (Language.PYTHON,)
+) -> str | None:
     """言語によって対応範囲が異なる機能の結果に添える注記。
 
     「0件」「確認できませんでした」が、検査していないだけなのに「問題なし」と読まれるのを防ぐ。
@@ -108,12 +113,11 @@ def coverage_note(index: ProjectIndex, what: str, partial: dict[str, str] | None
     """
 
     partial = partial or {}
-    covered = (Language.PYTHON, *(Language(name) for name in partial))
-    counts = not_covered(index, covered)
+    counts = not_covered(index, (*covered, *(Language(name) for name in partial)))
     parts = []
     if counts:
         parts.append(
-            f"※ {what}はPythonのみ対応です。{', '.join(f'{k} {v}件' for k, v in counts.items())} のファイルは検査していません。"
+            f"※ {what}は{'・'.join(_LANGUAGE_NAMES[lang] for lang in covered)}のみ対応です。{', '.join(f'{k} {v}件' for k, v in counts.items())} のファイルは検査していません。"
             "結果が0件・空でも、「問題なし」を意味しません。"
         )
     for name, scope in partial.items():

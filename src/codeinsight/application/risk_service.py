@@ -21,6 +21,12 @@ RULES = {
     "blocking-in-async": ("medium", "async関数内でブロッキング呼び出し（time.sleep等）をしている"),
     "broad-raise": ("low", "汎用の Exception を送出している（呼び出し側が区別できない）"),
     "todo-marker": ("low", "TODO/FIXME等の未対応を示すコメント"),
+    # C言語
+    "unsafe-libc": ("medium", "境界を確認しない・再入不可など、危険とされるC標準関数の使用（C）"),
+    "command-exec": ("high", "シェルを介しうる外部コマンドの実行（system/popen/exec系。C）"),
+    "format-string": ("medium", "書式が文字列リテラルでない printf 系の呼び出し（書式文字列攻撃の恐れ。C）"),
+    "unchecked-alloc": ("medium", "メモリ割り当ての結果を条件で確認していない可能性（C。確認が別の形の場合は誤検出）"),
+    "fallthrough": ("low", "switch の case が break なしで次のラベルへ続く（C。意図的な場合あり）"),
 }
 _MARKERS = ("TODO", "FIXME", "XXX", "HACK")
 

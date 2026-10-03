@@ -103,8 +103,8 @@ def test_out_of_tree_build_uses_generated_headers_and_interpolates_settings_for_
 def test_output_producing_options_are_removed_so_analysis_never_writes_files() -> None:
     from codeinsight.analysis.c_analyzer import _strip_output_options
 
-    args = ["-MMD", "-MF", "deps/x.d", "-MT", "x.o", "-o", "x.o", "-MFdeps/y.d", "-DA=1", "-I.", "-c", "-Wall", "-pipe", "-Werror", "-Werror=format", "-pedantic-errors"]
-    assert _strip_output_options(args) == ["-DA=1", "-I.", "-c", "-Wall"]
+    args = ["-MMD", "-MF", "deps/x.d", "-MT", "x.o", "-o", "x.o", "-MFdeps/y.d", "-DA=1", "-I.", "-c", "-Wall", "-pipe", "-Werror", "-Werror=format", "-pedantic-errors", "-Wshadow=local", "-Wp,-DX=1"]
+    assert _strip_output_options(args) == ["-DA=1", "-I.", "-c", "-Wp,-DX=1"]  # 警告の選択は除く（-Wp, は前処理への引数なので残す）
 
 
 def test_header_is_analyzed_in_the_context_of_the_source_that_includes_it(tmp_path: Path) -> None:
