@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -97,4 +97,28 @@ CREATE INDEX IF NOT EXISTS idx_dependencies_source ON dependencies(source_file_i
 CREATE INDEX IF NOT EXISTS idx_dependencies_target ON dependencies(target_file_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name ON symbols(qualified_name);
+"""
+
+# バージョン4: AI解説。解析結果（事実）のテーブルとは分離し、モデル・入力のハッシュ・根拠ファイルの
+# ハッシュ・検証結果を保持する（AGENTS.md §1.2-2, §10.3）。
+V4_TABLES = """
+CREATE TABLE IF NOT EXISTS explanations (
+    explanation_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(project_id),
+    target_kind TEXT NOT NULL,
+    target TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    context_hash TEXT NOT NULL,
+    source_hashes TEXT NOT NULL,
+    repository_revision TEXT,
+    analyzer_version TEXT NOT NULL,
+    text TEXT NOT NULL,
+    validation TEXT NOT NULL,
+    status TEXT NOT NULL,
+    ai_generated INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_explanations_project ON explanations(project_id, target_kind, target);
 """

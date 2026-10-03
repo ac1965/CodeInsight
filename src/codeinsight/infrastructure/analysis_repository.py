@@ -14,6 +14,8 @@ from codeinsight.domain import (
     Confidence,
     Dependency,
     DependencyKind,
+    Explanation,
+    ExplanationStatus,
     Language,
     Project,
     ProjectConfiguration,
@@ -30,6 +32,7 @@ from codeinsight.infrastructure.schema import (
     SCHEMA_VERSION,
     V2_COLUMNS,
     V2_TABLES,
+    V4_TABLES,
 )
 
 _PROJECT_COLUMNS = (
@@ -108,6 +111,7 @@ class AnalysisRepository:
             if column not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         connection.executescript(V2_TABLES)
+        connection.executescript(V4_TABLES)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
 
@@ -177,6 +181,7 @@ class AnalysisRepository:
         ]
         self._delete_files(file_ids)
         self._connection.execute("DELETE FROM analysis_results WHERE project_id = ?", (project_id,))
+        self._connection.execute("DELETE FROM explanations WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
         self._commit()
 
@@ -413,6 +418,46 @@ class AnalysisRepository:
         ).fetchall()
         return [_dependency_from_row(row) for row in rows]
 
+    # --- Explanation（AI解説。解析結果とは別に管理する） ---
+
+    def save_explanation(self, explanation: Explanation) -> None:
+        self._connection.execute(
+            "INSERT INTO explanations (explanation_id, project_id, target_kind, target, created_at, provider, model, "
+            "prompt_hash, context_hash, source_hashes, repository_revision, analyzer_version, text, validation, status, "
+            "ai_generated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            (
+                explanation.explanation_id, explanation.project_id, explanation.target_kind, explanation.target,
+                explanation.created_at.isoformat(), explanation.provider, explanation.model, explanation.prompt_hash,
+                explanation.context_hash, json.dumps(explanation.source_hashes), explanation.repository_revision,
+                explanation.analyzer_version, explanation.text, json.dumps(explanation.validation, ensure_ascii=False),
+                explanation.status.value,
+            ),
+        )
+        self._commit()
+
+    def list_explanations(
+        self, project_id: str, target_kind: str | None = None, target: str | None = None
+    ) -> list[Explanation]:
+        query = "SELECT * FROM explanations WHERE project_id = ?"
+        params: list[object] = [project_id]
+        if target_kind is not None:
+            query += " AND target_kind = ?"
+            params.append(target_kind)
+        if target is not None:
+            query += " AND target = ?"
+            params.append(target)
+        rows = self._connection.execute(query + " ORDER BY created_at DESC", params).fetchall()
+        return [_explanation_from_row(row) for row in rows]
+
+    def get_explanation(self, project_id: str, id_prefix: str) -> Explanation | None:
+        """IDまたはその先頭部分（一意に定まる場合）で解説を取得する。"""
+
+        rows = self._connection.execute(
+            "SELECT * FROM explanations WHERE project_id = ? AND explanation_id LIKE ?",
+            (project_id, id_prefix.replace("%", "") + "%"),
+        ).fetchall()
+        return _explanation_from_row(rows[0]) if len(rows) == 1 else None
+
     # --- AnalysisResult ---
 
     def save_analysis_result(self, result: AnalysisResult) -> None:
@@ -496,6 +541,26 @@ def _symbol_from_row(row: sqlite3.Row) -> Symbol:
         is_async=bool(row["is_async"]),
         usr=row["usr"],
         summary=row["summary"],
+    )
+
+
+def _explanation_from_row(row: sqlite3.Row) -> Explanation:
+    return Explanation(
+        explanation_id=row["explanation_id"],
+        project_id=row["project_id"],
+        target_kind=row["target_kind"],
+        target=row["target"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        provider=row["provider"],
+        model=row["model"],
+        prompt_hash=row["prompt_hash"],
+        context_hash=row["context_hash"],
+        source_hashes=json.loads(row["source_hashes"]),
+        text=row["text"],
+        validation=json.loads(row["validation"]),
+        status=ExplanationStatus(row["status"]),
+        repository_revision=row["repository_revision"],
+        analyzer_version=row["analyzer_version"],
     )
 
 

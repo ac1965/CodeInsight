@@ -1962,6 +1962,10 @@ def build_parser() -> argparse.ArgumentParser:
     docs_check = add("docs-check", "文書の識別子・オプション・環境変数と、実装の差を探す（仕様と実装のずれの手がかり）", _cmd_docs_check)
     docs_check.add_argument("--limit", type=int, default=20)
 
+    from codeinsight import cli_ai
+
+    cli_ai.register(add)
+
     unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
     unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")
     unresolved.add_argument("--all", action="store_true", help="全件を表示する")
