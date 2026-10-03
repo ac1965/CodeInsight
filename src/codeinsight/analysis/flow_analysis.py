@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-_MUTATING_METHODS = frozenset(
+MUTATING_METHODS = frozenset(
     {"append", "extend", "add", "update", "pop", "remove", "clear", "insert", "setdefault",
      "discard", "sort", "reverse", "popitem", "appendleft", "extendleft", "popleft"}
 )
@@ -41,7 +41,7 @@ def unparse(node: ast.AST | None, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _end(node: ast.AST) -> int:
+def end_line_of(node: ast.AST) -> int:
     return getattr(node, "end_lineno", None) or node.lineno  # type: ignore[attr-defined]
 
 
@@ -111,7 +111,7 @@ def analyze_control_flow(
 
     def add(kind: str, node: ast.AST, depth: int, detail: str = "") -> None:
         nonlocal max_depth
-        summary.items.append(FlowItem(kind, node.lineno, _end(node), depth, detail))  # type: ignore[attr-defined]
+        summary.items.append(FlowItem(kind, node.lineno, end_line_of(node), depth, detail))  # type: ignore[attr-defined]
         counts[kind] += 1
         max_depth = max(max_depth, depth)
 
@@ -157,7 +157,7 @@ def analyze_control_flow(
                     orelse = orelse[0].orelse
                 if orelse:
                     else_line = _else_line(source_lines, orelse[0].lineno)
-                    summary.items.append(FlowItem("else", else_line, _end(orelse[-1]), depth, ""))
+                    summary.items.append(FlowItem("else", else_line, end_line_of(orelse[-1]), depth, ""))
                     counts["else"] += 1
                     walk(orelse, depth + 1, handler_stack)
             elif isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
@@ -172,20 +172,20 @@ def analyze_control_flow(
                 if _loop_retries(statement):
                     summary.hints.append(Hint("retry", statement.lineno, "ループ内のtry/exceptで例外を受けて繰り返す（リトライの可能性）"))
             elif isinstance(statement, ast.Try) or statement.__class__.__name__ == "TryStar":
-                types_per_handler = tuple(_handler_types(h) for h in statement.handlers)
+                types_per_handler = tuple(exception_types_of(h) for h in statement.handlers)
                 add("try", statement, depth)
-                summary.tries.append(TryRange(statement.lineno, _end(statement.body[-1]), types_per_handler))
+                summary.tries.append(TryRange(statement.lineno, end_line_of(statement.body[-1]), types_per_handler))
                 walk(statement.body, depth + 1, (_flatten(types_per_handler), *handler_stack))
                 for handler in statement.handlers:
                     decisions += 1
-                    types = _handler_types(handler)
+                    types = exception_types_of(handler)
                     add("except", handler, depth, ", ".join(types))
-                    summary.handlers.append(_handler_info(statement, handler, types))
+                    summary.handlers.append(handler_info(statement, handler, types))
                     walk(handler.body, depth + 1, handler_stack)
                 if statement.orelse:
                     walk(statement.orelse, depth + 1, handler_stack)
                 if statement.finalbody:
-                    summary.items.append(FlowItem("finally", statement.finalbody[0].lineno, _end(statement.finalbody[-1]), depth, ""))
+                    summary.items.append(FlowItem("finally", statement.finalbody[0].lineno, end_line_of(statement.finalbody[-1]), depth, ""))
                     counts["finally"] += 1
                     walk(statement.finalbody, depth + 1, handler_stack)
             elif isinstance(statement, (ast.With, ast.AsyncWith)):
@@ -235,7 +235,7 @@ def analyze_control_flow(
         "with_blocks": counts["with"],
         "cyclomatic": 1 + decisions,
         "max_depth": max_depth,
-        "lines": _end(function) - function.lineno + 1,
+        "lines": end_line_of(function) - function.lineno + 1,
     }
     summary.items.sort(key=lambda item: (item.line, item.depth))
     summary.hints.sort(key=lambda hint: hint.line)
@@ -256,7 +256,7 @@ def _flatten(groups: tuple[tuple[str, ...], ...]) -> tuple[str, ...]:
     return tuple(t for group in groups for t in group)
 
 
-def _handler_types(handler: ast.ExceptHandler) -> tuple[str, ...]:
+def exception_types_of(handler: ast.ExceptHandler) -> tuple[str, ...]:
     if handler.type is None:
         return ("<bare>",)
     if isinstance(handler.type, ast.Tuple):
@@ -269,7 +269,7 @@ def _exception_name(expression: ast.expr) -> str:
     return unparse(target, 60)
 
 
-def _handler_info(try_node: ast.AST, handler: ast.ExceptHandler, types: tuple[str, ...]) -> HandlerInfo:
+def handler_info(try_node: ast.AST, handler: ast.ExceptHandler, types: tuple[str, ...]) -> HandlerInfo:
     body = handler.body
     swallowed = all(
         isinstance(s, (ast.Pass, ast.Continue, ast.Break))
@@ -536,7 +536,7 @@ def _state_accesses(function: ast.AST, receiver: str, method: str) -> list[State
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             inner = node.func.value
             name = is_self_attr(inner)
-            if name is not None and node.func.attr in _MUTATING_METHODS:
+            if name is not None and node.func.attr in MUTATING_METHODS:
                 found.append(StateAccess(name, method, node.lineno, "mutate"))
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -587,7 +587,7 @@ def analyze_module_state(tree: ast.Module) -> list[GlobalWrite]:
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in module_names
                 and node.func.value.id not in (local - declared)
-                and node.func.attr in _MUTATING_METHODS
+                and node.func.attr in MUTATING_METHODS
             ):
                 writes.append(GlobalWrite(node.func.value.id, function.name, node.lineno, "mutate"))
     return sorted(set(writes), key=lambda w: (w.line, w.name))

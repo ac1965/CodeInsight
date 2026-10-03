@@ -68,13 +68,13 @@ class RiskService:
         def add(rule: str, line: int, detail: str = "") -> None:
             found.append(Finding(rule, RULES[rule][0], path, line, owner.name_at(line), detail))
 
-        async_ranges = [(n.lineno, fa._end(n)) for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]
+        async_ranges = [(n.lineno, fa.end_line_of(n)) for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler):
-                types = fa._handler_types(node)
+                types = fa.exception_types_of(node)
                 if node.type is None:
                     add("bare-except", node.lineno)
-                info = fa._handler_info(node, node, types)
+                info = fa.handler_info(node, node, types)
                 if info.swallowed:
                     add("swallowed-exception", node.lineno, f"except {', '.join(types)}")
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):

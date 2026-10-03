@@ -36,7 +36,7 @@ class CfgBuilder:
 
         start = self._node("terminal", f"開始: {function.name}()", function.lineno)
         end = self._node("terminal", "終了", getattr(function, "end_lineno", function.lineno))
-        self._end = end
+        self.end_line_of = end
         exits = self._block(function.body, [(start, "")])
         self._connect(exits, end)
         return GraphModel(
@@ -123,7 +123,7 @@ class CfgBuilder:
         if isinstance(statement, ast.Return):
             node = self._node("block", f"L{statement.lineno}: return {fa.unparse(statement.value, 40)}".rstrip(), statement.lineno)
             self._connect(entering, node)
-            self._edge(node, self._end)
+            self._edge(node, self.end_line_of)
             return []
         if isinstance(statement, ast.Raise):
             node = self._node("block", f"L{statement.lineno}: raise {fa.unparse(statement.exc, 40)}".rstrip(), statement.lineno)
@@ -182,7 +182,7 @@ class CfgBuilder:
         self._connect(entering, try_node)
         handler_nodes: list[tuple[ast.ExceptHandler, str]] = []
         for handler in statement.handlers:
-            types = ", ".join(fa._handler_types(handler))
+            types = ", ".join(fa.exception_types_of(handler))
             node = self._node("decision", f"L{handler.lineno}: except {types}", handler.lineno)
             handler_nodes.append((handler, node))
             self._edge(try_node, node, "例外")

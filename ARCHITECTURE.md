@@ -75,8 +75,15 @@ src/codeinsight/
 │   └── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存）
 │
 ├── bootstrap.py       標準の解析アダプターの組み立て（CLI・将来のGUIで共用）
-├── cli.py             コマンドラインインターフェース
-└── cli_ai.py          AI関連のコマンド（explain / explain-file / explain-path / ask / explanations / ai-status）
+└── cli/               コマンドラインインターフェース（責務ごとのモジュール。依存は common ← project ← reading、explore・graph・ai_commands は common のみ、parser が全てを束ねる）
+    ├── common.py          共通部品（エラー・出力・プロジェクト選択・表示の整形）
+    ├── explore.py         探索・参照（analyze / status / symbols / tree / search / def / refs / callers / trace / path / deps / show / describe / overview / unresolved）
+    ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
+    ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
+    ├── graph.py           グラフ出力（graph）
+    ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status）
+    ├── parser.py          コマンドの登録（argparse）とエントリポイント `main`
+    └── __main__.py        `python -m codeinsight.cli`
 ```
 
 AI層（`ai/`）は、解析基盤（domain・application）の結果を入力として解説を生成・検証する。解析基盤はAI層に依存せず、AIを使わない機能は、AI層が無くても（AIに接続できなくても）動作する。

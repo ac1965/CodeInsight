@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 
 from codeinsight.ai.citations import CitationStatus, ValidationReport
@@ -10,9 +9,10 @@ from codeinsight.ai.context import ContextError
 from codeinsight.ai.provider import AIProviderError, OpenAICompatibleProvider
 from codeinsight.ai.service import ExplanationResult, ExplanationService
 from codeinsight.application import FlowAnalysisError, NavigationService
+from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe
 from codeinsight.domain import Explanation, ExplanationStatus
 
-_STATUS_LABEL = {
+STATUS_LABEL = {
     ExplanationStatus.VERIFIED: "検証済み（引用はすべて確認できた）",
     ExplanationStatus.PARTIAL: "一部未確認（根拠の示されていない記述を含む）",
     ExplanationStatus.UNVERIFIED: "未検証（引用の誤り・存在しない名前・根拠なし）",
@@ -23,14 +23,6 @@ _CITATION_LABEL = {
     CitationStatus.OUT_OF_CONTEXT: "AIに渡した根拠の範囲外（渡していない内容を根拠にしている）",
     CitationStatus.STALE: "解析後にファイルが変更されている",
 }
-
-
-def _cli():
-    """cli.py の共通部品。循環importを避けるため、使うときに読み込む。"""
-
-    from codeinsight import cli
-
-    return cli
 
 
 def _add_ai_options(sub: argparse.ArgumentParser) -> None:
@@ -63,8 +55,7 @@ def _config(args: argparse.Namespace) -> AIConfig:
 
 
 def _service(args: argparse.Namespace):
-    cli = _cli()
-    repository, project, index, stale = cli._prepare(args)
+    repository, project, index, stale = prepare_read(args)
     navigation = NavigationService(repository)
     return repository, project, index, navigation, ExplanationService(repository, navigation, _config(args)), stale
 
@@ -72,15 +63,14 @@ def _service(args: argparse.Namespace):
 def _guard(call):
     """AI解説の失敗を、利用者向けのメッセージに変換する。非AI機能には影響しない。"""
 
-    cli = _cli()
     try:
         return call()
     except ConsentError as exc:
-        raise cli.CliError(str(exc), 3) from exc
+        raise CliError(str(exc), 3) from exc
     except AIProviderError as exc:
-        raise cli.CliError(str(exc), 4) from exc
+        raise CliError(str(exc), 4) from exc
     except (ContextError, FlowAnalysisError) as exc:
-        raise cli.CliError(str(exc), 1) from exc
+        raise CliError(str(exc), 1) from exc
 
 
 # --- 表示 ---
@@ -103,11 +93,9 @@ def render_annotated(text: str, report: ValidationReport) -> str:
 
 
 def _print_validation(report: ValidationReport) -> None:
-    cli = _cli()
-    safe = cli.safe
     total = len(report.citations)
     verified = total - len(report.bad_citations)
-    print(f"\n──── 検証結果: {_STATUS_LABEL[report.status]}")
+    print(f"\n──── 検証結果: {STATUS_LABEL[report.status]}")
     print(f"  引用 {total}件のうち検証できたもの {verified}件 / 根拠のある記述 {report.count('evidenced')}行 / 推論と明示された記述 {report.count('inference')}行 / 根拠の無い記述 {report.count('unsupported')}行")
     for citation in report.bad_citations:
         print(f"  ✗ 行{citation.line_no} {safe(citation.raw)}: {_CITATION_LABEL[citation.status]}")
@@ -119,8 +107,6 @@ def _print_validation(report: ValidationReport) -> None:
 
 
 def _print_result(args: argparse.Namespace, result: ExplanationResult, config: AIConfig) -> int:
-    cli = _cli()
-    safe = cli.safe
     if result.dry_run:
         system, user = result.messages[0], result.messages[1]
         print("［dry-run］AIへは何も送信していません。--allow-send を付けると、次の内容が送信されます。")
@@ -134,7 +120,7 @@ def _print_result(args: argparse.Namespace, result: ExplanationResult, config: A
     assert result.completion is not None and result.report is not None and result.explanation is not None
     explanation = result.explanation
     if getattr(args, "format", "text") == "json":
-        cli._emit_json({
+        emit_json({
             "explanation_id": explanation.explanation_id, "model": explanation.model, "provider": explanation.provider,
             "status": explanation.status.value, "text": explanation.text, "validation": explanation.validation,
             "saved": not getattr(args, "no_save", False), "ai_generated": True,
@@ -154,67 +140,61 @@ def _print_result(args: argparse.Namespace, result: ExplanationResult, config: A
 # --- コマンド ---
 
 
-def _cmd_explain(args: argparse.Namespace) -> int:
-    cli = _cli()
+def cmd_explain(args: argparse.Namespace) -> int:
     repository, project, index, navigation, service, _ = _service(args)
-    symbol = cli._resolve(args, navigation, index, args.name, project).symbol
+    symbol = resolve_symbol_arg(args, navigation, index, args.name, project).symbol
     result = _guard(lambda: service.explain_symbol(project, index, symbol, dry_run=args.dry_run, save=not args.no_save))
     return _print_result(args, result, _config(args))
 
 
-def _cmd_explain_file(args: argparse.Namespace) -> int:
+def cmd_explain_file(args: argparse.Namespace) -> int:
     repository, project, index, navigation, service, _ = _service(args)
     result = _guard(lambda: service.explain_file(project, index, args.path, dry_run=args.dry_run, save=not args.no_save))
     return _print_result(args, result, _config(args))
 
 
-def _cmd_explain_path(args: argparse.Namespace) -> int:
-    cli = _cli()
+def cmd_explain_path(args: argparse.Namespace) -> int:
     repository, project, index, navigation, service, _ = _service(args)
-    source = cli._resolve(args, navigation, index, args.source, project).symbol
-    target = cli._resolve(args, navigation, index, args.target, project).symbol
+    source = resolve_symbol_arg(args, navigation, index, args.source, project).symbol
+    target = resolve_symbol_arg(args, navigation, index, args.target, project).symbol
     result = _guard(lambda: service.explain_path(project, index, source, target, dry_run=args.dry_run, save=not args.no_save))
     return _print_result(args, result, _config(args))
 
 
-def _cmd_ask(args: argparse.Namespace) -> int:
+def cmd_ask(args: argparse.Namespace) -> int:
     repository, project, index, navigation, service, _ = _service(args)
     question = " ".join(args.question)
     result = _guard(lambda: service.ask(project, index, question, dry_run=args.dry_run, save=not args.no_save))
     return _print_result(args, result, _config(args))
 
 
-def _cmd_explanations(args: argparse.Namespace) -> int:
-    cli = _cli()
-    safe = cli.safe
-    repository, project, index, stale = cli._prepare(args)
+def cmd_explanations(args: argparse.Namespace) -> int:
+    repository, project, index, stale = prepare_read(args)
     service = ExplanationService(repository, NavigationService(repository), _config(args))
     if args.id:
         explanation = service.get(project, args.id)
         if explanation is None:
-            raise cli.CliError(f"解説が見つかりません（IDが一意に定まりません）: {safe(args.id)}", 2)
+            raise CliError(f"解説が見つかりません（IDが一意に定まりません）: {safe(args.id)}", 2)
         return _show_explanation(args, service, project, index, explanation)
     items = service.list(project, args.kind)[: args.limit]
     if args.format == "json":
-        cli._emit_json([{"id": e.explanation_id, "kind": e.target_kind, "target": e.target, "status": e.status.value,
+        emit_json([{"id": e.explanation_id, "kind": e.target_kind, "target": e.target, "status": e.status.value,
                          "model": e.model, "created_at": e.created_at.isoformat(),
                          "stale": bool(service.stale_paths(project, index, e))} for e in items])
         return 0
     print("保存済みのAI解説（解析結果とは別に管理。AIが生成したもので、確定した事実ではありません）")
     for e in items:
         marker = "  [古い: 対象ファイルが変更されています]" if service.stale_paths(project, index, e) else ""
-        print(f"  {e.explanation_id[:8]}  {e.created_at:%Y-%m-%d %H:%M}  {e.target_kind:<8} {_STATUS_LABEL[e.status].split('（')[0]:<8} {safe(e.model)}  {safe(e.target)}{marker}")
+        print(f"  {e.explanation_id[:8]}  {e.created_at:%Y-%m-%d %H:%M}  {e.target_kind:<8} {STATUS_LABEL[e.status].split('（')[0]:<8} {safe(e.model)}  {safe(e.target)}{marker}")
     if not items:
         print("  保存済みの解説はありません")
     return 0
 
 
 def _show_explanation(args, service: ExplanationService, project, index, explanation: Explanation) -> int:
-    cli = _cli()
-    safe = cli.safe
     stale = service.stale_paths(project, index, explanation)
     if args.format == "json":
-        cli._emit_json({"id": explanation.explanation_id, "target": explanation.target, "model": explanation.model,
+        emit_json({"id": explanation.explanation_id, "target": explanation.target, "model": explanation.model,
                         "status": explanation.status.value, "text": explanation.text, "validation": explanation.validation,
                         "stale_paths": stale, "source_hashes": explanation.source_hashes, "ai_generated": True})
         return 0
@@ -225,13 +205,12 @@ def _show_explanation(args, service: ExplanationService, project, index, explana
     print()
     print(safe(explanation.text))
     validation = explanation.validation
-    print(f"\n──── 検証結果（生成時）: {_STATUS_LABEL[explanation.status]}")
+    print(f"\n──── 検証結果（生成時）: {STATUS_LABEL[explanation.status]}")
     print(f"  引用 {len(validation.get('citations', []))}件 / 根拠の無い記述 {len(validation.get('unsupported_lines', []))}行 / 存在を確認できない名前 {len(validation.get('unknown_identifiers', []))}件")
     return 0
 
 
-def _cmd_ai_status(args: argparse.Namespace) -> int:
-    cli = _cli()
+def cmd_ai_status(args: argparse.Namespace) -> int:
     config = _config(args)
     warnings = config_file_warnings()
     for warning in warnings:
@@ -247,13 +226,13 @@ def _cmd_ai_status(args: argparse.Namespace) -> int:
     except AIProviderError as exc:
         if args.format == "json":
             status["error"] = str(exc)
-            cli._emit_json(status)
+            emit_json(status)
         else:
             print(f"\n接続できません: {exc}")
         return 0
     if args.format == "json":
         status.update({"reachable": True, "models": models, "model_available": config.model in models if config.model else None})
-        cli._emit_json(status)
+        emit_json(status)
         return 0
     print(f"\n接続できました。利用できるモデル: {', '.join(models) or '（なし）'}")
     if config.model and config.model not in models:
@@ -265,31 +244,31 @@ def _cmd_ai_status(args: argparse.Namespace) -> int:
 def register(add) -> None:
     """build_parser から呼ばれ、AI関連のコマンドを登録する。"""
 
-    explain = add("explain", "関数・クラスの処理をAIで解説する（解析結果とソースを根拠に渡し、引用を検証する）", _cmd_explain, ("text", "json"))
+    explain = add("explain", "関数・クラスの処理をAIで解説する（解析結果とソースを根拠に渡し、引用を検証する）", cmd_explain, ("text", "json"))
     explain.add_argument("name", help="名前または修飾名")
     explain.add_argument("--file")
     _add_ai_options(explain)
 
-    explain_file = add("explain-file", "ファイルの役割と構成をAIで解説する", _cmd_explain_file, ("text", "json"))
+    explain_file = add("explain-file", "ファイルの役割と構成をAIで解説する", cmd_explain_file, ("text", "json"))
     explain_file.add_argument("path", help="解析対象ファイルの相対パス")
     _add_ai_options(explain_file)
 
-    explain_path = add("explain-path", "2つの関数の間の呼び出し経路をAIで解説する", _cmd_explain_path, ("text", "json"))
+    explain_path = add("explain-path", "2つの関数の間の呼び出し経路をAIで解説する", cmd_explain_path, ("text", "json"))
     explain_path.add_argument("source")
     explain_path.add_argument("target")
     explain_path.add_argument("--file")
     _add_ai_options(explain_path)
 
-    ask = add("ask", "コードに関する質問に、関連するコードを検索してAIが答える（根拠の引用を検証する）", _cmd_ask, ("text", "json"))
+    ask = add("ask", "コードに関する質問に、関連するコードを検索してAIが答える（根拠の引用を検証する）", cmd_ask, ("text", "json"))
     ask.add_argument("question", nargs="+", help="質問（日本語可）")
     _add_ai_options(ask)
 
-    explanations = add("explanations", "保存済みのAI解説を一覧・表示する（解析結果とは別に管理）", _cmd_explanations, ("text", "json"))
+    explanations = add("explanations", "保存済みのAI解説を一覧・表示する（解析結果とは別に管理）", cmd_explanations, ("text", "json"))
     explanations.add_argument("id", nargs="?", help="解説ID（先頭の数文字でも可）")
     explanations.add_argument("--kind", choices=("symbol", "file", "path", "question"))
     explanations.add_argument("--limit", type=int, default=20)
 
-    status = add("ai-status", "AIの設定と接続を確認する（ソースコードは送信しない）", _cmd_ai_status, ("text", "json"), exclude=False)
+    status = add("ai-status", "AIの設定と接続を確認する（ソースコードは送信しない）", cmd_ai_status, ("text", "json"), exclude=False)
     status.add_argument("--ai-base-url")
     status.add_argument("--ai-model")
     status.add_argument("--timeout", type=float)

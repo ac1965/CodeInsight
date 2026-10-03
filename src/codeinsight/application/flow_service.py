@@ -343,7 +343,7 @@ class FlowService:
 
         cache: dict = {}
         calls_by_line = self._calls_by_line(index)
-        bases = self._exception_bases(index)
+        bases = self.exception_bases(index)
         memo: dict[str, list[PropagatedException]] = {}
         unresolved = {"count": 0}
         propagated = self._propagate(project, index, symbol, depth, cache, calls_by_line, bases, memo, set(), unresolved)
@@ -357,7 +357,7 @@ class FlowService:
             symbol, index.path_of(symbol.file_id), propagated, inside, summary.handlers, unresolved["count"]
         )
 
-    def _exception_bases(self, index: ProjectIndex):
+    def exception_bases(self, index: ProjectIndex):
         """プロジェクト内の例外クラスの基底クラス名（推移的）を返す関数。"""
 
         direct: dict[str, set[str]] = defaultdict(set)

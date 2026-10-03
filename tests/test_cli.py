@@ -207,12 +207,12 @@ def test_tree_merges_module_into_file_and_supports_depth(
 
 
 def test_closed_pipe_exits_quietly(c_project: Path, db: str, monkeypatch, capsys) -> None:
-    import codeinsight.cli as cli
+    import codeinsight.cli.parser as cli
 
     def broken(*_args, **_kwargs):
         raise BrokenPipeError
 
-    monkeypatch.setattr(cli, "_cmd_symbols", broken)
+    monkeypatch.setattr(cli, "cmd_symbols", broken)
     parser_main = cli.main
     # build_parserで束縛済みの関数を差し替えるため、parserを作り直させる
     assert parser_main(["symbols", "--db", db]) == 0

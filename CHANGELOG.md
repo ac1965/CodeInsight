@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 保守性の改善（未リリース）
+
+### 変更
+
+* `cli.py`（約2,000行）を、責務ごとのパッケージ `cli/`（common・explore・project・reading・graph・ai_commands・parser）に分割。コマンドの動作・オプションは変わらない（エントリポイント `codeinsight` と `python -m codeinsight.cli` は従来どおり）
+* モジュール間で参照されていた非公開名（`_` 付き）を公開名に整理（`cli` の共通部品とコマンド関数、`flow_analysis` の `end_line_of`・`exception_types_of`・`handler_info`・`MUTATING_METHODS`、`FlowService.exception_bases`）。越境する非公開名の参照は無くなった
+* AI解説のAPIキーを、環境変数のみから読むよう変更（設定ファイルの `api_key` は無視し、`ai-status` が警告する）
+
 ## Phase 4: AIによる解説（未リリース）
 
 ### 追加

@@ -205,7 +205,7 @@ class UnderstandService:
     def _caught_by_callers(self, project, index, symbol, report: ExceptionReport, callers: list[ReferenceHit]) -> dict[str, tuple[int, int]]:
         """伝播する例外ごとに、呼び出し元の呼び出し箇所のうち、tryで捕捉しているものの数を数える。"""
 
-        bases = self._flow._exception_bases(index)
+        bases = self._flow.exception_bases(index)
         summaries: dict[str, fa.ControlFlowSummary | None] = {}
         counts: dict[str, list[int]] = {}
         for exception in {e.exception for e in report.propagated}:
@@ -304,7 +304,7 @@ def _parameter_mutations(function: ast.FunctionDef | ast.AsyncFunctionDef, varia
     found: list[str] = []
     for name in sorted(params):
         for flow in variables[name].flows:
-            if flow.kind == "method_call" and flow.target.rsplit(".", 1)[-1] in fa._MUTATING_METHODS:
+            if flow.kind == "method_call" and flow.target.rsplit(".", 1)[-1] in fa.MUTATING_METHODS:
                 found.append(f"L{flow.line} 引数 {name} を {flow.target.rsplit('.', 1)[-1]}() で破壊的に変更する")
     for node in ast.walk(function):
         targets = node.targets if isinstance(node, ast.Assign) else ([node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else [])
