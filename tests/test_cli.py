@@ -46,7 +46,10 @@ def test_read_commands_require_existing_database(tmp_path: Path, capsys) -> None
 def test_callers_callees_and_unresolved_are_shown(c_project: Path, db: str, capsys) -> None:
     code, out, err = run(capsys, "callees", "main", "--db", db)
     assert code == 0
-    assert "[未解決]" in out and "[外部]" in out and "[解決]" in out
+    assert "[未解決※1]" in out and "[外部※2]" in out and "[解決]" in out
+    # 理由は各行に繰り返さず、脚注にまとめて示す
+    assert out.count("関数ポインタ経由の呼び出し") == 1
+    assert "※1 関数ポインタ経由" in out
     assert "実行順序" in err  # 静的な関係である旨を併記
 
     code, out, _ = run(capsys, "callers", "fib", "--db", db, "--format", "json")
@@ -54,13 +57,28 @@ def test_callers_callees_and_unresolved_are_shown(c_project: Path, db: str, caps
     assert {r["source"] for r in results} == {"main", "fib"}
 
     code, out, _ = run(capsys, "unresolved", "--db", db)
-    assert "関数ポインタ" in out
+    assert "■ 関数ポインタ経由の呼び出し" in out  # 理由別にまとめて表示
+    assert "main.c:11" in out
+
+
+def test_unresolved_is_grouped_by_reason_and_limited(c_project: Path, db: str, capsys) -> None:
+    code, out, _ = run(capsys, "unresolved", "--limit", "1", "--db", db)
+    assert code == 0
+    assert out.count("■") == 2  # 理由は2種類（変数経由・構造体メンバ経由）
+    code, out, _ = run(capsys, "unresolved", "--all", "--db", db)
+    assert "ほか" not in out
 
 
 def test_trace_marks_recursion_and_unresolved(c_project: Path, db: str, capsys) -> None:
     code, out, _ = run(capsys, "trace", "main", "--depth", "2", "--db", db)
     assert code == 0
-    assert "[再帰]" in out and "[未解決]" in out and "[外部]" in out
+    assert "再帰" in out and "[未解決]" in out
+    # 外部の呼び出しは既定で省略し、件数だけ示す。同じ呼び出しは1行に集約する
+    assert "[外部]" not in out and "外部の呼び出し 1件を省略" in out
+    assert "×2" in out
+
+    code, out, _ = run(capsys, "trace", "main", "--depth", "1", "--external", "--db", db)
+    assert "printf  [外部]" in out and "省略" not in out.replace("深さ制限で省略", "")
 
 
 def test_ambiguous_symbol_exits_with_candidates(
@@ -73,7 +91,8 @@ def test_ambiguous_symbol_exits_with_candidates(
     assert "shapes.Circle.area" in err and "shapes.Shape.area" in err
 
     code, _, err = run(capsys, "callers", "no_such", "--db", db)
-    assert code == 2 and "見つかりません" in err
+    assert code == 2 and "見つかりません" in err and "'shapes'" not in err
+    assert "プロジェクト 'python_sample'" in err  # どのプロジェクトで探したかを示す
 
 
 def test_path_and_deps_and_show(c_project: Path, db: str, capsys) -> None:
@@ -144,3 +163,56 @@ def test_multiple_projects_require_selection(
 def test_terminal_control_characters_in_source_are_neutralised() -> None:
     assert safe("a\x1b[31mred\x07") == "a\\x1b[31mred\\x07"
     assert safe("通常の日本語\tタブ") == "通常の日本語\tタブ"
+
+
+def test_not_found_suggests_similar_names(c_project: Path, db: str, capsys) -> None:
+    code, _, err = run(capsys, "callers", "fibb", "--db", db)
+    assert code == 2
+    assert "もしかして" in err and "fib" in err
+
+
+def test_exclude_filters_results_without_touching_stored_analysis(
+    c_project: Path, db: str, capsys
+) -> None:
+    code, out, _ = run(capsys, "callers", "fib", "--exclude", "main.c", "--db", db)
+    assert code == 0 and "ops.c:20" in out and "main.c:13" not in out
+
+    code, out, _ = run(capsys, "symbols", "--exclude", "ops.*", "--db", db)
+    assert "ops." not in out and "main.c" in out
+
+    code, out, _ = run(capsys, "graph", "deps", "--exclude", "main.c", "--format", "json", "--db", db)
+    labels = {n["label"] for n in json.loads(out)["nodes"]}
+    assert "main.c" not in labels and "ops.c" in labels
+
+    # 絞り込みは表示だけの操作で、保存済みの結果は変わらない
+    code, out, _ = run(capsys, "callers", "fib", "--db", db)
+    assert "main.c:13" in out and "ops.c:20" in out
+
+
+def test_tree_merges_module_into_file_and_supports_depth(
+    tmp_path: Path, db: str, capsys
+) -> None:
+    root = tmp_path / "t"
+    root.mkdir()
+    (root / "a.py").write_text("X = 1\n\n\nclass A:\n    y = 2\n\n    def m(self):\n        pass\n")
+    main(["analyze", str(root), "--db", db])
+    capsys.readouterr()
+
+    code, out, _ = run(capsys, "tree", "--db", db)
+    assert "(module" not in out  # モジュールシンボルはファイルノードに統合される
+    assert "X  (global_variable" in out and "m  (method" in out
+
+    code, out, _ = run(capsys, "tree", "--no-variables", "--depth", "1", "--db", db)
+    assert "A  (class" in out and "X  (" not in out and "m  (method" not in out
+
+
+def test_closed_pipe_exits_quietly(c_project: Path, db: str, monkeypatch, capsys) -> None:
+    import codeinsight.cli as cli
+
+    def broken(*_args, **_kwargs):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli, "_cmd_symbols", broken)
+    parser_main = cli.main
+    # build_parserで束縛済みの関数を差し替えるため、parserを作り直させる
+    assert parser_main(["symbols", "--db", db]) == 0

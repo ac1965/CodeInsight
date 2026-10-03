@@ -198,3 +198,48 @@ def test_analyzer_version_includes_a_fingerprint_of_the_analysis_code() -> None:
 
     assert ANALYZER_VERSION == f"{__version__}+{analyzer_fingerprint()}"
     assert len(analyzer_fingerprint()) == 8
+
+
+def test_unchanged_reanalysis_does_not_rewrite_resolutions(tmp_path: Path, monkeypatch) -> None:
+    root = _make_project(
+        tmp_path, {"a.py": "def f():\n    return g()\n\n\ndef g():\n    return 1\n"}
+    )
+    with AnalysisRepository(tmp_path / "db.sqlite") as repo:
+        project = ProjectManager(repo).register(root)
+        coordinator = AnalysisCoordinator(repo, _extractor())
+        coordinator.analyze_project(project)
+
+        written: list[tuple[int, int]] = []
+        original = repo.update_resolutions
+
+        def spy(references, dependencies):
+            references, dependencies = list(references), list(dependencies)
+            written.append((len(references), len(dependencies)))
+            original(references, dependencies)
+
+        monkeypatch.setattr(repo, "update_resolutions", spy)
+        coordinator.analyze_project(project)  # 変更なし
+        assert written == [(0, 0)]  # 解決結果が変わっていないので、1行も書き込まない
+
+        (root / "b.py").write_text("from a import g\n\n\ndef h():\n    return g()\n")
+        coordinator.analyze_project(project)
+        assert written[-1][0] >= 1  # 新しい参照の解決結果だけが書き込まれる
+
+
+def test_project_index_loads_references_lazily(tmp_path: Path) -> None:
+    from codeinsight.application import ProjectIndex
+
+    root = _make_project(tmp_path, {"a.py": "def f():\n    return 1\n"})
+    with AnalysisRepository(tmp_path / "db.sqlite") as repo:
+        project = ProjectManager(repo).register(root)
+        AnalysisCoordinator(repo, _extractor()).analyze_project(project)
+
+        calls: list[str] = []
+        original = repo.list_references_for_project
+        repo.list_references_for_project = lambda pid: (calls.append(pid), original(pid))[1]  # type: ignore[method-assign]
+
+        index = ProjectIndex.load(repo, project.project_id)
+        assert index.symbols and calls == []  # シンボルの利用だけでは参照を読み込まない
+        _ = index.references
+        _ = index.references
+        assert calls == [project.project_id]  # 初回のみ読み込み、以降はキャッシュ

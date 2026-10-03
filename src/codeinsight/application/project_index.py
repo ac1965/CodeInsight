@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fnmatch
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from codeinsight.domain import Dependency, Reference, SourceFile, Symbol
@@ -13,14 +15,19 @@ class ProjectIndex:
     各サービスが同じ読み込み・索引化の処理を重複して持たないための共通部品。
     保存済みの解析結果のスナップショットであり、ソースが変更されても更新されない
     （古さは FreshnessService で判定する）。
+
+    件数が多い参照・依存関係は、初めて使われるまで読み込まない（定義の検索や構造表示
+    のように、参照を使わないコマンドで読み込みのコストを払わないため）。
     """
 
     project_id: str
     files: dict[str, SourceFile]
     symbols: dict[str, Symbol]
-    references: list[Reference]
-    dependencies: list[Dependency]
+    _load_references: Callable[[], list[Reference]] = field(repr=False)
+    _load_dependencies: Callable[[], list[Dependency]] = field(repr=False)
     _paths: dict[str, SourceFile] = field(default_factory=dict, repr=False)
+    _references: list[Reference] | None = field(default=None, repr=False)
+    _dependencies: list[Dependency] | None = field(default=None, repr=False)
 
     @classmethod
     def load(cls, repository: AnalysisRepository, project_id: str) -> "ProjectIndex":
@@ -29,11 +36,58 @@ class ProjectIndex:
             project_id=project_id,
             files=files,
             symbols={s.symbol_id: s for s in repository.list_symbols_for_project(project_id)},
-            references=repository.list_references_for_project(project_id),
-            dependencies=[
+            _load_references=lambda: repository.list_references_for_project(project_id),
+            _load_dependencies=lambda: [
+                d for d in repository.list_dependencies_for_project(project_id) if d.is_visible
+            ],
+            _paths={f.relative_path: f for f in files.values()},
+        )
+
+    @property
+    def references(self) -> list[Reference]:
+        if self._references is None:
+            self._references = self._load_references()
+        return self._references
+
+    @property
+    def dependencies(self) -> list[Dependency]:
+        if self._dependencies is None:
+            self._dependencies = self._load_dependencies()
+        return self._dependencies
+
+    def excluding(self, patterns: Iterable[str]) -> "ProjectIndex":
+        """パスが除外パターン（fnmatch形式、例: ``tests/*``）に一致するファイルを取り除いた索引。
+
+        除外したファイルのシンボルに加え、除外ファイル内の参照・依存関係、および
+        除外ファイル内のシンボルを指す参照・依存関係も取り除く（表示を絞り込むための操作で、
+        保存済みの解析結果は変更しない）。
+        """
+
+        globs = list(patterns)
+        if not globs:
+            return self
+        dropped = {
+            fid
+            for fid, f in self.files.items()
+            if any(fnmatch.fnmatch(f.relative_path, g) for g in globs)
+        }
+        files = {fid: f for fid, f in self.files.items() if fid not in dropped}
+        symbols = {sid: s for sid, s in self.symbols.items() if s.file_id not in dropped}
+        return ProjectIndex(
+            project_id=self.project_id,
+            files=files,
+            symbols=symbols,
+            _load_references=lambda: [
+                r
+                for r in self.references
+                if r.source_location.file_id not in dropped
+                and (r.target_symbol_id is None or r.target_symbol_id in symbols)
+            ],
+            _load_dependencies=lambda: [
                 d
-                for d in repository.list_dependencies_for_project(project_id)
-                if d.is_visible
+                for d in self.dependencies
+                if d.source_file_id not in dropped
+                and (d.target_file_id is None or d.target_file_id in files)
             ],
             _paths={f.relative_path: f for f in files.values()},
         )

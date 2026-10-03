@@ -38,6 +38,9 @@ input[type=search] { padding:4px 8px; border:1px solid var(--border); border-rad
 .node.external rect { fill:var(--ext-bg); stroke:var(--ext); stroke-dasharray:4 3; }
 .node.hit rect { fill:var(--hit); }
 .node.selected rect { stroke-width:3; }
+.node.faded { opacity:0.25; }
+button { padding:3px 10px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--fg); cursor:pointer; }
+button:hover { background:var(--panel); }
 .node text { fill:var(--fg); font-size:12px; pointer-events:none; }
 .node { cursor:pointer; }
 .edge { fill:none; stroke:var(--line); stroke-width:1.4; }
@@ -57,6 +60,11 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
 </header>
 <div class="toolbar">
   <input id="filter" type="search" placeholder="ノードを検索" aria-label="ノードを検索">
+  <span>
+    <button id="zoom-out" type="button" aria-label="縮小">−</button>
+    <button id="zoom-in" type="button" aria-label="拡大">＋</button>
+    <button id="zoom-fit" type="button">全体表示</button>
+  </span>
   <span class="legend" id="legend"></span>
   <span id="stats" class="notes"></span>
 </div>
@@ -70,7 +78,7 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   "use strict";
   var data = JSON.parse(document.getElementById("graph-data").textContent);
   var NS = "http://www.w3.org/2000/svg";
-  var NODE_W = 190, NODE_H = 30, GAP_X = 90, GAP_Y = 18, PAD = 24;
+  var NODE_W = 230, NODE_H = 30, GAP_X = 90, GAP_Y = 18, PAD = 24;
 
   document.getElementById("title").textContent = data.title;
   document.getElementById("notes").textContent = data.notes.join(" ");
@@ -131,7 +139,25 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   });
 
   var svg = document.getElementById("graph");
-  svg.setAttribute("width", maxX + PAD); svg.setAttribute("height", maxY + PAD);
+  var contentW = maxX + PAD, contentH = maxY + PAD, scale = 1;
+  var canvas = document.getElementById("canvas");
+  svg.setAttribute("viewBox", "0 0 " + contentW + " " + contentH);
+  function applyScale(value) {
+    scale = Math.min(3, Math.max(0.05, value));
+    svg.setAttribute("width", Math.round(contentW * scale));
+    svg.setAttribute("height", Math.round(contentH * scale));
+  }
+  function fitScale() { return Math.min(1, (canvas.clientWidth - 8) / contentW); }
+  function fit() { applyScale(fitScale()); }
+  document.getElementById("zoom-in").addEventListener("click", function () { applyScale(scale * 1.25); });
+  document.getElementById("zoom-out").addEventListener("click", function () { applyScale(scale / 1.25); });
+  document.getElementById("zoom-fit").addEventListener("click", fit);
+  canvas.addEventListener("wheel", function (ev) {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    ev.preventDefault();
+    applyScale(scale * (ev.deltaY < 0 ? 1.1 : 1 / 1.1));
+  }, { passive: false });
+  applyScale(Math.max(0.7, fitScale()));  // 初期表示は文字が読める倍率にし、全体表示はボタンで
   var defs = document.createElementNS(NS, "defs");
   var marker = document.createElementNS(NS, "marker");
   marker.setAttribute("id", "arrow"); marker.setAttribute("viewBox", "0 0 10 10"); marker.setAttribute("refX", "9");
@@ -198,7 +224,8 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
     rect.setAttribute("width", NODE_W); rect.setAttribute("height", NODE_H); rect.setAttribute("rx", "5");
     var text = document.createElementNS(NS, "text");
     text.setAttribute("x", "8"); text.setAttribute("y", "19");
-    var label = n.label.length > 26 ? n.label.slice(0, 25) + "…" : n.label;
+    // 修飾名は末尾（関数名側）のほうが識別しやすいので、長い場合は先頭を省略する。
+    var label = n.label.length > 32 ? "…" + n.label.slice(-31) : n.label;
     text.textContent = label;
     var title = document.createElementNS(NS, "title"); title.textContent = n.label;
     g.appendChild(title); g.appendChild(rect); g.appendChild(text);
@@ -206,7 +233,10 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
       if (selected) selected.classList.remove("selected");
       selected = g; g.classList.add("selected");
       var related = edges.filter(function (e) { return e.source === n.id || e.target === n.id; });
+      var near = {}; near[n.id] = true;
+      related.forEach(function (e) { near[e.source] = true; near[e.target] = true; });
       edgeEls.forEach(function (x) { x.el.classList.toggle("dim", related.indexOf(x.e) < 0); });
+      nodeEls.forEach(function (x) { x.el.classList.toggle("faded", !near[x.n.id]); });
       show(n.label, [
         ["種別", n.kind],
         ["場所", n.path ? n.path + (n.line ? ":" + n.line : "") : ""],
@@ -220,11 +250,20 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
 
   document.getElementById("filter").addEventListener("input", function (ev) {
     var q = ev.target.value.toLowerCase();
-    nodeEls.forEach(function (x) { x.el.classList.toggle("hit", q !== "" && x.n.label.toLowerCase().indexOf(q) >= 0); });
+    var first = null;
+    nodeEls.forEach(function (x, i) {
+      var hit = q !== "" && x.n.label.toLowerCase().indexOf(q) >= 0;
+      x.el.classList.toggle("hit", hit);
+      if (hit && first === null) first = i;
+    });
+    if (first !== null) {
+      canvas.scrollTo(Math.max(0, pos[first].x * scale - 40), Math.max(0, pos[first].y * scale - 40));
+    }
   });
   svg.addEventListener("click", function (ev) {
     if (ev.target === svg) {
       edgeEls.forEach(function (x) { x.el.classList.remove("dim"); });
+      nodeEls.forEach(function (x) { x.el.classList.remove("faded"); });
       if (selected) selected.classList.remove("selected");
       selected = null;
     }

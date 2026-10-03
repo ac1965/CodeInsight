@@ -243,8 +243,19 @@ class AnalysisCoordinator:
         symbols = self._repository.list_symbols_for_project(project.project_id)
         references = self._repository.list_references_for_project(project.project_id)
         dependencies = self._repository.list_dependencies_for_project(project.project_id)
+        before_references = {r.reference_id: _resolution_state(r) for r in references}
+        before_dependencies = {d.dependency_id: _resolution_state(d) for d in dependencies}
         self._resolver.resolve(files, symbols, references, dependencies)
-        self._repository.update_resolutions(references, dependencies)
+        # 変わらなかった行は書き込まない（変更のない再解析で全行を更新しない）
+        self._repository.update_resolutions(
+            [r for r in references if _resolution_state(r) != before_references[r.reference_id]],
+            [d for d in dependencies if _resolution_state(d) != before_dependencies[d.dependency_id]],
+        )
+
+
+def _resolution_state(item: object) -> tuple:
+    target = getattr(item, "target_symbol_id", None) or getattr(item, "target_file_id", None)
+    return (target, item.resolution_status, item.confidence, item.note)  # type: ignore[attr-defined]
 
 
 def _format_warnings(warnings_by_message: dict[str, list[str]]) -> list[str]:

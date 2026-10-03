@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
+import os
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from codeinsight.analysis.call_graph import CallNode, Direction
@@ -26,6 +28,7 @@ from codeinsight.application.search_service import SymbolHit
 from codeinsight.bootstrap import build_symbol_extractor
 from codeinsight.domain import (
     AnalysisStatus,
+    Confidence,
     FileFreshness,
     Project,
     ResolutionStatus,
@@ -98,8 +101,12 @@ def _select_project(repository: AnalysisRepository, selector: str | None) -> Pro
     return projects[0]
 
 
+_OPENED: list[AnalysisRepository] = []  # コマンド終了時にまとめて閉じる（索引が遅延読み込みのため）
+
+
 def _context(args: argparse.Namespace):
     repository = _open_existing(args)
+    _OPENED.append(repository)
     try:
         project = _select_project(repository, args.project)
     except CliError:
@@ -133,6 +140,7 @@ def _prepare(args: argparse.Namespace):
     repository, project = _context(args)
     index = NavigationService(repository).load_index(project)
     stale = _stale_files(project, index)
+    index = index.excluding(getattr(args, "exclude", None) or [])
     return repository, project, index, stale
 
 
@@ -185,42 +193,84 @@ def _status_text(status: ResolutionStatus, confidence_inferred: bool) -> str:
     return f"{label}(推定)" if status == ResolutionStatus.RESOLVED and confidence_inferred else label
 
 
-def _format_reference(hit: ReferenceHit) -> str:
-    r = hit.reference
-    from codeinsight.domain import Confidence
+class NoteTable:
+    """同じ理由（注記）を各行に繰り返さず、脚注番号で示すための表。"""
 
+    def __init__(self) -> None:
+        self._numbers: dict[str, int] = {}
+
+    def mark(self, note: str) -> str:
+        if not note:
+            return ""
+        number = self._numbers.setdefault(note, len(self._numbers) + 1)
+        return f"※{number}"
+
+    def print_footer(self) -> None:
+        if self._numbers:
+            print()
+            for note, number in self._numbers.items():
+                print(f"※{number} {safe(note)}")
+
+
+def _format_reference(hit: ReferenceHit, notes: NoteTable | None = None) -> str:
+    r = hit.reference
     status = _status_text(r.resolution_status, r.confidence == Confidence.INFERRED)
     target = hit.target.qualified_name if hit.target else r.target_name
-    note = f"  # {safe(r.note)}" if r.note else ""
+    mark = notes.mark(r.note) if notes is not None else ""
+    note = f"  # {safe(r.note)}" if r.note and notes is None else ""
     return (
         f"{safe(hit.location)}\t{r.reference_kind.value}\t"
-        f"{safe(hit.source.qualified_name)} -> {safe(target)}\t[{status}]{note}"
+        f"{safe(hit.source.qualified_name)} -> {safe(target)}\t[{status}{mark}]{note}"
     )
 
 
-def _print_call_tree(node: CallNode, prefix: str = "", is_root: bool = True) -> None:
+def _print_call_tree(
+    node: CallNode, prefix: str = "", is_root: bool = True, show_external: bool = False
+) -> None:
+    """呼び出し階層を表示する。同じ呼び出しは1行に集約し、外部呼び出しは既定で省略する。"""
+
     if is_root:
         print(safe(node.label))
-    for position, child in enumerate(node.children):
-        last = position == len(node.children) - 1
-        marks = []
-        if child.symbol is None and child.reference is not None:
-            marks.append(_STATUS_LABEL[child.reference.resolution_status])
-        if child.recursive:
-            marks.append("再帰")
-        if child.truncated:
-            marks.append("深さ制限で省略")
-        from codeinsight.domain import Confidence
+    hidden_external = 0
+    groups: dict[tuple, list[CallNode]] = {}
+    for child in node.children:
+        status = child.reference.resolution_status if child.reference else None
+        if status == ResolutionStatus.EXTERNAL and not show_external:
+            hidden_external += 1
+            continue
+        key = (
+            child.label,
+            child.symbol.symbol_id if child.symbol else None,
+            status,
+            child.recursive,
+            child.truncated,
+            bool(child.reference and child.reference.confidence == Confidence.INFERRED),
+        )
+        groups.setdefault(key, []).append(child)
 
-        if child.reference is not None and child.reference.confidence == Confidence.INFERRED and child.symbol:
+    entries = list(groups.values())
+    for position, group in enumerate(entries):
+        first = group[0]
+        last = position == len(entries) - 1 and hidden_external == 0
+        marks = []
+        if first.symbol is None and first.reference is not None:
+            marks.append(_STATUS_LABEL[first.reference.resolution_status])
+        if first.recursive:
+            marks.append("再帰")
+        if first.truncated:
+            marks.append("深さ制限で省略")
+        if first.reference is not None and first.reference.confidence == Confidence.INFERRED and first.symbol:
             marks.append("推定")
+        if len(group) > 1:
+            marks.append(f"×{len(group)}")
         suffix = f"  [{', '.join(marks)}]" if marks else ""
-        location = ""
-        if child.reference is not None:
-            ref = child.reference.source_location
-            location = f"  (L{ref.start_line})"
-        print(f"{prefix}{'└── ' if last else '├── '}{safe(child.label)}{suffix}{location}")
-        _print_call_tree(child, prefix + ("    " if last else "│   "), is_root=False)
+        lines = sorted({c.reference.source_location.start_line for c in group if c.reference})
+        shown = ", ".join(f"L{n}" for n in lines[:4]) + (" …" if len(lines) > 4 else "")
+        location = f"  ({shown})" if lines else ""
+        print(f"{prefix}{'└── ' if last else '├── '}{safe(first.label)}{suffix}{location}")
+        _print_call_tree(first, prefix + ("    " if last else "│   "), is_root=False, show_external=show_external)
+    if hidden_external:
+        print(f"{prefix}└── … 外部の呼び出し {hidden_external}件を省略（--external で表示）")
 
 
 # --- コマンド ---
@@ -284,10 +334,9 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     repository, project = _context(args)
-    with repository:
-        index = NavigationService(repository).load_index(project)
-        freshness = FreshnessService().check_project(project, list(index.files.values()))
-        results = repository.list_analysis_results(project.project_id)
+    index = NavigationService(repository).load_index(project)
+    freshness = FreshnessService().check_project(project, list(index.files.values()))
+    results = repository.list_analysis_results(project.project_id)
     latest = results[0] if results else None
     counts = Counter(r.resolution_status for r in index.references)
     rows = [
@@ -334,7 +383,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_symbols(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     hits = [SymbolHit(s, index.path_of(s.file_id)) for s in index.symbols.values()]
     if args.file:
         hits = [h for h in hits if h.path == args.file]
@@ -354,8 +402,13 @@ def _cmd_symbols(args: argparse.Namespace) -> int:
 
 def _cmd_tree(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
-    tree = build_structure_tree(index, project.name, include_locals=args.locals)
+    tree = build_structure_tree(
+        index,
+        project.name,
+        include_locals=args.locals,
+        include_variables=not args.no_variables,
+        max_symbol_depth=args.depth,
+    )
     _warn_stale(stale)
     if args.format == "json":
         _emit_json(tree_to_dict(tree))
@@ -366,47 +419,46 @@ def _cmd_tree(args: argparse.Namespace) -> int:
 
 def _cmd_search(args: argparse.Namespace) -> int:
     repository, project = _context(args)
-    with repository:
-        search = SearchService(repository)
-        if args.files:
-            files = search.search_files(project, args.query)
-            payload = [{"kind": "file", "path": f.relative_path, "language": f.language.value} for f in files]
-            lines = [f"{safe(f.relative_path)}\t{f.language.value}" for f in files]
-            stale: list[str] = []
-        elif args.text:
-            try:
-                hits = search.search_text(
-                    project, args.query, ignore_case=args.ignore_case, regex=args.regex, limit=args.limit
-                )
-            except re.error as exc:
-                raise CliError(f"正規表現が不正です: {exc}") from exc
-            payload = [
-                {"kind": "text", "path": h.path, "line": h.line, "text": h.text, "freshness": h.freshness.value}
-                for h in hits
-            ]
-            lines = [
-                f"{safe(h.path)}:{h.line}\t{safe(h.text.strip())}"
-                + ("\t[解析後に変更あり]" if h.freshness == FileFreshness.STALE else "")
-                for h in hits
-            ]
-            stale = []
-        else:
-            kinds = [SymbolKind(k) for k in args.kind] if args.kind else None
-            symbol_hits = search.search_symbols(
-                project,
-                args.query,
-                kinds=kinds,
-                match=MatchMode(args.match),
-                file=args.file,
-                limit=args.limit,
+    search = SearchService(repository)
+    if args.files:
+        files = search.search_files(project, args.query)
+        payload = [{"kind": "file", "path": f.relative_path, "language": f.language.value} for f in files]
+        lines = [f"{safe(f.relative_path)}\t{f.language.value}" for f in files]
+        stale: list[str] = []
+    elif args.text:
+        try:
+            hits = search.search_text(
+                project, args.query, ignore_case=args.ignore_case, regex=args.regex, limit=args.limit
             )
-            payload = [{"search": "symbol", **_symbol_dict(h)} for h in symbol_hits]
-            lines = [
-                f"{safe(h.location)}\t{h.symbol.kind.value}\t{safe(h.symbol.qualified_name)}"
-                for h in symbol_hits
-            ]
-            index = NavigationService(repository).load_index(project)
-            stale = _stale_files(project, index)
+        except re.error as exc:
+            raise CliError(f"正規表現が不正です: {exc}") from exc
+        payload = [
+            {"kind": "text", "path": h.path, "line": h.line, "text": h.text, "freshness": h.freshness.value}
+            for h in hits
+        ]
+        lines = [
+            f"{safe(h.path)}:{h.line}\t{safe(h.text.strip())}"
+            + ("\t[解析後に変更あり]" if h.freshness == FileFreshness.STALE else "")
+            for h in hits
+        ]
+        stale = []
+    else:
+        kinds = [SymbolKind(k) for k in args.kind] if args.kind else None
+        symbol_hits = search.search_symbols(
+            project,
+            args.query,
+            kinds=kinds,
+            match=MatchMode(args.match),
+            file=args.file,
+            limit=args.limit,
+        )
+        payload = [{"search": "symbol", **_symbol_dict(h)} for h in symbol_hits]
+        lines = [
+            f"{safe(h.location)}\t{h.symbol.kind.value}\t{safe(h.symbol.qualified_name)}"
+            for h in symbol_hits
+        ]
+        index = NavigationService(repository).load_index(project)
+        stale = _stale_files(project, index)
     _warn_stale(stale)
     if args.format == "json":
         _emit_json({"stale_files": stale, "results": payload})
@@ -418,11 +470,33 @@ def _cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolve(args: argparse.Namespace, navigation: NavigationService, index: ProjectIndex, query: str):
+def _suggest(index: ProjectIndex, query: str) -> str:
+    """見つからない名前に近いシンボル名を「もしかして」として返す。"""
+
+    names = sorted({s.name for s in index.symbols.values() if s.kind != SymbolKind.LOCAL_VARIABLE})
+    close = difflib.get_close_matches(query.rsplit(".", 1)[-1], names, n=3, cutoff=0.6)
+    return f"\nもしかして: {', '.join(close)}" if close else ""
+
+
+def _not_found(project: Project, index: ProjectIndex, query: str) -> CliError:
+    return CliError(
+        f"プロジェクト '{safe(project.name)}' にシンボルが見つかりません: {safe(query)}"
+        f"{_suggest(index, query)}",
+        2,
+    )
+
+
+def _resolve(
+    args: argparse.Namespace,
+    navigation: NavigationService,
+    index: ProjectIndex,
+    query: str,
+    project: Project,
+):
     try:
         return navigation.resolve_symbol(index, query, file=getattr(args, "file", None))
     except SymbolNotFoundError as exc:
-        raise CliError(f"シンボルが見つかりません: {safe(query)}", 2) from exc
+        raise _not_found(project, index, query) from exc
     except AmbiguousSymbolError as exc:
         listing = "\n".join(
             f"  {safe(h.location)}\t{h.symbol.kind.value}\t{safe(h.symbol.qualified_name)}"
@@ -436,10 +510,9 @@ def _resolve(args: argparse.Namespace, navigation: NavigationService, index: Pro
 
 def _cmd_def(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     hits = NavigationService(repository).lookup(index, args.name, file=args.file)
     if not hits:
-        raise CliError(f"シンボルが見つかりません: {safe(args.name)}", 2)
+        raise _not_found(project, index, args.name)
     _warn_stale(stale)
     if args.format == "json":
         _emit_json({"stale_files": stale, "results": [_symbol_dict(h) for h in hits]})
@@ -451,9 +524,8 @@ def _cmd_def(args: argparse.Namespace) -> int:
 
 def _reference_command(args: argparse.Namespace, mode: str) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     navigation = NavigationService(repository)
-    symbol = _resolve(args, navigation, index, args.name).symbol
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
     if mode == "refs":
         hits = navigation.references_to(index, symbol)
     elif mode == "callers":
@@ -470,8 +542,10 @@ def _reference_command(args: argparse.Namespace, mode: str) -> int:
             }
         )
         return 0
+    notes = NoteTable()
     for hit in hits:
-        print(_format_reference(hit))
+        print(_format_reference(hit, notes))
+    notes.print_footer()
     if not hits:
         print("該当する関係は確認できませんでした（未解決の関係は unresolved コマンドで確認できます）。", file=sys.stderr)
     if mode in ("callers", "callees"):
@@ -481,23 +555,21 @@ def _reference_command(args: argparse.Namespace, mode: str) -> int:
 
 def _cmd_trace(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     navigation = NavigationService(repository)
-    symbol = _resolve(args, navigation, index, args.name).symbol
+    symbol = _resolve(args, navigation, index, args.name, project).symbol
     tree = navigation.call_hierarchy(index, symbol, Direction(args.direction), args.depth)
     _warn_stale(stale)
     print(f"{'呼び出し先' if args.direction == 'callees' else '呼び出し元'}の階層 (深さ {args.depth}):")
-    _print_call_tree(tree)
+    _print_call_tree(tree, show_external=args.external)
     print(_STATIC_NOTE, file=sys.stderr)
     return 0
 
 
 def _cmd_path(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     navigation = NavigationService(repository)
-    source = _resolve(args, navigation, index, args.source).symbol
-    target = _resolve(args, navigation, index, args.target).symbol
+    source = _resolve(args, navigation, index, args.source, project).symbol
+    target = _resolve(args, navigation, index, args.target, project).symbol
     paths = navigation.call_paths(index, source, target, args.max_depth, args.limit)
     _warn_stale(stale)
     if args.format == "json":
@@ -523,7 +595,6 @@ def _cmd_path(args: argparse.Namespace) -> int:
 
 def _cmd_deps(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     navigation = NavigationService(repository)
     if args.cycles:
         cycles = navigation.dependency_cycles(index)
@@ -545,17 +616,16 @@ def _cmd_deps(args: argparse.Namespace) -> int:
     if args.format == "json":
         _emit_json({"stale_files": stale, "results": [_dependency_dict(h) for h in hits]})
         return 0
+    notes = NoteTable()
     for hit in hits:
         d = hit.dependency
-        from codeinsight.domain import Confidence
-
         status = _status_text(d.resolution_status, d.confidence == Confidence.INFERRED)
         target = hit.target_path or d.target_name
-        note = f"  # {safe(d.note)}" if d.note else ""
         print(
             f"{safe(hit.location)}\t{d.dependency_kind.value}\t"
-            f"{safe(hit.source_path)} -> {safe(target)}\t[{status}]{note}"
+            f"{safe(hit.source_path)} -> {safe(target)}\t[{status}{notes.mark(d.note)}]"
         )
+    notes.print_footer()
     return 0
 
 
@@ -564,7 +634,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
     if match is None:
         raise CliError("位置は FILE[:LINE[-END]] の形式で指定してください。")
     repository, project, index, stale = _prepare(args)
-    repository.close()
     start = int(match["start"]) if match["start"] else None
     end = int(match["end"]) if match["end"] else None
     try:
@@ -587,7 +656,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 def _cmd_unresolved(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
     navigation = NavigationService(repository)
     references = navigation.unresolved_references(index)
     dependencies = [
@@ -604,24 +672,32 @@ def _cmd_unresolved(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    print(f"未解決の参照 {len(references)}件:")
+    print(f"未解決の参照 {len(references)}件 / 未解決の依存関係 {len(dependencies)}件（理由別）")
+    groups: dict[str, list[str]] = defaultdict(list)
     for hit in references:
-        print("  " + _format_reference(hit))
-    print(f"未解決の依存関係 {len(dependencies)}件:")
+        groups[hit.reference.note or "（理由なし）"].append(_format_reference(hit, None).split("\t[", 1)[0])
     for dep in dependencies:
         d = dep.dependency
-        note = f"  # {safe(d.note)}" if d.note else ""
-        print(f"  {safe(dep.location)}\t{d.dependency_kind.value}\t{safe(d.target_name)}{note}")
+        groups[d.note or "（理由なし）"].append(
+            f"{safe(dep.location)}\t{d.dependency_kind.value}\t{safe(dep.source_path)} -> {safe(d.target_name)}"
+        )
+    for note, lines in sorted(groups.items(), key=lambda item: -len(item[1])):
+        print(f"\n■ {safe(note)}（{len(lines)}件）")
+        shown = lines if args.all else lines[:args.limit]
+        for line in shown:
+            print(f"  {line}")
+        if len(lines) > len(shown):
+            print(f"  … ほか {len(lines) - len(shown)}件（--all で全て表示）")
     return 0
 
 
 def _build_graph(
-    args: argparse.Namespace, index: ProjectIndex, navigation: NavigationService
+    args: argparse.Namespace, index: ProjectIndex, navigation: NavigationService, project: Project
 ) -> GraphModel:
     builder = GraphBuilder(index)
     traversal = Traversal(args.direction)
     if args.kind == "call":
-        root = _resolve(args, navigation, index, args.root).symbol if args.root else None
+        root = _resolve(args, navigation, index, args.root, project).symbol if args.root else None
         return builder.call_graph(
             root,
             args.depth,
@@ -630,7 +706,7 @@ def _build_graph(
             include_external=args.external,
         )
     if args.kind == "inherit":
-        root = _resolve(args, navigation, index, args.root).symbol if args.root else None
+        root = _resolve(args, navigation, index, args.root, project).symbol if args.root else None
         return builder.inheritance_graph(root, args.depth, traversal)
     try:
         return builder.file_dependency_graph(
@@ -646,8 +722,7 @@ def _build_graph(
 
 def _cmd_graph(args: argparse.Namespace) -> int:
     repository, project, index, stale = _prepare(args)
-    repository.close()
-    model = _build_graph(args, index, NavigationService(repository))
+    model = _build_graph(args, index, NavigationService(repository), project)
     model.meta.update(
         {
             "project": project.name,
@@ -658,6 +733,12 @@ def _cmd_graph(args: argparse.Namespace) -> int:
     if stale:
         model.notes.append(f"解析後に変更されたファイルがあります（{len(stale)}件）。内容が古い可能性があります。")
     _warn_stale(stale)
+    if len(model.nodes) > 200 and not args.root:
+        print(
+            f"ヒント: ノードが{len(model.nodes)}個あり、読み取りにくい可能性があります。"
+            "--root と --depth、または --exclude で絞り込めます。",
+            file=sys.stderr,
+        )
     renderers = {"mermaid": to_mermaid, "dot": to_dot, "json": to_json, "html": render_html}
     output = renderers[args.format](model)
     if args.output:
@@ -683,9 +764,22 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--project", help="プロジェクトのID・名前・ルートパス（登録が1件なら省略可）")
         sub.add_argument("--format", choices=formats, default=formats[0], help="出力形式")
 
-    def add(name: str, help_text: str, func, formats: tuple[str, ...] = ("text", "json")):
+    def add(
+        name: str,
+        help_text: str,
+        func,
+        formats: tuple[str, ...] = ("text", "json"),
+        exclude: bool = True,
+    ):
         sub = subparsers.add_parser(name, help=help_text)
         common(sub, formats)
+        if exclude:
+            sub.add_argument(
+                "--exclude",
+                action="append",
+                metavar="GLOB",
+                help="結果から除くファイルのパターン（例: 'tests/*'。複数指定可）",
+            )
         sub.set_defaults(func=func)
         return sub
 
@@ -696,7 +790,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--format", choices=("text", "json"), default="text")
     analyze.set_defaults(func=_cmd_analyze)
 
-    add("status", "解析状況と、ソース変更による古さを表示する", _cmd_status)
+    add("status", "解析状況と、ソース変更による古さを表示する", _cmd_status, exclude=False)
 
     symbols = add("symbols", "保存済みのシンボルを一覧表示する", _cmd_symbols)
     symbols.add_argument("--file", help="相対パスで絞り込む")
@@ -704,6 +798,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     tree = add("tree", "ディレクトリ・ファイル・シンボルの階層を表示する", _cmd_tree)
     tree.add_argument("--locals", action="store_true", help="ローカル変数も表示する")
+    tree.add_argument("--no-variables", action="store_true", help="変数（グローバル/クラス/static）を表示しない")
+    tree.add_argument("--depth", type=int, help="ファイルの下に表示するシンボルの階層数（1ならトップレベルのみ）")
 
     search = add("search", "シンボル・ファイル名・テキストを検索する", _cmd_search)
     search.add_argument("query")
@@ -733,6 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
     trace.add_argument("name")
     trace.add_argument("--direction", choices=("callees", "callers"), default="callees")
     trace.add_argument("--depth", type=int, default=3)
+    trace.add_argument("--external", action="store_true", help="外部（標準/外部ライブラリ等）の呼び出しも表示する")
     trace.add_argument("--file")
 
     path = add("path", "2つの関数の間の呼び出し経路を検索する", _cmd_path)
@@ -752,7 +849,9 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("location", help="FILE[:LINE[-END]]")
     show.add_argument("--context", type=int, default=3)
 
-    add("unresolved", "静的に確定できなかった参照・依存関係を表示する", _cmd_unresolved)
+    unresolved = add("unresolved", "静的に確定できなかった参照・依存関係を理由別に表示する", _cmd_unresolved)
+    unresolved.add_argument("--limit", type=int, default=10, help="理由ごとに表示する件数（既定: 10）")
+    unresolved.add_argument("--all", action="store_true", help="全件を表示する")
 
     graph = add("graph", "グラフを出力する（Mermaid / DOT / JSON / 自己完結HTML）", _cmd_graph, ("mermaid", "dot", "json", "html"))
     graph.add_argument("kind", choices=("call", "deps", "inherit"), help="呼び出し / ファイル依存 / 継承")
@@ -775,6 +874,16 @@ def main(argv: list[str] | None = None) -> int:
     except CliError as exc:
         print(f"エラー: {exc}", file=sys.stderr)
         return exc.code
+    except BrokenPipeError:
+        # `codeinsight ... | head` のように出力先が先に閉じた場合は、静かに終了する。
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        return 0
+    finally:
+        while _OPENED:
+            _OPENED.pop().close()
 
 
 if __name__ == "__main__":

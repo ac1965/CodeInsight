@@ -80,6 +80,13 @@ class ReferenceResolver:
             qn: [s for s in group if s.kind == SymbolKind.MODULE]
             for qn, group in self._py_by_qname.items()
         }
+        # モジュール名の末尾一致（`a.b.c` に対する `b.c`、`c`）を引くための索引
+        self._py_module_suffixes: dict[str, list[Symbol]] = defaultdict(list)
+        for qn, group in self._py_modules.items():
+            position = qn.find(".")
+            while position != -1:
+                self._py_module_suffixes[qn[position + 1:]].extend(group)
+                position = qn.find(".", position + 1)
         self._py_name_components = {part for qn in self._py_by_qname for part in qn.split(".")}
         self._bases: dict[str, list[Symbol]] = defaultdict(list)
         self._unresolved_bases: set[str] = set()
@@ -190,12 +197,7 @@ class ReferenceResolver:
         exact = self._py_modules.get(name)
         if exact:
             return exact
-        suffix = "." + name
-        found: list[Symbol] = []
-        for qn, group in self._py_modules.items():
-            if qn.endswith(suffix):
-                found.extend(group)
-        return found
+        return list(self._py_module_suffixes.get(name, []))
 
     # --- 参照 ---
 

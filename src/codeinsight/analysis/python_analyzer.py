@@ -357,6 +357,8 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._self_names: list[str | None] = [None]
         self._star_modules = star_modules
         self._class_attr_types: dict[str, dict[str, str]] = {}
+        # 関数ごとの型推定結果。クラス属性の推定と関数本体の解析で同じ走査を繰り返さない。
+        self._scope_cache: dict[int, dict[str, str]] = {}
         self._types: list[dict[str, str]] = [{}]
         # モジュール直下で1回だけ代入される変数の型（global宣言で書き換えられるものは除く）。
         reassigned = {name for n in ast.walk(tree) if isinstance(n, ast.Global) for name in n.names}
@@ -446,9 +448,12 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._types.pop()
 
     def _infer_types(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
-        args = node.args
-        params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
-        return self._infer_scope(node.body, params)
+        cached = self._scope_cache.get(id(node))
+        if cached is None:
+            args = node.args
+            cached = self._infer_scope(node.body, [*args.posonlyargs, *args.args, *args.kwonlyargs])
+            self._scope_cache[id(node)] = cached
+        return cached
 
     def _infer_scope(self, body: list[ast.stmt], params: list[ast.arg]) -> dict[str, str]:
         """型注釈付きの引数と、1回だけ代入される変数の型を推定する。
@@ -535,9 +540,7 @@ class _ReferenceCollector(ast.NodeVisitor):
             if not positional or any(_unparse(d) == "staticmethod" for d in statement.decorator_list):
                 continue
             self_name = positional[0].arg
-            parameter_types = self._infer_scope(
-                statement.body, [*positional, *statement.args.kwonlyargs]
-            )
+            parameter_types = self._infer_types(statement)
             stack: list[ast.AST] = list(statement.body)
             while stack:
                 current = stack.pop()

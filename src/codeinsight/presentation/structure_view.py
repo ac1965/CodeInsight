@@ -17,10 +17,28 @@ class TreeNode:
     children: list["TreeNode"] = field(default_factory=list)
 
 
+_VARIABLE_KINDS = frozenset(
+    {
+        SymbolKind.GLOBAL_VARIABLE,
+        SymbolKind.STATIC_VARIABLE,
+        SymbolKind.LOCAL_VARIABLE,
+        SymbolKind.CLASS_VARIABLE,
+    }
+)
+
+
 def build_structure_tree(
-    index: ProjectIndex, project_name: str, include_locals: bool = False
+    index: ProjectIndex,
+    project_name: str,
+    include_locals: bool = False,
+    include_variables: bool = True,
+    max_symbol_depth: int | None = None,
 ) -> TreeNode:
-    """ディレクトリ -> ファイル -> シンボル(親子関係)の階層を組み立てる（3.3）。"""
+    """ディレクトリ -> ファイル -> シンボル(親子関係)の階層を組み立てる（3.3）。
+
+    Pythonのモジュールシンボルはファイルと同じ内容なので、ファイルノードに統合する。
+    max_symbol_depth はファイルの下に表示するシンボルの階層数（1ならトップレベルのみ）。
+    """
 
     root = TreeNode(project_name, "project")
     directories: dict[str, TreeNode] = {"": root}
@@ -37,6 +55,8 @@ def build_structure_tree(
     symbols_by_file: dict[str, list[Symbol]] = {}
     for symbol in index.symbols.values():
         if symbol.kind == SymbolKind.LOCAL_VARIABLE and not include_locals:
+            continue
+        if symbol.kind in _VARIABLE_KINDS and not include_variables:
             continue
         symbols_by_file.setdefault(symbol.file_id, []).append(symbol)
 
@@ -55,22 +75,43 @@ def build_structure_tree(
             status=status,
         )
         parent.children.append(file_node)
-        _attach_symbols(file_node, symbols_by_file.get(source_file.file_id, []), source_file.relative_path)
+        _attach_symbols(
+            file_node,
+            symbols_by_file.get(source_file.file_id, []),
+            source_file.relative_path,
+            max_symbol_depth,
+        )
 
     _sort(root)
     return root
 
 
-def _attach_symbols(file_node: TreeNode, symbols: list[Symbol], path: str) -> None:
+def _attach_symbols(
+    file_node: TreeNode, symbols: list[Symbol], path: str, max_depth: int | None
+) -> None:
+    ordered = sorted(symbols, key=lambda s: (s.start_line, s.end_line))
     nodes: dict[str, TreeNode] = {}
-    for symbol in sorted(symbols, key=lambda s: (s.start_line, s.end_line)):
-        nodes[symbol.symbol_id] = TreeNode(
-            symbol.name, symbol.kind.value, path, symbol.start_line
-        )
-    for symbol in sorted(symbols, key=lambda s: (s.start_line, s.end_line)):
-        node = nodes[symbol.symbol_id]
-        parent = nodes.get(symbol.parent_symbol_id) if symbol.parent_symbol_id else None
+    for symbol in ordered:
+        if symbol.kind != SymbolKind.MODULE:  # ファイルノードと重複するため統合
+            nodes[symbol.symbol_id] = TreeNode(symbol.name, symbol.kind.value, path, symbol.start_line)
+    module_ids = {s.symbol_id for s in ordered if s.kind == SymbolKind.MODULE}
+    for symbol in ordered:
+        node = nodes.get(symbol.symbol_id)
+        if node is None:
+            continue
+        parent_id = symbol.parent_symbol_id
+        parent = nodes.get(parent_id) if parent_id and parent_id not in module_ids else None
         (parent or file_node).children.append(node)
+    if max_depth is not None:
+        _prune(file_node, max_depth)
+
+
+def _prune(node: TreeNode, remaining: int) -> None:
+    if remaining <= 0:
+        node.children = []
+        return
+    for child in node.children:
+        _prune(child, remaining - 1)
 
 
 def _sort(node: TreeNode) -> None:
