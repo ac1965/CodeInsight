@@ -28,9 +28,12 @@ C言語およびPythonを主要な対象言語とし、静的解析によって�
 
 ## 開発状況
 
-**Phase 1〜3(解析基盤・コードナビゲーション・可視化)を実装済みです。** C言語/Pythonのシンボル・呼び出し・継承・import/includeの抽出と解決、検索、定義・参照・呼び出し階層・経路・依存関係の追跡、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)がCLIから使えます。AIによる解説(Phase 4)、データフロー解析(Phase 5)は未実装です(詳細は [AGENTS.md §9](AGENTS.md#9-開発フェーズ)、実装状況は [REQUIREMENTS.md](REQUIREMENTS.md) を参照)。
+**Phase 1〜3(解析基盤・コードナビゲーション・可視化)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Pythonのシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)、動的解析(実行観測)は未実装です。実装状況の詳細と制約は [REQUIREMENTS.md](REQUIREMENTS.md) と [ANALYSIS.md](ANALYSIS.md) を参照してください。
 
-静的解析で確定できない関係(関数ポインタ、動的な呼び出し等)は推測で確定せず、**未解決**として明示します。候補を静的に特定できるが実行時の挙動で変わりうるものは**推定**として、確定とは区別して表示します(AGENTS.md §3.5.1)。
+* 静的に確定できない関係(関数ポインタ、動的な呼び出し等)は推測で確定せず、**未解決**として明示します。候補を特定できるが実行時の挙動で変わりうるものは**推定**として、確定と区別します(AGENTS.md §3.5.1)。
+* 制御フロー・データフロー・状態・例外・設定値・境界の解析は**Python**が対象です(Cは呼び出し・参照・依存・外部連携・履歴・テストまで)。データフローは関数単位・流れ非依存の**近似**です。
+* 設計判断の「理由」はコードから確認できないため推測せず、変更履歴・コメント・文書という手がかりを示します。
+* 対象リポジトリのソースは変更せず、プログラムも実行しません(Gitは読み取り専用)。
 
 実践的な検証対象は、以下の開発中リポジトリです(詳細は [AGENTS.md §2.3](AGENTS.md#23-実プロジェクトでの解析対象検証用) を参照)。現在のスコープはC言語・Pythonのため、[narou_dl](https://github.com/ac1965/narou_dl) が対象です。[PownForge](https://github.com/ac1965/PownForge) は未コミットの変更が多いため当面除外しています。Go製の[RiskForge](https://github.com/ac1965/RiskForge)とEmacs Lisp製の[.emacs.d](https://github.com/ac1965/.emacs.d)は将来の言語追加後の対象候補です。
 
@@ -39,7 +42,7 @@ C言語およびPythonを主要な対象言語とし、静的解析によって�
 ```text
 CodeInsight
 ├── Application     … ユースケースの実行(プロジェクト管理・検索・ナビゲーション・解説)
-├── Analysis        … 言語別の静的解析(C/Python)、シンボル抽出、依存関係・呼び出しグラフ解析
+├── Analysis        … 言語別の静的解析(C/Python)、シンボル抽出、参照解決、呼び出しグラフ、制御フロー・データフロー(Python)
 ├── Domain          … 特定のGUI/DB/LLMに依存しないドメインモデル
 ├── AI              … 解析結果を利用したコード解説(解析器の代替にはしない)
 ├── Infrastructure  … ファイル・Git・永続化・キャッシュ・設定
@@ -66,7 +69,7 @@ C言語解析にはlibclang(PyPIパッケージに同梱)を使用します。�
 
 ## 使い方(CLI)
 
-解析結果は、既定で `~/.codeinsight/codeinsight.db` に保存されます(対象リポジトリには書き込みません。`--db` または環境変数 `CODEINSIGHT_DATA_DIR` で変更できます)。登録したプロジェクトが複数ある場合は `--project`(ID・名前・ルートパス)で指定します。
+解析結果は、既定で `~/.codeinsight/codeinsight.db` に保存されます(対象リポジトリには書き込みません。`--db` または環境変数 `CODEINSIGHT_DATA_DIR` で変更できます)。登録したプロジェクトが複数ある場合は `--project`(ID・名前・ルートパス)で指定します。多くのコマンドは `--format json` と、表示から除くパスを指定する `--exclude 'tests/*'` に対応します。
 
 ```bash
 # プロジェクトを走査・解析し、結果を保存する
@@ -76,35 +79,73 @@ uv run codeinsight analyze /path/to/target-repo
 uv run codeinsight status
 ```
 
-### 調べる
+解析後にソースを変更した場合、読み取り系のコマンドは「解析後に変更されています」と警告します(行番号などが古い可能性)。ソースの内容を読む解析(`flow`・`dataflow`・`understand` など)は、位置のずれによる誤りを避けるため、変更されたファイルでは実行されません。再解析(`analyze`)してください。
+
+### 初めて扱うリポジトリを把握する
 
 ```bash
-uv run codeinsight tree                         # ディレクトリ・ファイル・シンボルの階層
+uv run codeinsight overview             # 言語・主要モジュール・エントリポイント・中心となる関数・循環
+uv run codeinsight architecture         # コンポーネント構成・層構造・循環・外部連携(役割名は名前による推定)
+uv run codeinsight boundaries           # 入口と境界(CLI・HTTP・イベント・スレッド・非同期・キャッシュ)
+uv run codeinsight environment          # 実行環境の前提(Pythonの版・依存・OS分岐・外部コマンド)
+uv run codeinsight config               # 設定値(環境変数・CLI引数・設定ファイル・定数)と使われる箇所
+uv run codeinsight externals            # 外部連携(ネットワーク・DB・ファイル・プロセス等)
+uv run codeinsight tree --depth 1 --no-variables
+```
+
+### 関数を読み解く
+
+```bash
+uv run codeinsight understand <関数>    # 8つの問いに沿った読解カード(なぜ存在する/誰が呼ぶ/入力/変更/戻り値/影響/失敗時/履歴)
+uv run codeinsight describe <シンボル>  # 宣言・docstring・メンバ・呼び出し/参照の件数
+uv run codeinsight show <シンボル>      # 定義のソース(FILE[:LINE[-END]] も可)
+uv run codeinsight flow <関数>          # 分岐・ループ・例外処理・循環的複雑度・リトライ/タイムアウトの手がかり
+uv run codeinsight dataflow <関数> <変数> --depth 3 [--upstream]   # 値の行き先(代入・引数・戻り値・状態)、呼び出し元の実引数
+uv run codeinsight state <クラス|モジュール>   # self.<属性>・モジュール変数の書き込み/変更/読み取り
+uv run codeinsight exceptions <関数>    # 外へ出うる例外と、握りつぶし
+uv run codeinsight effects <関数>       # 副作用の候補(直接と、呼び出し先を介したもの)
+```
+
+### 追う・探す
+
+```bash
 uv run codeinsight search fib                   # シンボル検索(--match exact|prefix|substring, --kind, --file)
 uv run codeinsight search "fib(" --text         # テキスト全文検索(--regex, -i)。構文解析ではなく文字列一致
 uv run codeinsight def main                     # 定義箇所
-uv run codeinsight refs add                     # 参照箇所
+uv run codeinsight refs add                     # 参照箇所(呼び出し・名前・型注釈・import・継承)
 uv run codeinsight callers fib                  # 呼び出し元
-uv run codeinsight callees main                 # 呼び出し先(未解決・外部を含む)
-uv run codeinsight trace main --depth 3         # 呼び出し階層(再帰・未解決を明示)
+uv run codeinsight callees main                 # 呼び出し先(未解決・外部を含む。--hide-external)
+uv run codeinsight trace main --depth 3         # 呼び出し階層(再帰・未解決を明示。--external で外部も)
 uv run codeinsight path main fib                # 呼び出し経路の検索
 uv run codeinsight deps main.c                  # ファイルの依存関係(--dependents, --cycles, --external)
-uv run codeinsight show ops.c:16-21             # 行番号付きでソースを表示
-uv run codeinsight unresolved                   # 静的に確定できなかった参照・依存関係
+uv run codeinsight unresolved                   # 静的に確定できなかった参照・依存関係(理由別)
 ```
 
-名前が複数のシンボルに一致する場合は、候補を表示して終了します(修飾名か `--file` で絞り込みます)。多くのコマンドは `--format json` に対応しています。静的な呼び出し関係は、実行順序や実際に通る経路を示すものではない点に注意してください。
+### 影響・品質・履歴
+
+```bash
+uv run codeinsight impact <シンボル>    # 変更したときの影響範囲(利用者側・入口・テスト)
+uv run codeinsight tests <シンボル>     # 届くテスト(静的な連鎖。カバレッジではない)。--untested で届かないコード
+uv run codeinsight unused               # どこからも参照されていないシンボルの候補(確度つき)
+uv run codeinsight risks                # 潜在的な問題の手がかり(例外の握りつぶし・eval・shell=True 等)
+uv run codeinsight history [<シンボル>] # 変更履歴(Git・読み取り専用)。指定なしなら変更頻度・同時変更
+uv run codeinsight docs-check           # 文書の識別子・オプション・環境変数と、実装の差(手がかり)
+```
 
 ### グラフを出力する
 
 ```bash
 uv run codeinsight graph call --root main --depth 2 --format mermaid
+uv run codeinsight graph flow --root <関数> --format html -o flow.html   # 制御フロー図
+uv run codeinsight graph arch --format mermaid                           # コンポーネント間の依存(層の逆向き依存の候補は破線)
 uv run codeinsight graph deps --format dot -o deps.dot
 uv run codeinsight graph inherit --format json
-uv run codeinsight graph call --format html -o call.html   # 自己完結型のローカルビューアー(外部通信なし)
+uv run codeinsight graph call --format html -o call.html                 # 自己完結型のローカルビューアー(外部通信なし)
 ```
 
-`graph` の種類は `call`(呼び出し)・`deps`(ファイル依存)・`inherit`(継承)。`--root`(起点)・`--depth`・`--direction out|in|both` で部分グラフに絞れます。実線は確定、破線は推定、点線は未解決・外部の関係です。
+`graph` の種類は `call`・`deps`・`inherit`・`flow`(`--root` 必須)・`arch`。`--root`・`--depth`・`--direction out|in|both` で部分グラフに絞れます。実線は確定、破線は推定、点線は未解決・外部の関係です。ノードが多い全体グラフは読みにくいため、`--root`・`--depth`・`--exclude` で絞ることを推奨します。
+
+名前が複数のシンボルに一致する場合は、候補を表示して終了します(修飾名か `--file` で絞り込みます)。静的な呼び出し関係は、実行順序や実際に通る経路を示すものではない点に注意してください。
 
 `compile_commands.json` が解析対象ディレクトリにある場合は自動的に利用されます。無い場合は最小限のデフォルト引数で解析し、その旨を警告として表示します(詳細は [ANALYSIS.md](ANALYSIS.md))。
 

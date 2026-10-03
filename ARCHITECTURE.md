@@ -24,6 +24,7 @@ src/codeinsight/
 │   ├── symbol_extractor.py  言語ごとのアダプターを呼び分ける調整役
 │   ├── reference_resolver.py プロジェクト横断の参照・依存関係の解決
 │   ├── call_graph.py        CallGraph（呼び出し階層・経路検索）、強連結成分（循環検出）
+│   ├── flow_analysis.py     関数/クラス単位の制御フロー・例外・変数の定義使用・状態変化（Python AST、問い合わせ時に実行）
 │   └── fingerprint.py       解析ロジックの指紋（解析器バージョンに含める）
 │
 ├── application/       ユースケースの実行
@@ -33,11 +34,29 @@ src/codeinsight/
 │   ├── search_service.py        シンボル/ファイル名/テキストの検索
 │   ├── navigation_service.py    定義・参照・呼び出し関係・依存関係・ソース表示
 │   ├── freshness_service.py     解析結果と現在のソースの一致判定（古さの検出）
-│   └── graph_builder.py         グラフモデル（呼び出し/ファイル依存/継承）の組み立て
+│   ├── describe_service.py      シンボルの詳細（宣言・要約・メンバ・件数）
+│   ├── overview_service.py      リポジトリの全体像
+│   ├── flow_service.py          制御フロー・データフロー・状態・例外経路（ソースの鮮度を確認して実行）
+│   ├── risk_service.py          潜在的な問題の手がかり
+│   ├── external_service.py      外部連携の分類・副作用の候補
+│   ├── architecture_service.py  コンポーネント・層構造・循環・層の逆向き依存の候補
+│   ├── config_service.py        設定値（環境変数・CLI引数・設定ファイル・定数）
+│   ├── boundary_service.py      入口と境界（CLI・HTTP・イベント・スレッド・非同期・キャッシュ）
+│   ├── test_map_service.py      テストとの対応・テストの無いコード
+│   ├── impact_service.py        影響範囲
+│   ├── unused_service.py        未使用コードの候補
+│   ├── history_service.py       Git履歴（変更履歴・変更頻度・同時変更）
+│   ├── environment_service.py   実行環境の前提
+│   ├── spec_check_service.py    文書と実装の差の手がかり
+│   ├── understand_service.py    読解カード（8つの問いに沿って上記を集約）
+│   ├── source_scan.py           ソース走査の共通部品（解析後の変更を検出して対象外にする）
+│   ├── paths.py                 テストパスの判定
+│   ├── cfg_builder.py           関数の制御フロー図の組み立て
+│   └── graph_builder.py         グラフモデル（呼び出し/ファイル依存/継承/アーキテクチャ）の組み立て
 │
 ├── infrastructure/    ファイル・Git・永続化との接続
 │   ├── file_scanner.py        走査、.gitignore尊重、既定除外、symlink安全化
-│   ├── git_repository.py      Gitリポジトリ識別・リビジョン取得（読み取り専用）
+│   ├── git_repository.py      Gitリポジトリ識別・リビジョン・行範囲/ファイルの履歴（読み取り専用）
 │   ├── analysis_repository.py SQLiteへの永続化（トランザクション、スキーマ移行）
 │   ├── schema.py              スキーマ定義とバージョン
 │   └── config.py              データ保存先の解決
@@ -92,13 +111,13 @@ cli
 2. `FreshnessService` が現在のファイルのハッシュと解析時のハッシュを比較し、変更されたファイルがあれば警告を出す。
 3. `NavigationService` / `SearchService` / `GraphBuilder` が結果を返し、`presentation` と `cli` が整形して出力する。
 
-## 保存データ（SQLite、スキーマバージョン2）
+## 保存データ（SQLite、スキーマバージョン3）
 
 | テーブル | 内容 |
 |---|---|
 | `projects` | プロジェクトと解析設定、直近のリビジョン |
 | `source_files` | ファイル、内容ハッシュ、解析状態、解析器バージョン |
-| `symbols` | シンボル（種類・位置・親子関係・USR） |
+| `symbols` | シンボル（種類・位置・親子関係・USR・docstring/コメントの先頭行） |
 | `references_` | 参照（呼び出し・継承・import等）と、解決状態・確からしさ・理由・根拠位置 |
 | `dependencies` | ファイル/モジュール間の依存（include/import）と、解決状態・根拠位置 |
 | `analysis_results` | 解析実行の履歴（解析器バージョン、リビジョン、警告、エラー） |
@@ -114,3 +133,10 @@ AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2
 * 対象プログラムのビルド・実行は一切行わない。
 * ソース表示（`show`）は、解析済みファイルとして登録されたプロジェクト内のパスのみを読み、プロジェクト外を指すパスは読まない。
 * 解析対象由来の文字列（シンボル名・診断メッセージ・ソース行）は、CLIでは端末の制御文字を無害化して出力し、HTMLビューアーでは `textContent` のみで表示する（AGENTS.md §4.4: リポジトリ内のソースコードを信頼できない入力として扱う）。
+
+## 問い合わせ時の解析
+
+制御フロー・データフロー・状態・例外・設定値・境界・リスクは、保存済みの解析結果（シンボルの位置・解決済みの呼び出し）と、**問い合わせ時に読み込む現在のソースのAST**を組み合わせる。解析結果にASTや派生データを保存しないため、スキーマは小さく保たれ、解析器の改善が過去の結果に残らない。引き換えに、ソースが解析後に変更されていると位置が対応しないため、各サービスはファイルの内容ハッシュを確認し、異なる場合は実行しない（一括走査では対象外にして示す）。
+走査コストが大きいサービス（設定値・境界・リスク）は、対象ファイル・対象の文字列を、構文解析の前に絞り込める（`understand` は、対象のシンボルを含むファイルだけを構文解析する）。
+
+サービス間の依存は、`understand_service` が他のサービスを集約する一方向で、サービス同士が互いに依存する循環はない。`analysis/flow_analysis.py` はドメインにもインフラにも依存しない純粋なAST解析で、サービス層から呼ばれる。
