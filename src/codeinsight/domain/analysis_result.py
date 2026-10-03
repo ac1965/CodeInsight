@@ -27,3 +27,4 @@ class AnalysisResult:
     status: AnalysisStatus
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
+    repository_revision: str | None = None

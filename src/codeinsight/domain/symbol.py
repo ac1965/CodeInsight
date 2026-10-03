@@ -43,3 +43,4 @@ class Symbol:
     decorators: tuple[str, ...] = field(default_factory=tuple)
     base_classes: tuple[str, ...] = field(default_factory=tuple)
     is_async: bool = False
+    usr: str | None = None  # C: libclangのUSR（ファイルをまたぐ参照解決用）

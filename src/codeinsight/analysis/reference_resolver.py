@@ -1,0 +1,416 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Sequence
+
+from codeinsight.analysis.python_analyzer import (
+    KEY_DIRECT,
+    KEY_IMPORT,
+    KEY_SELF,
+    KEY_SUPER,
+    KEY_TYPED,
+)
+from codeinsight.domain import (
+    Confidence,
+    Dependency,
+    DependencyKind,
+    Language,
+    Reference,
+    ReferenceKind,
+    ResolutionStatus,
+    SourceFile,
+    Symbol,
+    SymbolKind,
+)
+
+# 呼び出し先を置き換えない（呼び出しの意味を変えない）と見なすデコレータ。
+_TRANSPARENT_DECORATORS = frozenset(
+    {"staticmethod", "classmethod", "property", "abstractmethod", "abc.abstractmethod",
+     "dataclass", "dataclasses.dataclass"}
+)
+_INHERITANCE_NOTE = "サブクラスでのオーバーライドにより、実際の呼び出し先が異なる可能性がある"
+
+
+class ReferenceResolver:
+    """プロジェクト全体のシンボル表を用いて、参照・依存関係の参照先を解決する。
+
+    解析器が出力した照合キー（C: USR、Python: 修飾名候補）を、決定的な規則だけで
+    シンボル/ファイルに結び付ける。一意に決まらない場合は AMBIGUOUS、静的に確定
+    できない場合は UNRESOLVED のままとし、推測で確定しない（AGENTS.md 10.2）。
+    AIは関与しない。
+
+    解決結果は引数のオブジェクトを直接更新する。何度実行しても同じ結果になる。
+    """
+
+    def resolve(
+        self,
+        files: Sequence[SourceFile],
+        symbols: Sequence[Symbol],
+        references: Sequence[Reference],
+        dependencies: Sequence[Dependency],
+    ) -> None:
+        self._files_by_id = {f.file_id: f for f in files}
+        self._files_by_path = {f.relative_path: f for f in files}
+        self._symbols_by_id = {s.symbol_id: s for s in symbols}
+
+        self._by_usr: dict[str, list[Symbol]] = defaultdict(list)
+        self._py_by_qname: dict[str, list[Symbol]] = defaultdict(list)
+        for symbol in symbols:
+            language = self._language_of(symbol.file_id)
+            if language == Language.C and symbol.usr:
+                self._by_usr[symbol.usr].append(symbol)
+            elif language == Language.PYTHON:
+                self._py_by_qname[symbol.qualified_name].append(symbol)
+        self._py_suffix_index: dict[str, list[Symbol]] | None = None
+        self._py_modules = {
+            qn: [s for s in group if s.kind == SymbolKind.MODULE]
+            for qn, group in self._py_by_qname.items()
+        }
+        self._py_name_components = {part for qn in self._py_by_qname for part in qn.split(".")}
+        self._bases: dict[str, list[Symbol]] = defaultdict(list)
+        self._unresolved_bases: set[str] = set()
+
+        for dependency in dependencies:
+            self._resolve_dependency(dependency)
+
+        # MRO探索の前提として、継承関係を先に解決する。
+        ordered = sorted(
+            references, key=lambda r: r.reference_kind != ReferenceKind.INHERITANCE
+        )
+        for reference in ordered:
+            self._resolve_reference(reference)
+            if reference.reference_kind == ReferenceKind.INHERITANCE:
+                if reference.target_symbol_id:
+                    self._bases[reference.source_symbol_id].append(
+                        self._symbols_by_id[reference.target_symbol_id]
+                    )
+                else:
+                    self._unresolved_bases.add(reference.source_symbol_id)
+
+    # --- 共通 ---
+
+    def _language_of(self, file_id: str) -> Language:
+        source_file = self._files_by_id.get(file_id)
+        return source_file.language if source_file else Language.UNKNOWN
+
+    @staticmethod
+    def _set(
+        item: Reference | Dependency,
+        status: ResolutionStatus,
+        note: str = "",
+        confidence: Confidence = Confidence.CONFIRMED,
+    ) -> None:
+        item.resolution_status = status
+        item.note = note
+        item.confidence = confidence
+
+    # --- 依存関係 ---
+
+    def _resolve_dependency(self, dependency: Dependency) -> None:
+        dependency.target_file_id = None
+        language = self._language_of(dependency.source_file_id)
+        if dependency.resolution_status == ResolutionStatus.EXTERNAL and (
+            dependency.dependency_kind == DependencyKind.INCLUDE
+        ):
+            return
+        if dependency.target_key is None:
+            if dependency.resolution_status == ResolutionStatus.EXTERNAL:
+                return
+            dependency.resolution_status = ResolutionStatus.UNRESOLVED
+            return
+        if language == Language.C:
+            target = self._files_by_path.get(dependency.target_key)
+            if target is None:
+                self._set(
+                    dependency,
+                    ResolutionStatus.UNRESOLVED,
+                    "解析対象ファイルに含まれていない（除外または未解析）",
+                )
+            else:
+                dependency.target_file_id = target.file_id
+                self._set(dependency, ResolutionStatus.RESOLVED)
+        elif language == Language.PYTHON:
+            self._resolve_python_dependency(dependency)
+
+    def _resolve_python_dependency(self, dependency: Dependency) -> None:
+        name = dependency.target_key or ""
+        keep_inferred = dependency.confidence == Confidence.INFERRED
+        base_note = dependency.note if keep_inferred else ""
+        modules = self._modules_named(name)
+        exact = bool(self._py_modules.get(name))
+        if len(modules) == 1:
+            dependency.target_file_id = modules[0].file_id
+            confidence = (
+                Confidence.INFERRED if keep_inferred or not exact else Confidence.CONFIRMED
+            )
+            note = base_note or ("" if exact else "ソースルートが不明なため、末尾一致で解決した")
+            self._set(dependency, ResolutionStatus.RESOLVED, note, confidence)
+        elif len(modules) > 1:
+            self._set(
+                dependency,
+                ResolutionStatus.AMBIGUOUS,
+                "同名のモジュールが複数あり、一意に決まらない",
+            )
+        elif name.split(".", 1)[0] in self._py_name_components:
+            self._set(
+                dependency,
+                ResolutionStatus.UNRESOLVED,
+                "プロジェクト内にモジュールが見つからない",
+            )
+        else:
+            self._set(
+                dependency,
+                ResolutionStatus.EXTERNAL,
+                "プロジェクト外（標準/外部ライブラリ）と考えられる",
+            )
+
+    def _modules_named(self, name: str) -> list[Symbol]:
+        exact = self._py_modules.get(name)
+        if exact:
+            return exact
+        suffix = "." + name
+        found: list[Symbol] = []
+        for qn, group in self._py_modules.items():
+            if qn.endswith(suffix):
+                found.extend(group)
+        return found
+
+    # --- 参照 ---
+
+    def _resolve_reference(self, reference: Reference) -> None:
+        reference.target_symbol_id = None
+        source = self._symbols_by_id.get(reference.source_symbol_id)
+        if source is None:
+            return
+        if reference.target_key is None:
+            if reference.resolution_status != ResolutionStatus.EXTERNAL:
+                reference.resolution_status = ResolutionStatus.UNRESOLVED
+            return
+        language = self._language_of(source.file_id)
+        if language == Language.C:
+            self._resolve_c(reference)
+        elif language == Language.PYTHON:
+            self._resolve_python(reference)
+
+    def _resolve_c(self, reference: Reference) -> None:
+        candidates = self._by_usr.get(reference.target_key or "", [])
+        kind = reference.reference_kind
+        if kind in (ReferenceKind.CALL, ReferenceKind.FUNCTION_REF):
+            definitions = [s for s in candidates if s.kind == SymbolKind.FUNCTION]
+            declarations = [s for s in candidates if s.kind == SymbolKind.FUNCTION_DECLARATION]
+            if len(definitions) == 1:
+                self._resolved(reference, definitions[0])
+            elif len(definitions) > 1:
+                self._set(
+                    reference,
+                    ResolutionStatus.AMBIGUOUS,
+                    "同一シンボルの定義が複数のファイルにある",
+                )
+            elif declarations:
+                self._resolved(
+                    reference, declarations[0], "プロジェクト内に定義がなく、宣言のみ確認できた"
+                )
+            else:
+                self._external(reference)
+            return
+        if kind == ReferenceKind.VARIABLE_REF:
+            matches = [
+                s
+                for s in candidates
+                if s.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.STATIC_VARIABLE)
+            ]
+        else:
+            matches = [
+                s
+                for s in candidates
+                if s.kind
+                in (SymbolKind.STRUCT, SymbolKind.UNION, SymbolKind.ENUM, SymbolKind.TYPEDEF)
+            ]
+        if len(matches) == 1:
+            self._resolved(reference, matches[0])
+        elif len(matches) > 1:
+            self._set(
+                reference,
+                ResolutionStatus.AMBIGUOUS,
+                "宣言と定義が複数あるなど、一意に決まらない",
+            )
+        else:
+            self._external(reference)
+
+    def _external(self, reference: Reference) -> None:
+        self._set(
+            reference,
+            ResolutionStatus.EXTERNAL,
+            "プロジェクト内に定義がない（システムヘッダー/外部ライブラリ等）",
+        )
+
+    def _resolved(
+        self,
+        reference: Reference,
+        target: Symbol,
+        note: str = "",
+        confidence: Confidence = Confidence.CONFIRMED,
+    ) -> None:
+        reference.target_symbol_id = target.symbol_id
+        decorators = [
+            d for d in target.decorators if d.split("(", 1)[0].strip() not in _TRANSPARENT_DECORATORS
+        ]
+        if decorators and reference.reference_kind != ReferenceKind.INHERITANCE:
+            confidence = Confidence.INFERRED
+            note = note or f"デコレータ({', '.join(decorators)})により置き換えられている可能性がある"
+        self._set(reference, ResolutionStatus.RESOLVED, note, confidence)
+
+    # --- Python ---
+
+    def _resolve_python(self, reference: Reference) -> None:
+        key = reference.target_key or ""
+        if key.startswith(KEY_TYPED):
+            self._resolve_python_typed(reference, key[len(KEY_TYPED):])
+        elif key.startswith(KEY_SELF) or key.startswith(KEY_SUPER):
+            self._resolve_python_method(reference, key)
+        elif key.startswith(KEY_DIRECT):
+            self._resolve_python_name(reference, key[len(KEY_DIRECT):], imported=False)
+        elif key.startswith(KEY_IMPORT):
+            self._resolve_python_name(reference, key[len(KEY_IMPORT):], imported=True)
+
+    def _python_lookup(self, dotted: str) -> tuple[list[Symbol], bool]:
+        """修飾名でシンボルを探す。戻り値は (候補, 末尾一致で見つけたか)。"""
+
+        exact = self._py_by_qname.get(dotted)
+        if exact:
+            return exact, False
+        if self._py_suffix_index is None:
+            index: dict[str, list[Symbol]] = defaultdict(list)
+            for qn, group in self._py_by_qname.items():
+                position = qn.find(".")
+                while position != -1:
+                    index[qn[position + 1:]].extend(group)
+                    position = qn.find(".", position + 1)
+            self._py_suffix_index = index
+        return self._py_suffix_index.get(dotted, []), True
+
+    def _resolve_python_name(self, reference: Reference, dotted: str, imported: bool) -> None:
+        candidates, by_suffix = self._python_lookup(dotted)
+        if len(candidates) == 1:
+            note = "ソースルートが不明なため、末尾一致で解決した" if by_suffix else ""
+            confidence = Confidence.INFERRED if by_suffix else Confidence.CONFIRMED
+            self._resolved(reference, candidates[0], note, confidence)
+            return
+        if len(candidates) > 1:
+            self._set(reference, ResolutionStatus.AMBIGUOUS, "同名の候補が複数あり、一意に決まらない")
+            return
+
+        # 最長の接頭辞が解決できれば、その先が見つからない理由を示す。
+        parts = dotted.split(".")
+        for length in range(len(parts) - 1, 0, -1):
+            prefix_candidates, _ = self._python_lookup(".".join(parts[:length]))
+            if len(prefix_candidates) != 1:
+                continue
+            prefix = prefix_candidates[0]
+            rest = ".".join(parts[length:])
+            if prefix.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.CLASS_VARIABLE):
+                note = f"変数 {prefix.qualified_name} 経由であり、型を静的に確定できない"
+            elif prefix.kind == SymbolKind.MODULE and imported:
+                note = (
+                    f"{prefix.qualified_name} に {rest} の定義が見つからない"
+                    "（__init__.py経由の再エクスポートの可能性）"
+                )
+            else:
+                note = f"{prefix.qualified_name} に {rest} の定義が見つからない"
+            self._set(reference, ResolutionStatus.UNRESOLVED, note)
+            return
+
+        if imported and parts[0] not in self._py_name_components:
+            self._set(
+                reference,
+                ResolutionStatus.EXTERNAL,
+                "プロジェクト外（標準/外部ライブラリ）と考えられる",
+            )
+        else:
+            self._set(reference, ResolutionStatus.UNRESOLVED, "プロジェクト内に定義が見つからない")
+
+    def _resolve_python_method(self, reference: Reference, key: str) -> None:
+        is_super = key.startswith(KEY_SUPER)
+        body = key[len(KEY_SUPER if is_super else KEY_SELF):]
+        class_qn, _, attribute = body.rpartition(":")
+        classes = [s for s in self._py_by_qname.get(class_qn, []) if s.kind == SymbolKind.CLASS]
+        if len(classes) != 1:
+            self._set(reference, ResolutionStatus.UNRESOLVED, "呼び出し元のクラスを特定できない")
+            return
+        order = self._linearize(classes[0])
+        if is_super:
+            order = order[1:]
+        for cls in order:
+            found = [
+                s
+                for s in self._py_by_qname.get(f"{cls.qualified_name}.{attribute}", [])
+                if s.kind == SymbolKind.METHOD
+            ]
+            if len(found) == 1:
+                self._resolved(reference, found[0], _INHERITANCE_NOTE, Confidence.INFERRED)
+                return
+            if len(found) > 1:
+                self._set(reference, ResolutionStatus.AMBIGUOUS, "同名のメソッドが複数定義されている")
+                return
+        unresolved_base = any(c.symbol_id in self._unresolved_bases for c in order)
+        if unresolved_base or (is_super and not order):
+            note = "継承元にプロジェクト外または未解決のクラスがあり、定義を確定できない"
+        else:
+            note = f"{class_qn} と継承元に {attribute} のメソッド定義が見つからない（インスタンス属性の可能性）"
+        self._set(reference, ResolutionStatus.UNRESOLVED, note)
+
+    def _resolve_python_typed(self, reference: Reference, body: str) -> None:
+        """型注釈/単一代入で推定した型のメソッド呼び出しを解決する（常にINFERRED）。"""
+
+        type_key, _, attribute = body.rpartition("|")
+        imported = type_key.startswith(KEY_IMPORT)
+        dotted = type_key[len(KEY_IMPORT if imported else KEY_DIRECT):]
+        candidates, _ = self._python_lookup(dotted)
+        classes = [s for s in candidates if s.kind == SymbolKind.CLASS]
+        if len(classes) != 1:
+            if not candidates and imported and dotted.split(".", 1)[0] not in self._py_name_components:
+                self._set(
+                    reference,
+                    ResolutionStatus.EXTERNAL,
+                    f"推定した型 {dotted} はプロジェクト外（標準/外部ライブラリ）と考えられる",
+                )
+            else:
+                self._set(
+                    reference,
+                    ResolutionStatus.UNRESOLVED,
+                    f"推定した型 {dotted} をプロジェクト内のクラスに特定できない",
+                )
+            return
+        note = "型注釈または単一代入から推定した型に基づく（実際の型はサブクラスの可能性がある）"
+        for cls in self._linearize(classes[0]):
+            found = [
+                s
+                for s in self._py_by_qname.get(f"{cls.qualified_name}.{attribute}", [])
+                if s.kind == SymbolKind.METHOD
+            ]
+            if len(found) == 1:
+                self._resolved(reference, found[0], note, Confidence.INFERRED)
+                return
+            if len(found) > 1:
+                self._set(reference, ResolutionStatus.AMBIGUOUS, "同名のメソッドが複数定義されている")
+                return
+        self._set(
+            reference,
+            ResolutionStatus.UNRESOLVED,
+            f"推定した型 {classes[0].qualified_name} と継承元に {attribute} のメソッド定義が見つからない",
+        )
+
+    def _linearize(self, cls: Symbol) -> list[Symbol]:
+        """クラスと基底クラスを幅優先で並べる（厳密なMRO(C3)ではない近似）。"""
+
+        order: list[Symbol] = []
+        seen: set[str] = set()
+        queue = [cls]
+        while queue:
+            current = queue.pop(0)
+            if current.symbol_id in seen:
+                continue
+            seen.add(current.symbol_id)
+            order.append(current)
+            queue.extend(self._bases.get(current.symbol_id, []))
+        return order

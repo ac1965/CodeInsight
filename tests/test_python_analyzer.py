@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from codeinsight.analysis.language_adapter import SourceUnit
 from codeinsight.analysis.python_analyzer import PythonAnalyzer
 from codeinsight.domain import SymbolKind
 
 
 def test_extracts_module_class_function_symbols(python_sample_dir: Path) -> None:
     analyzer = PythonAnalyzer()
-    result = analyzer.analyze_file(str(uuid.uuid4()), python_sample_dir / "shapes.py")
+    result = analyzer.analyze_file(SourceUnit.from_path(str(uuid.uuid4()), python_sample_dir / "shapes.py"))
 
     assert result.succeeded, result.errors
     by_name = {s.name: s for s in result.symbols}
@@ -30,7 +31,7 @@ def test_extracts_module_class_function_symbols(python_sample_dir: Path) -> None
 
 def test_records_decorators(python_sample_dir: Path) -> None:
     analyzer = PythonAnalyzer()
-    result = analyzer.analyze_file(str(uuid.uuid4()), python_sample_dir / "shapes.py")
+    result = analyzer.analyze_file(SourceUnit.from_path(str(uuid.uuid4()), python_sample_dir / "shapes.py"))
 
     circle_area = next(
         s
@@ -45,7 +46,7 @@ def test_syntax_error_is_recorded_as_failure(tmp_path: Path) -> None:
     broken.write_text("def broken(:\n    pass\n", encoding="utf-8")
 
     analyzer = PythonAnalyzer()
-    result = analyzer.analyze_file(str(uuid.uuid4()), broken)
+    result = analyzer.analyze_file(SourceUnit.from_path(str(uuid.uuid4()), broken))
 
     assert not result.succeeded
     assert result.errors

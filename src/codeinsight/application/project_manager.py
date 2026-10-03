@@ -39,6 +39,15 @@ class ProjectManager:
         self._repository.save_project(project)
         return project
 
+    def get_or_register(self, root_path: Path) -> Project:
+        """同じルートのプロジェクトが登録済みならそれを返し、無ければ登録する。"""
+
+        resolved = root_path.resolve()
+        for project in self._repository.list_projects():
+            if project.root_path == resolved:
+                return project
+        return self.register(resolved)
+
     def get(self, project_id: str) -> Project | None:
         return self._repository.get_project(project_id)
 

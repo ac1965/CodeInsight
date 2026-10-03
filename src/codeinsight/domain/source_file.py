@@ -22,6 +22,15 @@ class AnalysisFileStatus(enum.Enum):
     SKIPPED = "skipped"
 
 
+class FileFreshness(enum.Enum):
+    """保存済み解析結果と現在のソースコードの対応状況（3.10: 古い結果の明示）。"""
+
+    FRESH = "fresh"  # 現在のハッシュが解析時と一致
+    STALE = "stale"  # ソースが解析後に変更されている
+    MISSING = "missing"  # ファイルが存在しない
+    UNANALYZED = "unanalyzed"  # 解析に成功していない
+
+
 @dataclass
 class SourceFile:
     """プロジェクト内の1ソースファイルを表すドメインモデル。"""
@@ -33,3 +42,4 @@ class SourceFile:
     content_hash: str
     last_analyzed_at: datetime | None = None
     analysis_status: AnalysisFileStatus = AnalysisFileStatus.PENDING
+    analyzer_version: str = ""
