@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## ライセンス（未リリース）
+
+* GPL-3.0-or-later を採用し、`LICENSE`（GPLv3全文）を追加。`pyproject.toml` の `UNLICENSED` を置き換えた。
+
 ## CI・静的検査（未リリース）
 
 ### 追加

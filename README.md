@@ -215,4 +215,5 @@ make lint          # ruff と mypy(CIと同じ)
 
 ## ライセンス
 
-未定
+GNU General Public License v3.0 以降（GPL-3.0-or-later）。全文は [LICENSE](LICENSE) を参照してください。
+解析対象のソースコードにはこのライセンスは及びません（本ソフトウェアは対象を変更せず、解析結果も対象のライセンスを変えません）。
