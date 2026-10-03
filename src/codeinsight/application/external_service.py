@@ -271,7 +271,7 @@ class ExternalService:
             if dependency.resolution_status != ResolutionStatus.EXTERNAL or dependency.is_candidate:
                 continue
             source_file = index.files.get(dependency.source_file_id)
-            if source_file is None:
+            if source_file is None or source_file.language == Language.ELISP:  # Emacs Lispの外部連携の分類は未対応（CやPythonの名前表を当てはめない）
                 continue
             name = dependency.target_name
             category = categorize(name, source_file.language) or (
@@ -296,6 +296,8 @@ class ExternalService:
             if source is None:
                 continue
             language = index.files[source.file_id].language
+            if language == Language.ELISP:
+                continue
             path = index.path_of(source.file_id)
             if reference.resolution_status == ResolutionStatus.EXTERNAL:
                 callee = external_name(reference) if language == Language.PYTHON else reference.target_name

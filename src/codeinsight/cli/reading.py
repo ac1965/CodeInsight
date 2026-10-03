@@ -381,6 +381,8 @@ def cmd_understand(args: argparse.Namespace) -> int:
                 continue
             seen.add(effect_key)
             print(f"  外部への副作用の候補（呼び出し先経由）: [{CATEGORY_LABELS[use.category]}・{OPERATION_LABELS[use.operation]}] {safe(use.library)}  経路: {' → '.join(safe(r) for r in route)}")
+    if u.el_shadowed:
+        print(f"  ※ 局所にも束縛される名前のため、グローバルへのアクセスかを判定していません: {', '.join(safe(n) for n in u.el_shadowed)}")
     if unsupported:
         print("  （状態・引数の変更は対象外です。上記の外部への副作用の候補は、呼び出し先の名前による分類のみです）")
     elif not (u.state_changes or u.parameter_mutations or (u.effects and (u.effects.direct or u.effects.reachable))):
@@ -389,6 +391,8 @@ def cmd_understand(args: argparse.Namespace) -> int:
     _print_section("5. 何を返すのか")
     if unsupported:
         print("  （対象外）")
+    if u.return_note:
+        print(f"  {safe(u.return_note)}")
     if u.return_annotation:
         print(f"  戻り値の型注釈: {safe(u.return_annotation)}")
     for number, text in u.returns[:limit]:
@@ -397,7 +401,7 @@ def cmd_understand(args: argparse.Namespace) -> int:
         print("  ジェネレータ（yield で値を順次返す）")
     if u.is_async:
         print("  async 関数（awaitable を返す）")
-    if not u.returns and not u.is_generator and u.facts_available and symbol.kind.value in ("function", "method"):
+    if not u.returns and not u.is_generator and not u.return_note and u.facts_available and symbol.kind.value in ("function", "method"):
         print("  明示的な return はありません" + ("（None を返す）" if u.language == Language.PYTHON else ""))
 
     _print_section("6. 誰に影響するのか")
@@ -426,6 +430,21 @@ def cmd_understand(args: argparse.Namespace) -> int:
             print(f"  関数内の例外処理: L{h.line} except {safe(', '.join(h.types))} — {traits}")
         if u.exceptions.unresolved_calls:
             print(f"  ※ 呼び出し先を特定できない呼び出しが {u.exceptions.unresolved_calls}件あり、そこからの例外は追えていません")
+    if u.el_exit_report:
+        report = u.el_exit_report
+        for sig in report.direct.signals:
+            guard = f"  [囲んでいる: {'; '.join(safe(g) for g in sig.guarded_by)}]" if sig.guarded_by else ""
+            print(f"  {reading_el._KIND_LABELS[sig.kind]}: L{sig.line} {safe(sig.detail)}{guard}")
+        for handler in report.direct.handlers:
+            traits = "握りつぶし" if handler.swallowed else ("再送出あり" if handler.reraises else "処理あり")
+            print(f"  関数内の例外処理: L{handler.line} {handler.form} 捕捉: {safe(', '.join(handler.conditions) or '（なし）')} — {traits}")
+        for hop in report.propagated[:limit]:
+            note = "（途中に保護あり）" if hop.guards else ""
+            print(f"  呼び出し先を経由して送出・終了しうる（推定）: {reading_el._route(symbol, hop)} → L{hop.signal.line} {safe(hop.signal.detail)}{note}")
+        if not (report.direct.signals or report.propagated):
+            print("  この関数と、解決できる呼び出し先には、明示的なシグナル・終了は確認できません（組み込み関数のエラーは含まない）")
+        if report.unresolved_calls:
+            print(f"  ※ 呼び出し先を特定できない呼び出しが {report.unresolved_calls}件あり、そこからの送出は追えていません")
     for c_exit in u.c_exits:
         print(f"  {reading_c._EXIT_LABELS[c_exit.kind]}: L{c_exit.line} {safe(c_exit.detail)}")
     if u.c_exit_report:

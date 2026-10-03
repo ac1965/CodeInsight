@@ -10,6 +10,7 @@ from codeinsight.application.boundary_service import BoundaryItem, BoundaryServi
 from codeinsight.application.c_flow_service import CFlowService, ExitReport
 from codeinsight.application.config_service import ConfigItem, ConfigService
 from codeinsight.application.describe_service import DescribeService
+from codeinsight.application.elisp_flow_service import ElispExitReport, ElispFlowService
 from codeinsight.application.external_service import (
     INPUT_OPERATIONS,
     EffectSummary,
@@ -91,6 +92,9 @@ class Understanding:
     history: SymbolHistory | None = None
     c_exits: list[cf.CExit] = field(default_factory=list)  # C: 終了・エラー戻り値・errno（Cには例外が無い）
     c_exit_report: ExitReport | None = None  # C: 呼び出し先を経由した終了の経路
+    el_exit_report: ElispExitReport | None = None  # Emacs Lisp: シグナル・保護・呼び出し先を経由した送出
+    el_shadowed: list[str] = field(default_factory=list)  # Emacs Lisp: 局所にも束縛されるため、グローバルへのアクセスか判定していない名前
+    return_note: str = ""  # 戻り値を解析できない言語での、その旨
     facts_available: bool = False  # 入力・変更・戻り値・失敗時の挙動の解析が、この言語で行われたか
     limitations: list[str] = field(default_factory=list)
 
@@ -100,6 +104,7 @@ class UnderstandService:
         self._navigation = navigation
         self._flow = FlowService(navigation)
         self._c = CFlowService(navigation)
+        self._el = ElispFlowService(navigation)
 
     def understand(self, project: Project, index: ProjectIndex, symbol: Symbol, depth: int = 3) -> Understanding:
         source_file = index.files[symbol.file_id]
@@ -149,8 +154,8 @@ class UnderstandService:
         # --- 8. なぜ現在の実装か ---
         result.history = HistoryService().symbol_history(project, index, symbol)
 
-        if not is_python and source_file.language != Language.C:
-            result.limitations.append(f"入力・変更・戻り値・失敗時の挙動の解析は、{source_file.language.value} には未対応です（Python・Cのみ）。")
+        if source_file.language not in (Language.PYTHON, Language.C, Language.ELISP):
+            result.limitations.append(f"入力・変更・戻り値・失敗時の挙動の解析は、{source_file.language.value} には未対応です（Python・C・Emacs Lispのみ）。")
             return result
         if not callable_symbol:
             result.limitations.append(f"{symbol.kind.value} のため、入力・戻り値・失敗時の解析は対象外です（関数・メソッドのみ）。")
@@ -159,6 +164,8 @@ class UnderstandService:
         try:
             if is_python:
                 self._fill_function_facts(project, index, symbol, result, depth)
+            elif source_file.language == Language.ELISP:
+                self._fill_elisp_facts(project, index, symbol, result, depth)
             else:
                 self._fill_c_facts(project, index, symbol, result, depth)
             result.facts_available = True
@@ -196,6 +203,25 @@ class UnderstandService:
         result.limitations.append(
             "Cの関数内の解析は、実行順序・値を考慮しない近似です。ポインタを介した書き込み先の実体（エイリアス）、関数ポインタ経由の呼び出し、"
             "マクロ展開の内部は追えません。Cには例外が無いため、失敗は終了・エラー戻り値・errno の手がかりで示します（呼び出し側が確認しているかは別）。"
+        )
+
+    def _fill_elisp_facts(self, project: Project, index: ProjectIndex, symbol: Symbol, result: Understanding, depth: int) -> None:
+        """Emacs LispのS式から得る事実。失敗は、シグナル（error / signal / throw）と終了の手がかりで示す。"""
+
+        result.parameters = [Parameter(name, "", "", "positional") for name in self._el.parameters(project, index, symbol)]
+        result.return_note = "Emacs Lispは、本体の最後の式の値を返します（戻り値の解析は未対応です）。"
+        state = self._el.state(project, index, symbol)
+        scope_label = {"global": "グローバル・動的変数", "buffer-local": "バッファローカル変数", "hook": "フック"}
+        for access in state.accesses:
+            if access.mode in ("write", "mutate"):
+                verb = "書き込む" if access.mode == "write" else "書き換える"
+                result.state_changes.append(f"L{access.line} {scope_label[access.scope]} {access.name} を{verb}（{access.via}）")
+        result.el_shadowed = state.shadowed
+        result.el_exit_report = self._el.exit_report(project, index, symbol, depth + 1)
+        result.limitations.append(
+            "Emacs Lispの関数内の解析は、実行順序・値を考慮しない近似です。マクロ（独自マクロ・use-package など）の展開後、funcall 経由の呼び出し、"
+            "advice による置き換えは追えません。呼び出し先の解決は名前の一致による推定です。組み込み関数が送出するエラーは含みません。"
+            "外部への副作用（ファイル・プロセスなど）の分類、データフロー、リスクの検出は未対応です。"
         )
 
     # --- 関数のASTから得る事実 ---

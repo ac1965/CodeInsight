@@ -97,3 +97,16 @@ def test_cli_flow_exceptions_state_and_dataflow(tmp_path: Path, capsys) -> None:
         out = capsys.readouterr().out
         assert "core-risky" in out
     assert main(["dataflow", "core-risky", "--db", db, "--project", str(FIXTURE)]) != 0
+
+
+def test_understand_includes_elisp_state_and_failure(tmp_path: Path, capsys) -> None:
+    db = str(tmp_path / "u.db")
+    assert main(["analyze", str(FIXTURE), "--db", db]) == 0
+    capsys.readouterr()
+    assert main(["understand", "core-risky", "--db", db, "--project", str(FIXTURE)]) == 0
+    out = capsys.readouterr().out
+    assert "core-log を書き換える（push）" in out and "core-counter を書き込む（setq）" in out
+    assert "user-error" in out and "kill-emacs" in out and "（推定）" in out
+    assert "最後の式の値" in out  # 戻り値の解析は未対応であることを示す（「return なし」と誤読させない）
+    assert "未対応" in out
+    assert "[外部プロセス" not in out  # signal を、プロセスのシグナルと誤分類しない
