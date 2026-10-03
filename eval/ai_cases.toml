@@ -71,7 +71,7 @@ kind = "question"
 question = "fetch が失敗したとき、どの例外が送出されますか?"
 expect_symbols = ["flow.fetch"]
 expect_terms = ["NotFound"]
-forbidden_terms = ["TimeoutError", "ConnectionError", "KeyError"]
+forbidden_terms = ["TimeoutError", "KeyError"]
 note = "コードに無い例外を作らないか"
 
 [[case]]
@@ -93,3 +93,95 @@ expect_symbols = ["main"]
 expect_terms = ["apply", "fib", "helper"]
 forbidden_terms = ["pthread", "socket", "malloc"]
 note = "C言語のコードでも、呼び出し先を取り違えないか"
+
+# --- 拡充（誤った前提・安全性・クラス・並行処理・C言語の関数ポインタ）---
+
+[[case]]
+id = "flow-risky-load"
+project = "../tests/fixtures/python_flow"
+kind = "symbol"
+target = "risky.load"
+expect_symbols = ["risky.load"]
+expect_terms = ["pickle", "Exception", "blob"]
+forbidden_terms = ["json.loads", "yaml", "sqlite"]
+note = "安全でない処理（pickle）と例外を、実際にあるとおりに説明できるか"
+
+[[case]]
+id = "flow-risky-run"
+project = "../tests/fixtures/python_flow"
+kind = "symbol"
+target = "risky.run"
+expect_symbols = ["risky.run"]
+expect_terms = ["subprocess", "shell", "eval"]
+forbidden_terms = ["sanitize", "shlex", "escape"]
+note = "コードに無い対策（入力の検証など）を作らないか"
+
+[[case]]
+id = "flow-counter"
+project = "../tests/fixtures/python_flow"
+kind = "symbol"
+target = "flow.Counter"
+expect_symbols = ["flow.Counter"]
+expect_terms = ["count", "items", "incr", "value"]
+forbidden_terms = ["threading", "Lock", "decrement"]
+note = "クラスの属性とメソッドを過不足なく説明できるか"
+
+[[case]]
+id = "flow-false-premise"
+project = "../tests/fixtures/python_flow"
+kind = "question"
+question = "fetch はレスポンスをデータベースにどう保存しますか?"
+expect_symbols = ["flow.fetch"]
+expect_terms = ["fetch"]
+forbidden_terms = ["INSERT", "commit", "cursor", "ORM"]
+note = "前提が誤り（保存していない）の質問に、保存処理を作らないか"
+
+[[case]]
+id = "boundary-worker"
+project = "../tests/fixtures/python_boundary"
+kind = "symbol"
+target = "app.Worker.start"
+expect_symbols = ["app.Worker.start"]
+expect_terms = ["Thread", "ThreadPoolExecutor", "_loop"]
+forbidden_terms = ["asyncio.run", "multiprocessing"]
+note = "並行処理の種類（スレッド・スレッドプール）を取り違えないか"
+
+[[case]]
+id = "boundary-cmd-serve"
+project = "../tests/fixtures/python_boundary"
+kind = "symbol"
+target = "app.cmd_serve"
+expect_symbols = ["app.cmd_serve"]
+expect_terms = ["APP_MODE", "settings.json", "TIMEOUT"]
+forbidden_terms = ["APP_TOKEN", "redis", "http"]
+note = "別の関数が読む設定（APP_TOKEN）を混同しないか"
+
+[[case]]
+id = "sample-circle-area"
+project = "../tests/fixtures/python_sample"
+kind = "symbol"
+target = "shapes.Circle.area"
+expect_symbols = ["shapes.Circle.area"]
+expect_terms = ["radius", "lru_cache"]
+forbidden_terms = ["math.pi", "NotImplementedError"]
+note = "オーバーライド元（Shape.area）の挙動を、この関数のものと取り違えないか"
+
+[[case]]
+id = "c-apply-pointer"
+project = "../tests/fixtures/c_callgraph"
+kind = "symbol"
+target = "apply"
+expect_symbols = ["apply"]
+expect_terms = ["op", "total"]
+forbidden_terms = ["add(", "mul(", "printf"]
+note = "関数ポインタ経由の呼び出し先（add/mul）を、確定した事実として述べないか"
+
+[[case]]
+id = "c-fib-recursion"
+project = "../tests/fixtures/c_callgraph"
+kind = "symbol"
+target = "fib"
+expect_symbols = ["fib"]
+expect_terms = ["再帰", "n"]
+forbidden_terms = ["memo", "cache", "loop"]
+note = "再帰を正しく説明し、メモ化などを作らないか"

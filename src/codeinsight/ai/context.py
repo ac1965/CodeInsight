@@ -98,6 +98,7 @@ class _Budget:
     def add_source(self, kind: str, title: str, path: str, lines: list[str], start: int, end: int, share: float = 1.0) -> None:
         """行番号つきのソースを追加する。予算を超える場合は、行単位で切り詰めて、その旨を記録する。"""
 
+        start = _include_decorators(lines, start)
         allowed = max(200, int(self._remaining * share))
         rendered: list[str] = []
         used = 0
@@ -309,6 +310,18 @@ class ContextBuilder:
         if hashlib.sha256(data).hexdigest() != source_file.content_hash:
             raise ContextError(f"{relative_path} は解析後に変更されています。再解析（codeinsight analyze）してから実行してください。")
         return data.decode("utf-8", errors="replace").splitlines()
+
+
+def _include_decorators(lines: list[str], start: int) -> int:
+    """定義の直前にあるデコレータ行（`@...`）まで開始行を広げる。
+
+    解析結果のシンボルの範囲は `def`/`class` 行から始まるが、デコレータは関数の振る舞い
+    （キャッシュ・登録・置き換え）を決める。範囲外のまま渡すと、AIはそれを見られない。
+    """
+
+    while start > 1 and start - 2 < len(lines) and lines[start - 2].lstrip().startswith("@"):
+        start -= 1
+    return start
 
 
 def _symbol_facts(index: ProjectIndex, symbol: Symbol, card: Understanding, navigation: NavigationService) -> tuple[list[str], list[tuple[str, int, int]]]:

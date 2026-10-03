@@ -102,3 +102,12 @@ def test_cli_runs_against_a_local_stub_and_writes_report(tmp_path: Path, capsys)
         assert code == 0 and "layered-place-order" in out and "合格率" in out and "機械的な指標" in out
     finally:
         stub.close()
+
+
+def test_term_matching_respects_word_boundaries() -> None:
+    from codeinsight.ai.evaluation import _mentions
+
+    assert not _mentions("transform を呼びます", "ORM")  # 語の一部には一致しない
+    assert _mentions("SQLAlchemy の ORM を使う", "ORM")
+    assert _mentions("`math.pi` を使う", "math.pi") and not _mentions("mathxpi", "math.pi")
+    assert _mentions("orders.log に書く", "orders.log") and _mentions("再帰呼び出し", "再帰")

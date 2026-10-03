@@ -582,3 +582,16 @@ def test_api_key_is_read_only_from_the_environment(tmp_path: Path) -> None:
     assert load_ai_config(env={"CODEINSIGHT_AI_API_KEY": "sk-env"}, file_path=file_path).api_key == "sk-env"
     file_path.write_text('[ai]\nmodel = "m"\n')
     assert config_file_warnings(file_path) == []
+
+
+def test_context_source_includes_the_decorator_lines_above_a_definition(tmp_path: Path) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "m.py").write_text("from functools import lru_cache\n\n\n@lru_cache(maxsize=None)\n@staticmethod\ndef area(r):\n    return r * r\n")
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(root), "--db", db]) == 0
+    from codeinsight.ai.context import _include_decorators
+
+    lines = (root / "m.py").read_text().splitlines()
+    assert _include_decorators(lines, 6) == 4  # 2つのデコレータまで広げる
+    assert _include_decorators(lines, 4) == 4 and _include_decorators(lines, 1) == 1

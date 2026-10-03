@@ -19,9 +19,14 @@
 
 ## AI解説の評価セット（未リリース）
 
+### 修正
+
+* AIに渡すPythonの根拠に、定義の直前のデコレータ行（`@lru_cache` など）を含める。シンボルの範囲は `def` 行から始まるため、AIがデコレータを見られなかった（評価で発見）。
+* 評価の採点で、語を単語境界で照合する（`ORM` が `transform` に一致する誤りを修正）。レポートに回答本文と存在を確認できない名前を含める。
+
 ### 追加
 
-* `ai-eval` コマンドと `eval/ai_cases.toml`（9ケース: Python/C、symbol・file・path・question）。AI解説を、引用の妥当性・期待する根拠の再現率・語の再現率・「コードに無い事柄」への言及・存在しない名前の数で機械的に採点する。モデルやプロンプトの比較用。`--list`（AI不使用）、`--only`、`--repeat`、`--report`、`--min-pass-rate`。
+* `ai-eval` コマンドと `eval/ai_cases.toml`（18ケース: Python/C、symbol・file・path・question）。AI解説を、引用の妥当性・期待する根拠の再現率・語の再現率・「コードに無い事柄」への言及・存在しない名前の数で機械的に採点する。モデルやプロンプトの比較用。`--list`（AI不使用）、`--only`、`--repeat`、`--report`、`--min-pass-rate`。
 * `make ai-eval MODEL=... AI_SEND=1`。
 
 ### 既知の制約

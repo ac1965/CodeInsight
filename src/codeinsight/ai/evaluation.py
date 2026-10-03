@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import time
 import tomllib
@@ -56,6 +57,7 @@ class EvalResult:
     forbidden_hits: list[str] = field(default_factory=list)
     unsupported_lines: int = 0
     unknown_identifiers: int = 0
+    unknown_names: list[str] = field(default_factory=list)
     seconds: float = 0.0
     answer: str = ""
 
@@ -117,7 +119,8 @@ class EvalSummary:
                     "validation_status": r.validation_status, "citations": [r.citations_valid, r.citations_total],
                     "evidence_recall": r.evidence_recall, "term_recall": r.term_recall,
                     "forbidden_hits": r.forbidden_hits, "unsupported_lines": r.unsupported_lines,
-                    "unknown_identifiers": r.unknown_identifiers, "seconds": round(r.seconds, 1),
+                    "unknown_identifiers": r.unknown_identifiers, "unknown_names": r.unknown_names,
+                    "seconds": round(r.seconds, 1), "answer": r.answer,
                 }
                 for r in self.results
             ],
@@ -240,6 +243,17 @@ def _run_case(case: EvalCase, config: AIConfig, provider: AIProvider | None, wor
     return score(case, result.completion.text, result.report, spans, time.monotonic() - started)
 
 
+def _mentions(text: str, term: str) -> bool:
+    """語が回答に現れるか。英数字・_ の語は単語境界で照合する（`ORM` が `transform` に一致しないように）。"""
+
+    pattern = re.escape(term)
+    if term[:1].isascii() and (term[:1].isalnum() or term[:1] == "_"):
+        pattern = r"(?<![A-Za-z0-9_])" + pattern
+    if term[-1:].isascii() and (term[-1:].isalnum() or term[-1:] == "_"):
+        pattern += r"(?![A-Za-z0-9_])"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
 def score(case: EvalCase, answer: str, report, expected_spans: list[tuple[str, int, int]], seconds: float = 0.0) -> EvalResult:
     """回答を、機械的な指標で採点する（引用の妥当性・期待する根拠の再現・語の再現・作り話の罠・名前の実在）。"""
 
@@ -247,7 +261,8 @@ def score(case: EvalCase, answer: str, report, expected_spans: list[tuple[str, i
     result = EvalResult(
         case, "pass", validation_status=report.status.value, citations_total=len(report.citations),
         citations_valid=len(verified), unsupported_lines=report.count("unsupported"),
-        unknown_identifiers=len(report.unknown_identifiers), seconds=seconds, answer=answer,
+        unknown_identifiers=len(report.unknown_identifiers), unknown_names=[name for _, name in report.unknown_identifiers],
+        seconds=seconds, answer=answer,
     )
     if expected_spans:
         covered = sum(
@@ -255,10 +270,9 @@ def score(case: EvalCase, answer: str, report, expected_spans: list[tuple[str, i
             if any(c.path == path and c.start <= end and c.end >= start for c in verified)
         )
         result.evidence_recall = covered / len(expected_spans)
-    lowered = answer.lower()
     if case.expect_terms:
-        result.term_recall = sum(1 for t in case.expect_terms if t.lower() in lowered) / len(case.expect_terms)
-    result.forbidden_hits = [t for t in case.forbidden_terms if t.lower() in lowered]
+        result.term_recall = sum(1 for t in case.expect_terms if _mentions(answer, t)) / len(case.expect_terms)
+    result.forbidden_hits = [t for t in case.forbidden_terms if _mentions(answer, t)]
 
     if report.bad_citations:
         result.reasons.append(f"検証できない引用が{len(report.bad_citations)}件ある")
