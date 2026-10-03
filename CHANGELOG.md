@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## CI（未リリース）
+
+* 実行環境を `ubuntu-24.04` に固定。`ubuntu-latest` の2026-10-19のUbuntu 26への移行で、libclangの標準ヘッダー検出などが影響を受けるのを避ける。
+
 ## Emacs Lispの関数単位の解析（未リリース）
 
 * Emacs Lispの `dataflow`（呼び出し先の仮引数まで追跡）、戻り値（各経路の最後の式・暗黙の nil）、`risks`（eval・shell-command・握りつぶし・グローバルな再定義など）、外部への副作用の分類（関数名による推定）を追加し、`understand` に統合。Emacs本体の53,117関数で異常終了0件。
