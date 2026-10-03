@@ -72,7 +72,10 @@ src/codeinsight/
 │   ├── context.py         ContextBuilder（解析結果の事実とソースを予算内で組み立て、引用してよい位置を記録）、質問の検索
 │   ├── prompt.py          PromptBuilder（規則・根拠・課題の組み立て）
 │   ├── citations.py       CitationValidator（引用・識別子・根拠のない主張の機械的な検証）
-│   └── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存）
+│   ├── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存）
+│   └── evaluation.py      評価ケース（eval/ai_cases.toml）の読み込み・実行・機械的な採点（保存はしない。モデル・プロンプトの比較用）
+│
+├── (リポジトリ直下) eval/ai_cases.toml  AI評価ケース、.github/workflows/ci.yml  CI（pytest 3.11〜3.13・ruff・mypy）、Makefile、LICENSE（GPL-3.0-or-later）
 │
 ├── bootstrap.py       標準の解析アダプターの組み立て（CLI・将来のGUIで共用）
 └── cli/               コマンドラインインターフェース（責務ごとのモジュール。依存は common ← project ← reading、explore・graph・ai_commands は common のみ、parser が全てを束ねる）
@@ -81,7 +84,7 @@ src/codeinsight/
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── graph.py           グラフ出力（graph）
-    ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status）
+    ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status / ai-eval）
     ├── parser.py          コマンドの登録（argparse）とエントリポイント `main`
     └── __main__.py        `python -m codeinsight.cli`
 ```
@@ -164,3 +167,5 @@ AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2
 * 既定では、何も外部へ送信しない。送信には明示的な許可（`--allow-send` または設定）が必要で、送信先がこの計算機の外の場合は、さらに `--allow-remote` が必要（`AIConfig.check_consent`）。`--dry-run` は送信せず、プロンプトを表示する。
 * APIキーは、環境変数 `CODEINSIGHT_AI_API_KEY` からのみ読む。コマンドライン引数（シェルの履歴に残る）でも設定ファイル（平文で残る）でも受け取らない。設定ファイルに `api_key` があっても無視し、`ai-status` が警告する。`repr`・表示・例外メッセージには含めない。
 * 設定ファイル `~/.codeinsight/config.toml` の `[ai]` テーブル（`CODEINSIGHT_DATA_DIR` で場所を変更可）には、送信先・モデル・送信の許可などを書ける（APIキーは除く）。
+
+`ai/evaluation.py` は `ai/service.py` を使う側であり、逆の依存はない。評価は一時DBに対象を解析して行い、評価対象のリポジトリにも利用者のDBにも書き込まない。
