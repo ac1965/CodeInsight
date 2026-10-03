@@ -51,32 +51,92 @@ def _compiler_builtin_include_args() -> list[str]:
     return []
 
 
-def _detect_default_args() -> list[str]:
-    """compile_commands.jsonが無い場合の最小限のデフォルト引数を組み立てる。
+# 後ろにパスを取るオプション（`-I dir` のように別の引数で渡される形と、`-Idir` のように連結した形の両方がある）
+_PATH_OPTIONS = ("-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros", "-isysroot", "-F", "-iframework")
 
-    macOSでは標準ヘッダー（<stdio.h>等）の解決にSDKのsysrootが必要なため、
-    `xcrun --show-sdk-path`（読み取り専用のメタデータ取得コマンド）で検出
-    できればそれを付与する。検出できない場合はデフォルト引数のみを用い、
-    その分の解析精度の制約はwarningsで別途通知する。
+
+# 解析には不要で、ファイルを書き出す（または書き出そうとする）オプション。取り除く（対象の環境に書き込まない: AGENTS.md 1.1-4）
+_OUTPUT_FLAGS = frozenset({"-M", "-MM", "-MD", "-MMD", "-MP", "-MG", "-save-temps", "-pipe"})
+_OUTPUT_OPTIONS_WITH_VALUE = frozenset({"-o", "-MF", "-MT", "-MQ", "-MJ", "-Xclang"})
+
+
+def _strip_output_options(args: list[str]) -> list[str]:
+    result: list[str] = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+        elif arg in _OUTPUT_FLAGS:
+            continue
+        elif arg in _OUTPUT_OPTIONS_WITH_VALUE:
+            skip_next = True
+        elif arg.startswith(("-MF", "-MT", "-MQ", "-MJ")) and len(arg) > 3:
+            continue  # -MFdeps/x.d のような連結形
+        elif arg.startswith("-o") and len(arg) > 2 and not arg.startswith("-opt"):
+            continue
+        elif arg == "-pedantic-errors" or arg == "-Werror" or arg.startswith("-Werror="):
+            continue  # 警告をエラーに格上げするビルド設定は、解析では警告のままにする（エラーは構文解析の失敗として扱うため）
+        else:
+            result.append(arg)
+    return result
+
+
+def _absolutize_paths(args: list[str], directory: str) -> list[str]:
+    """コンパイルコマンドの相対パスを、コマンドの `directory`（コンパイラを実行した場所）基準の絶対パスにする。
+
+    解析は別の場所で行うため、`-I.` のような相対パスは、そのままだと別のディレクトリを指す。
+    out-of-tree ビルド（生成された config.h がビルド用ディレクトリにある）で特に必要になる。
     """
 
-    args = list(_DEFAULT_ARGS)
-    if platform.system() != "Darwin":
-        return [*_compiler_builtin_include_args(), *args]
-    try:
-        completed = subprocess.run(
-            ["xcrun", "--show-sdk-path"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    if not directory:
         return args
-    sdk_path = completed.stdout.strip()
-    if completed.returncode == 0 and sdk_path:
-        return ["-isysroot", sdk_path, *args]
-    return args
+    base = Path(directory)
+
+    def absolute(value: str) -> str:
+        return value if Path(value).is_absolute() else str(base / value)
+
+    result: list[str] = []
+    pending = False
+    for arg in args:
+        if pending:
+            result.append(absolute(arg))
+            pending = False
+            continue
+        if arg in _PATH_OPTIONS:
+            result.append(arg)
+            pending = True
+            continue
+        for option in sorted(_PATH_OPTIONS, key=len, reverse=True):
+            if arg.startswith(option) and len(arg) > len(option) and not arg.startswith("-include-"):
+                result.append(option + absolute(arg[len(option):]))
+                break
+        else:
+            result.append(arg)
+    return result
+
+
+def _system_include_args() -> list[str]:
+    """標準ヘッダー（<stdio.h>等）を見つけるための、実行環境ごとの引数。
+
+    pipで入るlibclangは、コンパイラが暗黙に行うシステムヘッダーの探索（macOSのSDK、組み込みヘッダー）を
+    行わない。macOSでは `xcrun --show-sdk-path`、Linuxでは `clang`/`gcc` の設定値の問い合わせ
+    （いずれも読み取り専用のメタデータ取得で、対象のコードはコンパイルも実行もしない）で補う。
+    検出できない場合は何も足さず、その分の解析精度の制約は解析エラーとして表れる。
+    """
+
+    builtin = _compiler_builtin_include_args()  # <stdarg.h>・<stddef.h> など、コンパイラ組み込みのヘッダー
+    if platform.system() != "Darwin":
+        return builtin
+    sdk_path = _query_compiler(["xcrun", "--show-sdk-path"])
+    return [*(["-isysroot", sdk_path] if sdk_path else []), *builtin]
+
+
+def _with_system_includes(args: list[str], system_args: list[str]) -> list[str]:
+    """コンパイルコマンドに、システムヘッダーの探索に必要な引数を足す（指定済みなら足さない）。"""
+
+    if not system_args or any(a in ("-nostdinc", "-isysroot", "--sysroot") or a.startswith("--sysroot=") for a in args):
+        return args
+    return [*system_args, *args]
 
 
 _TYPE_DECL_KINDS = frozenset(
@@ -148,17 +208,16 @@ class CAnalyzer:
             except cindex.CompilationDatabaseError:
                 self._compilation_database = None
         self._index = cindex.Index.create()
-        self._default_args = _detect_default_args()
+        self._listed: set[str] | None = None
+        self._system_args = _system_include_args()
+        self._default_args = [*self._system_args, *_DEFAULT_ARGS]
 
     def analyze_file(self, unit: SourceUnit) -> FileAnalysis:
         result = FileAnalysis()
         absolute_path = unit.absolute_path
-        args, precise = self._resolve_args(absolute_path)
-        if not precise:
-            result.warnings.append(
-                "compile_commands.jsonが見つからないため、デフォルト引数で解析しました。"
-                "解析精度に制約がある可能性があります。"
-            )
+        args, args_warning = self._resolve_args(absolute_path)
+        if args_warning:
+            result.warnings.append(args_warning)
 
         try:
             translation_unit = self._index.parse(
@@ -404,15 +463,42 @@ class CAnalyzer:
                     ResolutionStatus.UNRESOLVED,
                 )
 
-    def _resolve_args(self, absolute_path: Path) -> tuple[list[str], bool]:
-        if self._compilation_database is not None:
-            commands = self._compilation_database.getCompileCommands(str(absolute_path))
-            if commands:
-                command = commands[0]
-                args = list(command.arguments)[1:]  # コンパイラ実行ファイル名を除く
-                args = [arg for arg in args if arg != command.filename]
-                return args, True
-        return list(self._default_args), False
+    def _resolve_args(self, absolute_path: Path) -> tuple[list[str], str | None]:
+        """解析に使う引数と、精度に関する注記（コンパイルコマンドが完全に対応していれば None）。
+
+        1. compile_commands.json に当該ファイルのコマンドがあれば、それを使う。
+        2. 無い場合、libclang は同じディレクトリなどの近隣のコマンドから補間したものを返す。ヘッダーや、
+           そのビルドで対象外だったファイルが、隣のソースと同じ設定で書かれていることが多いため使うが、
+           完全な設定ではないので、推定である旨を注記する。
+        3. それも無ければ、デフォルト引数で解析する。
+        """
+
+        if self._compilation_database is None:
+            return list(self._default_args), "compile_commands.jsonが見つからないため、デフォルト引数で解析しました。解析精度に制約がある可能性があります。"
+        commands = self._compilation_database.getCompileCommands(str(absolute_path))
+        if commands:
+            if str(absolute_path.resolve()) in self._listed_files():
+                return self._command_args(commands[0]), None
+            return self._command_args(commands[0]), (
+                f"compile_commands.jsonに{absolute_path.name}の設定が無いため、近隣のファイルのコンパイル設定"
+                "（-I・-Dなど）から補間したものを使いました（推定）。解析精度に制約がある可能性があります。"
+            )
+        return list(self._default_args), (
+            f"compile_commands.jsonに{absolute_path.name}の設定が無いため、デフォルト引数で解析しました。解析精度に制約がある可能性があります。"
+        )
+
+    def _command_args(self, command: cindex.CompileCommand) -> list[str]:
+        args = list(command.arguments)[1:]  # コンパイラ実行ファイル名を除く
+        args = [arg for arg in args if arg != command.filename]
+        return _with_system_includes(_absolutize_paths(_strip_output_options(args), command.directory), self._system_args)
+
+    def _listed_files(self) -> set[str]:
+        """compile_commands.json に実際に載っているファイル（補間されたものを除く）。"""
+
+        if self._listed is None:
+            assert self._compilation_database is not None
+            self._listed = {str(Path(c.filename).resolve()) for c in self._compilation_database.getAllCompileCommands() or []}
+        return self._listed
 
     def _build_symbol(
         self,

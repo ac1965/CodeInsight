@@ -63,3 +63,45 @@ def test_syntax_error_is_recorded_as_failure(tmp_path: Path) -> None:
 
     assert not result.succeeded
     assert result.errors
+
+
+def test_relative_paths_in_compile_commands_are_resolved_against_the_command_directory() -> None:
+    from codeinsight.analysis.c_analyzer import _absolutize_paths
+
+    args = ["-DHAVE_CONFIG_H", "-I.", "-I../include", "-I", "inc", "-isystem", "/abs/sys", "-include", "pre.h", "-Wall", "-std=c11"]
+    assert _absolutize_paths(args, "/build/dir") == [
+        "-DHAVE_CONFIG_H", "-I/build/dir", "-I/build/dir/../include", "-I", "/build/dir/inc",
+        "-isystem", "/abs/sys", "-include", "/build/dir/pre.h", "-Wall", "-std=c11",
+    ]
+    assert _absolutize_paths(args, "") == args  # directory が無ければ変更しない
+
+
+def test_out_of_tree_build_uses_generated_headers_and_interpolates_settings_for_unlisted_files(tmp_path: Path) -> None:
+    import json
+
+    src = tmp_path / "src"
+    build = tmp_path / "build"
+    src.mkdir()
+    build.mkdir()
+    (build / "config.h").write_text("#define LIMIT 3\n")  # configure が生成するヘッダー（ソースの外にある）
+    (src / "a.c").write_text('#include <config.h>\n#include <stdarg.h>\nint a(void) { return LIMIT; }\n')
+    (src / "b.c").write_text('#include <config.h>\nint b(void) { return LIMIT + 1; }\n')  # コンパイルDBに無い
+    (build / "compile_commands.json").write_text(json.dumps([
+        {"directory": str(build), "file": str(src / "a.c"), "arguments": ["/usr/bin/cc", "-DHAVE_CONFIG_H", "-I.", "-c", str(src / "a.c")]},
+    ]))
+    analyzer = CAnalyzer(compile_commands_dir=build)
+
+    exact = analyzer.analyze_file(SourceUnit.from_path(str(uuid.uuid4()), src / "a.c"))
+    assert exact.succeeded, exact.errors  # -I. が build/ を指すので config.h が見つかる。<stdarg.h> も見つかる
+    assert [s.name for s in exact.symbols if s.kind.value == "function"] == ["a"] and not exact.warnings
+
+    borrowed = analyzer.analyze_file(SourceUnit.from_path(str(uuid.uuid4()), src / "b.c"))
+    assert borrowed.succeeded, borrowed.errors
+    assert any("補間したものを使いました（推定）" in w and "b.c" in w for w in borrowed.warnings)  # 推定であることを注記する
+
+
+def test_output_producing_options_are_removed_so_analysis_never_writes_files() -> None:
+    from codeinsight.analysis.c_analyzer import _strip_output_options
+
+    args = ["-MMD", "-MF", "deps/x.d", "-MT", "x.o", "-o", "x.o", "-MFdeps/y.d", "-DA=1", "-I.", "-c", "-Wall", "-pipe", "-Werror", "-Werror=format", "-pedantic-errors"]
+    assert _strip_output_options(args) == ["-DA=1", "-I.", "-c", "-Wall"]

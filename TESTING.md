@@ -53,7 +53,7 @@ pytest -v
 ## 実行結果（最終確認時点）
 
 ```
-248 passed
+251 passed
 ```
 
 全テストが成功している。
@@ -122,6 +122,30 @@ Python標準ライブラリ（`lib/python3.12`、1,088ファイル、32,475シ�
 * 標準ライブラリでの個別コマンド: `trace` 0.7秒、`path` 0.7秒、`exceptions` 0.7秒、`externals` 1.1秒、`understand` 1.9秒、`boundaries` 2.1秒、`impact` 2.5秒、`unused` 2.6秒、`docs-check` 5.8秒。`docs-check` がもっとも遅い。
 * C言語（emacs-mirrorの `src/` 253ファイル、`compile_commands.json` 無しで指定）: 5.8秒、192MB。ただし `config.h`（生成ファイル）が見つからず、635件の解析エラーで、解決できた参照は7件にとどまる。リポジトリ全体（650ファイル）を指定しても、同梱の `compile_commands.json` は177ファイル分だけで `lib/` などは含まれず、1,125件のエラーになる。エラーは隠さず「partial」と報告している（設計どおり）が、C言語の大規模な実測は、精度の面で限定的である。
 * 改善候補: コンパイルデータベースに無いファイルに、近隣のファイルの `-I`・`-D` を流用する（推定として明示する）。解析の並列化。索引のメモリ使用量の削減。
+
+### Cの実機検証（gcc / emacs、`configure` とビルドの記録を使う）
+
+対象はgccのミラー（`gcc-mirror/gcc`、浅い取得）のlibiberty（純粋なC、139ファイル）と、emacs-mirror。対象のソースは変更しない。手順（`/tmp` に取得し、ビルド用ディレクトリは別）:
+
+```bash
+mkdir -p /tmp/gcc-build/libiberty && cd /tmp/gcc-build/libiberty
+/tmp/gcc-src/libiberty/configure          # config.h を生成（ビルドディレクトリに）
+bear -- make -j8                           # compile_commands.json を作る（70件）
+codeinsight analyze /tmp/gcc-src/libiberty --compile-commands /tmp/gcc-build/libiberty
+```
+
+| 条件 | 解析できたファイル | 解決した参照 |
+| --- | --- | --- |
+| libiberty、設定なし（デフォルト引数のみ） | 10 / 139 | 110 |
+| libiberty、`configure` + `bear`（修正前: 相対パス・システムヘッダー未対応） | 9 / 139 | 8 |
+| libiberty、同上（修正後） | 127 / 139 | 4,629 |
+| emacs、同梱の `compile_commands.json`（修正前） | 18 / 650 | 166 |
+| emacs、同上（修正後） | 140 / 650 | 826 |
+
+* 修正前にコンパイルデータベースを渡すと、かえって解析できなくなった（相対パス `-I.` の誤解決のため）。実機で初めて見つかった不具合である。
+* libiberty の残り12件の失敗は妥当: 他プラットフォーム向けのコード（MS-DOS・Win32・DJGPP）と、単独では解析できないヘッダー。
+* emacs は510件が失敗のまま。内訳は、単独解析できないヘッダー（`Please include config.h first.` など）、データベースに載っていない領域、`config.h` が見つからないもの、gcc固有の属性（clangでは構文エラー）。libgcc（583ファイル）は、トップレベルの `configure` を要し、クロスビルドの前提が重いため、今回は試していない。
+* 評価した計算機は1台（macOS、Apple clang）。解析時間は評価（Ollama）と並行して測ったため参考値。
 
 ### AI解説（実際のローカルモデルでの確認）
 
