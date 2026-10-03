@@ -16,7 +16,9 @@ def _short(text: str) -> str:
 
 
 def _edge_label(edge) -> str:
-    label = f"×{edge.count}" if edge.count > 1 else ""
+    label = edge.label
+    if edge.count > 1:
+        label = f"{label} ×{edge.count}".strip()
     if edge.style == EdgeStyle.INFERRED:
         label = (label + " 推定").strip()
     elif edge.style == EdgeStyle.UNRESOLVED:
@@ -53,13 +55,19 @@ def _mermaid_text(text: str) -> str:
     return "".join(escaped)
 
 
-def to_mermaid(model: GraphModel, direction: str = "LR") -> str:
+def to_mermaid(model: GraphModel, direction: str | None = None) -> str:
+    direction = direction or ("TD" if model.graph_kind == "flow" else "LR")  # 制御フロー図は上から下へ
     ids = {node.node_id: f"n{i}" for i, node in enumerate(model.nodes)}
     lines = [f"graph {direction}"]
     for note in model.notes:
         lines.append("%% " + " ".join(note.split()))
     for node in model.nodes:
-        shape_open, shape_close = ("([", "])") if node.kind in ("external", "unresolved") else ("[", "]")
+        if node.kind in ("external", "unresolved", "terminal"):
+            shape_open, shape_close = "([", "])"
+        elif node.kind == "decision":
+            shape_open, shape_close = "{", "}"
+        else:
+            shape_open, shape_close = "[", "]"
         kind_class = _SAFE_CLASS.sub("_", node.kind)
         lines.append(f'    {ids[node.node_id]}{shape_open}"{_mermaid_text(node.label)}"{shape_close}:::{kind_class}')
     link_styles: list[str] = []
@@ -84,6 +92,8 @@ def to_mermaid(model: GraphModel, direction: str = "LR") -> str:
     lines.extend(link_styles)
     lines.append("    classDef unresolved fill:#fef3c7,stroke:#b45309,color:#78350f")
     lines.append("    classDef external fill:#f3f4f6,stroke:#6b7280,color:#374151")
+    lines.append("    classDef terminal fill:#e5e7eb,stroke:#6b7280,color:#111827")
+    lines.append("    classDef decision fill:#dbeafe,stroke:#2563eb,color:#1e3a8a")
     return "\n".join(lines) + "\n"
 
 
@@ -107,7 +117,7 @@ def to_dot(model: GraphModel) -> str:
     note = _dot_text(" ".join(model.notes))
     lines = [
         "digraph codeinsight {",
-        "    rankdir=LR;",
+        f"    rankdir={'TB' if model.graph_kind == 'flow' else 'LR'};",
         f'    label="{_dot_text(model.title)} — {note}";',
         '    node [shape=box, fontname="Helvetica"];',
     ]
@@ -116,6 +126,10 @@ def to_dot(model: GraphModel) -> str:
         if node.kind in ("external", "unresolved"):
             color = "#6b7280" if node.kind == "external" else "#b45309"
             attributes += f', shape=ellipse, style="dashed", color="{color}"'
+        elif node.kind == "terminal":
+            attributes += ", shape=oval"
+        elif node.kind == "decision":
+            attributes += ", shape=diamond"
         lines.append(f"    {ids[node.node_id]} [{attributes}];")
     for edge in model.edges:
         source, target = ids.get(edge.source), ids.get(edge.target)
@@ -154,6 +168,7 @@ def model_to_dict(model: GraphModel) -> dict:
                 "target": e.target,
                 "kind": e.kind,
                 "style": e.style.value,
+                "label": e.label,
                 "evidence": list(e.evidence),
                 "note": e.note,
                 "count": e.count,

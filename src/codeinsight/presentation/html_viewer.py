@@ -47,7 +47,10 @@ button:hover { background:var(--panel); }
 .edge.inferred { stroke-dasharray:6 4; }
 .edge.unresolved { stroke:var(--warn); stroke-dasharray:2 4; }
 .edge.external { stroke:var(--ext); stroke-dasharray:2 4; }
-.edge.dim { opacity:0.12; }
+.edgeg.dim { opacity:0.12; }
+.edge-label { fill:var(--muted); font-size:10px; text-anchor:middle; pointer-events:none; }
+.node.decision rect { fill:var(--warn-bg); stroke:var(--node-stroke); }
+.node.terminal rect { fill:var(--ext-bg); stroke:var(--ext); rx:14; }
 dt { color:var(--muted); font-size:12px; margin-top:8px; }
 dd { margin:0; word-break:break-all; white-space:pre-wrap; }
 @media (max-width: 640px) { main { flex-direction:column; height:auto; } aside { width:auto; border-left:none; border-top:1px solid var(--border); } #canvas { height:60vh; } }
@@ -81,6 +84,7 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   var NODE_W = 230, NODE_H = 30, GAP_X = 90, GAP_Y = 18, PAD = 24;
 
   document.getElementById("title").textContent = data.title;
+  document.title = "CodeInsight グラフビューアー: " + data.title;
   document.getElementById("notes").textContent = data.notes.join(" ");
   document.getElementById("stats").textContent = "ノード " + data.nodes.length + " / 辺 " + data.edges.length;
 
@@ -131,9 +135,13 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   var columns = {};
   data.nodes.forEach(function (n, i) { (columns[rank[i]] = columns[rank[i]] || []).push(i); });
   var pos = [], maxX = 0, maxY = 0;
+  // 制御フロー図は上から下へ、それ以外は左から右へ層を並べる。
+  var vertical = data.graph_kind === "flow";
   Object.keys(columns).forEach(function (r) {
     columns[r].forEach(function (i, row) {
-      pos[i] = { x: PAD + r * (NODE_W + GAP_X), y: PAD + row * (NODE_H + GAP_Y) };
+      pos[i] = vertical
+        ? { x: PAD + row * (NODE_W + 40), y: PAD + r * (NODE_H + 46) }
+        : { x: PAD + r * (NODE_W + GAP_X), y: PAD + row * (NODE_H + GAP_Y) };
       maxX = Math.max(maxX, pos[i].x + NODE_W + 50); maxY = Math.max(maxY, pos[i].y + NODE_H);
     });
   });
@@ -187,31 +195,49 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   edges.forEach(function (e) {
     var a = pos[ids[e.source]], b = pos[ids[e.target]];
     var x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2, x2 = b.x, y2 = b.y + NODE_H / 2;
-    if (b.x <= a.x) { x1 = a.x; x2 = b.x + NODE_W; }
-    var mid = (x1 + x2) / 2;
+    if (vertical) {
+      x1 = a.x + NODE_W / 2; y1 = a.y + NODE_H; x2 = b.x + NODE_W / 2; y2 = b.y;
+      if (b.y <= a.y) { y1 = a.y; y2 = b.y + NODE_H; }  // 戻る辺（ループ）は上から出て下に入る
+    } else if (b.x <= a.x) { x1 = a.x; x2 = b.x + NODE_W; }
+    var mid = (x1 + x2) / 2, midY = (y1 + y2) / 2;
     var path = document.createElementNS(NS, "path");
     if (e.source === e.target) {
       // 自己再帰: ノードの右側に小さなループを描く
       var rx = a.x + NODE_W, ry = a.y;
       path.setAttribute("d", "M" + rx + "," + (ry + 8) + " C" + (rx + 42) + "," + (ry - 10) + " " + (rx + 42) + "," + (ry + NODE_H + 10) + " " + rx + "," + (ry + NODE_H - 8));
+    } else if (vertical) {
+      path.setAttribute("d", "M" + x1 + "," + y1 + " C" + x1 + "," + midY + " " + x2 + "," + midY + " " + x2 + "," + y2);
     } else {
       path.setAttribute("d", "M" + x1 + "," + y1 + " C" + mid + "," + y1 + " " + mid + "," + y2 + " " + x2 + "," + y2);
     }
     path.setAttribute("class", "edge " + e.style);
     path.setAttribute("marker-end", "url(#arrow)");
     path.style.cursor = "pointer";
+    var group = document.createElementNS(NS, "g");
+    group.setAttribute("class", "edgeg");
     path.addEventListener("click", function () {
       show("辺: " + e.kind, [
         ["確からしさ", STYLE_LABEL[e.style] || e.style],
         ["呼び出し元/依存元", data.nodes[ids[e.source]].label],
         ["呼び出し先/依存先", data.nodes[ids[e.target]].label],
+        ["ラベル", e.label],
         ["回数", e.count],
         ["根拠位置", e.evidence.join("\\n")],
         ["注記", e.note]
       ]);
     });
-    svg.appendChild(path);
-    edgeEls.push({ el: path, e: e });
+    group.appendChild(path);
+    if (e.label) {
+      var caption = document.createElementNS(NS, "text");
+      caption.setAttribute("class", "edge-label");
+      caption.setAttribute("x", (x1 + x2) / 2);
+      caption.setAttribute("y", (y1 + y2) / 2 - 3);
+      if (vertical) { caption.setAttribute("y", midY); caption.setAttribute("x", (x1 + x2) / 2 + 4); caption.style.textAnchor = "start"; }
+      caption.textContent = e.label;
+      group.appendChild(caption);
+    }
+    svg.appendChild(group);
+    edgeEls.push({ el: group, e: e });
   });
 
   var nodeEls = [];
@@ -225,7 +251,9 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
     var text = document.createElementNS(NS, "text");
     text.setAttribute("x", "8"); text.setAttribute("y", "19");
     // 修飾名は末尾（関数名側）のほうが識別しやすいので、長い場合は先頭を省略する。
-    var label = n.label.length > 32 ? "…" + n.label.slice(-31) : n.label;
+    var qualified = ["function", "method", "class", "module", "file"].indexOf(n.kind) >= 0;
+    var label = n.label.length <= 32 ? n.label
+      : (qualified ? "…" + n.label.slice(-31) : n.label.slice(0, 31) + "…");
     text.textContent = label;
     var title = document.createElementNS(NS, "title"); title.textContent = n.label;
     g.appendChild(title); g.appendChild(rect); g.appendChild(text);

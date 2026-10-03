@@ -15,6 +15,7 @@ from codeinsight.application import (
     AmbiguousSymbolError,
     AnalysisCoordinator,
     AnalysisProgress,
+    CfgBuilder,
     DescribeService,
     FlowAnalysisError,
     FlowService,
@@ -1119,6 +1120,15 @@ def _build_graph(
     if args.kind == "inherit":
         root = _resolve(args, navigation, index, args.root, project).symbol if args.root else None
         return builder.inheritance_graph(root, args.depth, traversal)
+    if args.kind == "flow":
+        if not args.root:
+            raise CliError("graph flow には --root で関数・メソッド名を指定してください。")
+        symbol = _resolve(args, navigation, index, args.root, project).symbol
+        try:
+            function = FlowService(navigation).function_ast(project, index, symbol)
+        except FlowAnalysisError as exc:
+            raise CliError(str(exc)) from exc
+        return CfgBuilder().build(function, index.path_of(symbol.file_id), symbol.qualified_name)
     try:
         return builder.file_dependency_graph(
             args.root,
@@ -1302,7 +1312,7 @@ def build_parser() -> argparse.ArgumentParser:
     unresolved.add_argument("--all", action="store_true", help="全件を表示する")
 
     graph = add("graph", "グラフを出力する（Mermaid / DOT / JSON / 自己完結HTML）", _cmd_graph, ("mermaid", "dot", "json", "html"))
-    graph.add_argument("kind", choices=("call", "deps", "inherit"), help="呼び出し / ファイル依存 / 継承")
+    graph.add_argument("kind", choices=("call", "deps", "inherit", "flow"), help="呼び出し / ファイル依存 / 継承 / 関数の制御フロー(--rootが必須)")
     graph.add_argument("--root", help="起点のシンボル名（deps は相対パス）。指定すると部分グラフを出力")
     graph.add_argument("--depth", type=int, help="起点からの深さ")
     graph.add_argument("--direction", choices=[t.value for t in Traversal], default="both")

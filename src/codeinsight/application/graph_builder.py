@@ -51,6 +51,7 @@ class GraphEdge:
     evidence: tuple[str, ...] = ()  # 根拠位置 "path:line"
     note: str = ""
     count: int = 1
+    label: str = ""  # 辺に表示する文言（制御フロー図の True/False 等）
 
 
 @dataclass

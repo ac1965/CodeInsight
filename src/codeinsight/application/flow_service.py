@@ -130,6 +130,11 @@ class FlowService:
         assert isinstance(loaded.definition, (ast.FunctionDef, ast.AsyncFunctionDef))
         return loaded.definition
 
+    def function_ast(self, project: Project, index: ProjectIndex, symbol: Symbol) -> ast.FunctionDef | ast.AsyncFunctionDef:
+        """関数のAST（解析後にソースが変更されていないことを確認したうえで返す）。"""
+
+        return self._function(project, index, symbol, {})
+
     # --- 制御フロー ---
 
     def control_flow(self, project: Project, index: ProjectIndex, symbol: Symbol) -> fa.ControlFlowSummary:

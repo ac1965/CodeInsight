@@ -2,6 +2,7 @@ from codeinsight.application.analysis_coordinator import (
     AnalysisCoordinator,
     AnalysisProgress,
 )
+from codeinsight.application.cfg_builder import CfgBuilder
 from codeinsight.application.describe_service import DescribeService, SymbolDescription
 from codeinsight.application.flow_service import FlowAnalysisError, FlowService
 from codeinsight.application.freshness_service import FreshnessService
@@ -20,6 +21,7 @@ __all__ = [
     "AmbiguousSymbolError",
     "AnalysisCoordinator",
     "AnalysisProgress",
+    "CfgBuilder",
     "DescribeService",
     "FlowAnalysisError",
     "FlowService",
