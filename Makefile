@@ -17,7 +17,7 @@
 #   make reading TARGET=../my-repo OUT=out TOP=12        # 出力先・主要な関数の数を指定
 #   make reading TARGET=../c-proj COMPILE_DB=/tmp/build  # Cで compile_commands.json がある場合
 #   make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure+ビルド記録
-#   make reading TARGET=... MODEL=qwen3-coder:latest AI_SEND=1  # AIの解説も加える（既定では送信しない）
+#   make reading TARGET=... AI_SEND=1                          # AI解説を追記する（モデルは MODEL=、環境変数 CODEINSIGHT_AI_MODEL、設定ファイル。既定では送信しない）
 
 UV      ?= uv
 PYTEST  ?= $(UV) run pytest
@@ -280,15 +280,20 @@ reading-functions: reading-docs ## [資料] 主要な関数（上位 TOP 件ず�
 	done < $(OUT)/functions/.names
 	@[ -s $(OUT)/logs/functions.log ] || rm -f $(OUT)/logs/functions.log
 
-reading-ai: reading-functions ## [資料] AI解説（MODEL と AI_SEND=1 がある場合のみ。ai/ に別管理で置く）
-	@if [ -n "$(MODEL)" ] && [ "$(AI_SEND)" = "1" ]; then \
-	  mkdir -p $(OUT)/ai; \
+reading-ai: reading-functions ## [資料] AI解説を追記する（AI_SEND=1 が必要。モデルは MODEL=、または環境変数 CODEINSIGHT_AI_MODEL・設定ファイル）
+	@if [ "$(AI_SEND)" = "1" ]; then \
+	  mkdir -p $(OUT)/ai; : > $(OUT)/logs/ai.log; ok=0; failed=0; \
+	  echo "AI解説を作成します（ソースの一部をAIへ送信します。送信先: $${CODEINSIGHT_AI_BASE_URL:-既定の localhost}）"; \
 	  while IFS="$$(printf '\t')" read -r name path; do \
 	    [ -n "$$name" ] || continue; \
 	    base=$$(echo "$$name" | sed 's/@\([0-9]*\)$$/_L\1/' | tr -c 'A-Za-z0-9._\n-' '_'); \
-	    $(RCI) explain "$$name" --file "$$path" --allow-send --ai-model $(MODEL) $(RFLAGS) > "$(OUT)/ai/$$base.md" 2>> $(OUT)/logs/ai.log || { echo "  ! AI解説を作れなかった関数: $$name"; rm -f "$(OUT)/ai/$$base.md"; }; \
+	    if $(RCI) explain "$$name" --file "$$path" --allow-send $(if $(MODEL),--ai-model $(MODEL)) $(RFLAGS) > "$(OUT)/ai/$$base.md" 2>> $(OUT)/logs/ai.log; then ok=$$((ok+1)); \
+	    else failed=$$((failed+1)); echo "  ! AI解説を作れなかった関数: $$name"; rm -f "$(OUT)/ai/$$base.md"; fi; \
 	  done < $(OUT)/functions/.names; \
-	else echo "AI解説はスキップ（MODEL=... AI_SEND=1 を付けると作成。送信内容は make explain-dry で確認できます）"; fi
+	  echo "AI解説: $$ok 件作成、$$failed 件失敗（検証状態は ai/ の各ファイルと、PDFの「AIの解説」の表を参照）"; \
+	  if [ $$ok -eq 0 ]; then echo "  ! AI解説を1件も作れませんでした。原因: $$(grep -m1 -E '^エラー' $(OUT)/logs/ai.log || echo '（logs/ai.log を参照）')"; fi; \
+	  [ -s $(OUT)/logs/ai.log ] || rm -f $(OUT)/logs/ai.log; \
+	else echo "AI解説はスキップ（AI_SEND=1 を付けると、主要な関数のAI解説を追記します。ソースの一部をAIへ送信するため、既定では作りません。送信内容は make explain-dry で確認できます）"; fi
 
 reading-index: ## [資料] 目次（README.md）を作る
 	@mkdir -p $(OUT)/logs

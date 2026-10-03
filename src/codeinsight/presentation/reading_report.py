@@ -152,6 +152,18 @@ def _readme_section(readme: str, heading: str) -> list[str]:
     return []
 
 
+def _ai_summary(text: str) -> tuple[str, str, str]:
+    """AI解説のファイルから、(モデル, 検証状態, 引用) を取り出す。見つからないものは「—」。"""
+
+    model = re.search(r"モデル: ([^/\n]+?)\s*(?:/|$)", text)
+    state = re.search(r"検証結果(?:（生成時）)?: ([^（\n]+)", text)
+    cites = re.search(r"引用 (\d+)件のうち検証できたもの (\d+)件", text)
+    return (
+        model.group(1).strip() if model else "—", state.group(1).strip() if state else "—",
+        f"{cites.group(2)} / {cites.group(1)}" if cites else "—",
+    )
+
+
 def _text_block(text: str, max_lines: int, source: str, omitted: list[str]) -> str:
     lines = text.rstrip("\n").splitlines()
     shown = lines[:max_lines]
@@ -280,12 +292,27 @@ def build_report(out_dir: Path, *, target: str = "", max_lines: int = DEFAULT_MA
     # --- AI解説（あれば） ---
     ai_dir = out_dir / "ai"
     if ai_dir.is_dir() and any(ai_dir.iterdir()):
-        explained, ai_subs = [], []
+        explained, ai_subs, summary_rows = [], [], []
         for path in sorted(ai_dir.glob("*.md")):
             identifier = f"ai-{_slug(path.stem)}"
-            explained.append(f'<h3 id="{identifier}">{_e(path.stem)}</h3>{_text_block(_read(path) or "", max_lines, f"ai/{path.name}", report.omitted)}')
+            text = _read(path) or ""
+            explained.append(f'<h3 id="{identifier}">{_e(path.stem)}</h3>{_text_block(text, max_lines, f"ai/{path.name}", report.omitted)}')
             ai_subs.append((identifier, path.stem))
-        chapter("AIの解説", '<p class="ai"><strong>AIが解析結果を入力に生成した解説で、解析結果（事実）ではありません。</strong>引用の検証結果（検証済み・一部未確認・未検証）に注意して読んでください。</p>' + "".join(explained), ai_subs)
+            summary_rows.append((identifier, path.stem, *_ai_summary(text)))
+        counts = {label: sum(1 for row in summary_rows if row[3] == label) for label in ("検証済み", "一部未確認", "未検証")}
+        table = (
+            "<h2>検証状態の一覧</h2><table><tr><th>対象</th><th>モデル</th><th>検証状態</th><th>引用（検証できた/全体）</th></tr>"
+            + "".join(f'<tr><td><a href="#{i}">{_e(n)}</a></td><td>{_e(m)}</td><td>{_e(v)}</td><td>{_e(c)}</td></tr>' for i, n, m, v, c in summary_rows)
+            + "</table>"
+            + f'<p class="muted">検証済み {counts["検証済み"]} 件 / 一部未確認 {counts["一部未確認"]} 件 / 未検証 {counts["未検証"]} 件'
+            "（検証できるのは、示された根拠が存在し、渡した範囲内であることまで。根拠が主張を実際に裏付けているかは、読む人が確認してください）。</p>"
+        )
+        intro = (
+            '<p class="ai"><strong>AIが解析結果を入力に生成した解説で、解析結果（事実）ではありません。</strong>'
+            "引用の検証結果に注意して読んでください。<strong>「未検証」の解説は、事実として扱わないでください</strong>（引用の誤り・存在しない名前・根拠なしを含みます）。"
+            "「⚠未確認」と付いた行は、根拠が示されていない記述です。</p>"
+        )
+        chapter("AIの解説", intro + table + "".join(explained), ai_subs)
 
     # --- 付録 ---
     logs = sorted(p for p in (out_dir / "logs").glob("*") if p.is_file()) if (out_dir / "logs").is_dir() else []

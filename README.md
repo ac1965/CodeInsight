@@ -89,7 +89,8 @@ make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の
 make reading TARGET=../my-repo                         # reading/my-repo/ に資料一式と目次(README.md)
 make reading TARGET=../my-repo OUT=/tmp/out TOP=12     # 出力先・主要な関数の数
 make reading TARGET=../c-proj COMPILE_DB=/tmp/build    # Cで compile_commands.json がある場合
-make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1   # AIの解説(ai/)も加える。既定では送信しない
+make reading TARGET=../my-repo AI_SEND=1                # AI解説(ai/・PDFの「AIの解説」章)を追記。ソースの一部をAIへ送信するため、既定では作らない
+make reading TARGET=../my-repo AI_SEND=1 MODEL=qwen3-coder:latest   # モデルを指定する場合（省略時は環境変数 CODEINSIGHT_AI_MODEL・設定ファイル）
 make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure + ビルド記録(対象のconfigure/makeを実行するため許可が必須)
 ```
 

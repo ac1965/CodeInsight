@@ -174,3 +174,75 @@ def test_a_real_browser_produces_a_multi_page_pdf(out_dir: Path, tmp_path: Path)
     pdf = html_to_pdf(html, tmp_path / "real.pdf", timeout=120)
     data = pdf.read_bytes()
     assert data.startswith(b"%PDF") and data.rstrip().endswith(b"%%EOF") and len(data) > 5000
+
+
+# --- AI解説の追記（AI_SEND=1） ---
+
+AI_TEXT = (
+    "━━ AI解説（解析結果ではありません） モデル: qwen3-coder:latest / 対象: demo.main\n   解説ID: abc（保存済み）\n\n## 説明対象\n`demo.main`\n\n"
+    "──── 検証結果: 一部未確認（根拠の示されていない記述を含む）\n  引用 4件のうち検証できたもの 3件 / 根拠のある記述 4行\n"
+)
+
+
+def test_ai_chapter_starts_with_a_verification_summary_and_a_warning(out_dir: Path) -> None:
+    (out_dir / "ai").mkdir()
+    (out_dir / "ai" / "demo.main_L3.md").write_text(AI_TEXT, encoding="utf-8")
+    (out_dir / "ai" / "demo.other_L9.md").write_text(AI_TEXT.replace("一部未確認（根拠の示されていない記述を含む）", "未検証（引用の誤り・存在しない名前・根拠なし）"), encoding="utf-8")
+    html = build_report(out_dir).html
+    assert "検証状態の一覧" in html and "qwen3-coder:latest" in html and "3 / 4" in html
+    assert "一部未確認 1 件 / 未検証 1 件" in html and "検証済み 0 件" in html
+    assert "「未検証」の解説は、事実として扱わないでください" in html  # 検証できていない解説を、事実として読ませない
+
+
+def _stub_env(tmp_path: Path, stub) -> dict[str, str]:
+    return {**os.environ, "CODEINSIGHT_BROWSER": _fake(tmp_path, FAKE_BROWSER_WRITES_THEN_HANGS),
+            "CODEINSIGHT_AI_BASE_URL": stub.url, "CODEINSIGHT_AI_MODEL": "stub-model"}
+
+
+def test_make_reading_with_ai_send_appends_ai_explanations_to_the_pdf(tmp_path: Path) -> None:
+    from test_ai import _Stub  # AIの代わりに、この計算機の中だけで動くHTTPスタブ
+
+    stub = _Stub()
+    try:
+        stub.body = {"model": "stub-model", "choices": [{"message": {"content": "## 説明対象\n解説です。"}}]}
+        target = tmp_path / "target"
+        shutil.copytree(FIXTURES / "layered", target)
+        out = tmp_path / "out"
+        # MODEL= は指定しない: AI_SEND=1 だけで動く（モデルは環境変数から解決される）
+        result = subprocess.run(["make", "--no-print-directory", "reading", f"TARGET={target}", f"OUT={out}", "TOP=2", "AI_SEND=1"],
+                                cwd=ROOT, capture_output=True, text=True, timeout=300, env=_stub_env(tmp_path, stub))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert list((out / "ai").glob("*.md")) and len(stub.posts()) >= 1  # AIへ送信された（許可あり）
+        html = (out / "out-reading.html").read_text(encoding="utf-8")
+        assert "AIの解説" in html and "検証状態の一覧" in html and "解析結果（事実）ではありません" in html
+        assert "## AIの解説" in (out / "README.md").read_text(encoding="utf-8") and "ai/" in (out / "README.md").read_text(encoding="utf-8")
+    finally:
+        stub.close()
+
+
+def test_make_reading_without_ai_send_never_contacts_the_ai(tmp_path: Path) -> None:
+    from test_ai import _Stub
+
+    stub = _Stub()
+    try:
+        target = tmp_path / "target"
+        shutil.copytree(FIXTURES / "layered", target)
+        out = tmp_path / "out"
+        result = subprocess.run(["make", "--no-print-directory", "reading", f"TARGET={target}", f"OUT={out}", "TOP=2", "PDF=0"],
+                                cwd=ROOT, capture_output=True, text=True, timeout=300, env=_stub_env(tmp_path, stub))
+        assert result.returncode == 0 and "AI解説はスキップ" in result.stdout
+        assert stub.posts() == [] and not (out / "ai").exists()  # AI_SEND=1 が無ければ、何も送信しない
+    finally:
+        stub.close()
+
+
+def test_make_reading_with_ai_send_but_no_model_explains_why_and_keeps_the_other_outputs(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    shutil.copytree(FIXTURES / "layered", target)
+    out = tmp_path / "out"
+    env = {k: v for k, v in os.environ.items() if k != "CODEINSIGHT_AI_MODEL"} | {"HOME": str(tmp_path)}  # 設定ファイルも無い
+    result = subprocess.run(["make", "--no-print-directory", "reading", f"TARGET={target}", f"OUT={out}", "TOP=1", "AI_SEND=1", "PDF=0"],
+                            cwd=ROOT, capture_output=True, text=True, timeout=300, env=env)
+    assert result.returncode == 0  # 他の成果物は作る
+    assert "AI解説を1件も作れませんでした" in result.stdout and "モデルが指定されていません" in result.stdout  # 原因を示す
+    assert (out / "overview.txt").is_file() and not list((out / "ai").glob("*.md"))

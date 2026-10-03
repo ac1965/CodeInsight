@@ -250,7 +250,8 @@ TypeScript・Go・Emacs Lisp などは未対応です（将来の言語追加の
 make reading TARGET=../my-repo                         # reading/my-repo/ に資料一式
 make reading TARGET=../my-repo OUT=/tmp/out TOP=12     # 出力先・主要な関数の数
 make reading TARGET=../c-proj COMPILE_DB=/tmp/build    # Cで compile_commands.json がある場合
-make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1   # AI解説も加える
+make reading TARGET=../my-repo AI_SEND=1                       # AI解説を追記（モデルは環境変数 CODEINSIGHT_AI_MODEL か設定ファイル）
+make reading TARGET=../my-repo AI_SEND=1 MODEL=qwen3-coder:latest   # モデルを指定する場合
 make reading-clean TARGET=../my-repo                   # 成果物の削除（対象には触れない）
 ```
 
@@ -263,7 +264,8 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | `TOP` | 8 | 主要な関数の選択数（入口・よく呼ばれる・多くを呼ぶ・大きい、各 `TOP` 件の和集合の上位 `2×TOP` 件） |
 | `COMPILE_DB` | `BUILD` にあれば自動 | Cの `compile_commands.json` のあるディレクトリ |
 | `BUILD` | `OUT/build` | `reading-c-build` のビルド先 |
-| `MODEL` / `AI_SEND` | なし | 両方あるときだけAI解説を作る |
+| `AI_SEND` | なし | `AI_SEND=1` のときだけ、主要な関数のAI解説を `ai/` と PDF の「AIの解説」章に追記する。**ソースの一部をAIへ送信する**ため、既定では作らない |
+| `MODEL` | 環境変数 `CODEINSIGHT_AI_MODEL`、設定ファイル | AIのモデル。どれも無ければ、原因を示して AI解説だけスキップする（他の成果物は作る） |
 | `UV` | `uv` | uv コマンド |
 | `PDF` | （作る） | `PDF=0` で1ファイルのPDFを作らない |
 
@@ -281,6 +283,15 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | 再生成 | `make reading-pdf OUT=…`、または `codeinsight reading-report --out OUT [--format html] [--output FILE]` |
 
 ブラウザは、CodeInsight が生成したHTMLを描画するためだけに使います（対象のプログラムは実行しません）。一時的なプロファイルを使い、利用者のブラウザの設定・履歴には触れません。
+
+### 7.1.2 AI解説の追記（`AI_SEND=1`）
+
+`AI_SEND=1` を付けると、主要な関数ごとにAI解説（`explain`）を作り、`ai/` と PDF に追記します。
+
+* 送信先は、既定で localhost（Ollama）です。外部の宛先は、`make reading` からは許可しません（`explain --allow-remote` を使う場合は、個別に実行します）。送信内容は `make explain-dry` で事前に確認できます。
+* PDFの「AIの解説」章の先頭に、**検証状態の一覧**（対象・モデル・検証済み/一部未確認/未検証・引用の検証できた数）と、注意書き（解析結果ではないこと、「未検証」は事実として扱わないこと、「⚠未確認」の行の意味）を載せます。
+* 作れなかった解説は、`logs/ai.log` と画面に原因を示します（例: モデルが指定されていない・AIに接続できない）。AI解説を1件も作れなくても、他の成果物とPDFは作ります。
+* 解説は、解析結果とは別に管理され、解析結果のテーブルには保存されません（検証結果つきで、DBの別テーブルに保存）。
 
 ### 7.2 出力の構成
 
