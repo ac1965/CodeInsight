@@ -6,78 +6,37 @@ import argparse
 import sys
 from pathlib import Path
 
-from codeinsight.application import CfgBuilder, FlowAnalysisError, FlowService, NavigationService, ProjectIndex
-from codeinsight.application.architecture_service import ArchitectureService
-from codeinsight.application.c_flow_service import CFlowService
-from codeinsight.application.cfg_builder_c import CCfgBuilder
-from codeinsight.application.cfg_builder_lisp import LispCfgBuilder
-from codeinsight.application.elisp_flow_service import ElispFlowService
-from codeinsight.application.external_service import ExternalService
-from codeinsight.application.graph_builder import GraphBuilder, GraphModel, Traversal
-from codeinsight.cli.common import CliError, prepare_read, resolve_symbol_arg, safe, warn_if_stale
-from codeinsight.domain import Language, Project
+from codeinsight.application import NavigationService, ProjectIndex
+from codeinsight.application.graph_builder import GraphModel, Traversal
+from codeinsight.application.graph_service import GraphRequest, GraphRequestError, GraphService
+from codeinsight.cli.common import CliError, prepare_read, resolve_symbol_arg, warn_if_stale
+from codeinsight.domain import Project
 from codeinsight.presentation import render_html, to_dot, to_json, to_mermaid
 
 
 def _build_graph(
     args: argparse.Namespace, index: ProjectIndex, navigation: NavigationService, project: Project
 ) -> GraphModel:
-    builder = GraphBuilder(index)
-    traversal = Traversal(args.direction)
-    if args.kind == "call":
-        root = resolve_symbol_arg(args, navigation, index, args.root, project).symbol if args.root else None
-        return builder.call_graph(
-            root,
-            args.depth,
-            traversal,
-            include_unresolved=not args.no_unresolved,
-            include_external=args.external,
-        )
-    if args.kind == "inherit":
-        root = resolve_symbol_arg(args, navigation, index, args.root, project).symbol if args.root else None
-        return builder.inheritance_graph(root, args.depth, traversal)
-    if args.kind == "arch":
-        architecture = ArchitectureService().build(index, ExternalService().report(index), args.depth)
-        return builder.architecture_graph(architecture)
-    if args.kind == "flow":
-        if not args.root:
-            raise CliError("graph flow には --root で関数・メソッド名を指定してください。")
-        symbol = resolve_symbol_arg(args, navigation, index, args.root, project).symbol
-        language = index.files[symbol.file_id].language
-        path = index.path_of(symbol.file_id)
-        try:
-            if language == Language.C:
-                return CCfgBuilder().build(CFlowService(navigation).load(project, index, symbol), path, symbol.qualified_name)
-            if language == Language.ELISP:
-                return LispCfgBuilder().build(ElispFlowService(navigation).load(project, index, symbol), path, symbol.qualified_name)
-            function = FlowService(navigation).function_ast(project, index, symbol)
-        except (FlowAnalysisError, ValueError) as exc:
-            raise CliError(str(exc)) from exc
-        return CfgBuilder().build(function, path, symbol.qualified_name)
+    """引数を解釈し（シンボル名の解決）、GraphService で組み立てる。"""
+
+    if args.kind == "flow" and not args.root:
+        raise CliError("graph flow には --root で関数・メソッド名を指定してください。")
+    root_symbol = None
+    if args.kind in ("call", "inherit", "flow") and args.root:
+        root_symbol = resolve_symbol_arg(args, navigation, index, args.root, project).symbol
+    request = GraphRequest(
+        args.kind, root_symbol, args.root if args.kind == "deps" else None, args.depth, Traversal(args.direction),
+        include_external=args.external, include_unresolved=not args.no_unresolved,
+    )
     try:
-        return builder.file_dependency_graph(
-            args.root,
-            args.depth,
-            traversal,
-            include_external=args.external,
-            include_unresolved=not args.no_unresolved,
-        )
-    except LookupError as exc:
-        raise CliError(f"ファイルが見つかりません: {safe(args.root)}", 2) from exc
+        return GraphService(navigation).build(project, index, request)
+    except GraphRequestError as exc:
+        raise CliError(str(exc), 2 if args.kind == "deps" else 1) from exc
 
 
 def cmd_graph(args: argparse.Namespace) -> int:
     repository, project, index, stale = prepare_read(args)
-    model = _build_graph(args, index, NavigationService(repository), project)
-    model.meta.update(
-        {
-            "project": project.name,
-            "repository_revision": project.repository_revision,
-            "stale_files": stale,
-        }
-    )
-    if stale:
-        model.notes.append(f"解析後に変更されたファイルがあります（{len(stale)}件）。内容が古い可能性があります。")
+    model = GraphService.annotate(_build_graph(args, index, NavigationService(repository), project), project, stale)
     warn_if_stale(stale)
     if len(model.nodes) > 200 and not args.root:
         print(

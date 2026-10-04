@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from codeinsight.analysis.elisp_forms import IF_LET_FORMS, LET_FORMS, PLACE_BINDERS
 from codeinsight.analysis.ids import IdAllocator, build_symbol
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
 from codeinsight.domain import (
@@ -63,8 +64,8 @@ _NO_CALL = frozenset(
     incf decf setf add-to-list use-package define-key define-error autoload provide require lexical-let named-let letrec dlet add-hook
     remove-hook with-slots with-memoization cl-once-only cl-with-gensyms""".split()
 )
-_BINDING_FORMS = frozenset({"let", "let*", "letrec", "dlet", "lexical-let", "cl-letf", "cl-letf*"})
-_IF_LET_FORMS = frozenset({"if-let", "if-let*", "when-let", "when-let*", "and-let*", "while-let"})
+_BINDING_FORMS = LET_FORMS | PLACE_BINDERS
+_IF_LET_FORMS = IF_LET_FORMS
 _CLAUSE_FORMS = frozenset({"pcase", "pcase-exhaustive", "cl-case", "cl-ecase", "cl-typecase", "ecase", "pcase-let", "pcase-let*"})  # 先頭が式、残りが節
 _LOCAL_FUNCTION_FORMS = frozenset({"cl-flet", "cl-labels", "cl-macrolet", "cl-flet*"})  # ((名前 引数 本体...) ...) 本体...
 _SKIP_FIRST_FORMS = frozenset({"with-slots", "named-let", "cl-destructuring-bind"})  # 先頭は、パターン・名前（式ではない）

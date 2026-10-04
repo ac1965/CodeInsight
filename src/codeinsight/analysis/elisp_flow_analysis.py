@@ -11,26 +11,39 @@ from typing import TypeGuard
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.analysis.elisp_analyzer import _DEFINERS, Atom, Form, _all_forms, _head_name, _quoted_symbol
+from codeinsight.analysis.elisp_forms import (
+    ALL_LOOP_FORMS,
+    BRANCH_FORMS,
+    CONDITION_CASE_FORMS,
+    HANDLER_FORMS,
+    LAMBDA_LIST_SKIP,
+    MATCH_FORMS,
+    PLACE_BINDERS,
+    PLACE_SECOND_FORMS,
+    RETURN_FORMS,
+    SIGNAL_FORMS,
+    TERMINATE_FORMS,
+    VARIABLE_BINDERS,
+)
 
-_IF = frozenset({"if", "when", "unless", "if-let", "if-let*", "when-let", "when-let*", "and-let*", "if-let-bound"})
-_MATCH = frozenset({"pcase", "pcase-exhaustive", "cl-case", "cl-ecase", "ecase", "cl-typecase", "cl-etypecase", "seq-case"})
-_LOOP = frozenset({"while", "dolist", "dotimes", "cl-dolist", "cl-dotimes", "cl-loop", "while-let", "pcase-dolist", "named-let", "cl-do", "cl-do*"})
-_CONDITION_CASE = frozenset({"condition-case", "condition-case-unless-debug"})
-_HANDLER_FORMS = frozenset({*_CONDITION_CASE, "ignore-errors", "ignore-error", "with-demoted-errors"})
-_SIGNALS = {"error": "error", "user-error": "user-error", "signal": "signal", "cl-assert": "cl-assert", "cl-check-type": "wrong-type-argument",
-            "throw": "throw"}
-_TERMINATE = frozenset({"kill-emacs", "kill-terminal"})
-_RETURNS = frozenset({"cl-return", "cl-return-from"})
-_BINDERS = frozenset({"let", "let*", "letrec", "dlet", "lexical-let", "cl-letf", "cl-letf*", "if-let", "if-let*", "when-let", "when-let*", "and-let*", "while-let"})
+_IF = BRANCH_FORMS
+_MATCH = MATCH_FORMS
+_LOOP = ALL_LOOP_FORMS
+_CONDITION_CASE = CONDITION_CASE_FORMS
+_HANDLER_FORMS = HANDLER_FORMS
+_SIGNALS = SIGNAL_FORMS
+_TERMINATE = TERMINATE_FORMS
+_RETURNS = RETURN_FORMS
+_BINDERS = VARIABLE_BINDERS | PLACE_BINDERS
 _WRITES = frozenset({"setq", "setq-local", "setq-default", "setf", "cl-incf", "cl-decf", "incf", "decf", "push", "pop", "cl-pushnew", "add-to-list",
                      "add-to-ordered-list", "cl-callf", "cl-callf2", "cl-rotatef", "cl-shiftf", "cl-remf", "setq-mode-local"})
 _MUTATORS = frozenset({"aset", "puthash", "setcar", "setcdr", "nconc", "nreverse", "delq", "delete", "remhash", "clrhash", "cl-delete", "sort", "ring-insert",
                        "fillarray", "cl-nsubstitute"})
 _MUTATED_INDEX = {"puthash": 2, "ring-insert": 0}  # 書き換えられるオブジェクトの引数の位置（既定は先頭）
-_PLACE_SECOND = frozenset({"push", "cl-pushnew"})
+_PLACE_SECOND = PLACE_SECOND_FORMS
 _HOOK_FORMS = frozenset({"add-hook", "remove-hook"})
 _SET_FORMS = frozenset({"set", "set-default", "make-local-variable", "make-variable-buffer-local", "defvar-local", "defvar", "defconst", "defcustom"})
-_LAMBDA_LIST_SKIP = frozenset({"&optional", "&rest", "&key", "&aux", "&body", "&allow-other-keys", "&context"})
+_LAMBDA_LIST_SKIP = LAMBDA_LIST_SKIP
 
 
 def function_parts(form: Form) -> tuple[list[str], list[Atom | Form]]:

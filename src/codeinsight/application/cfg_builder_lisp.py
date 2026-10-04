@@ -8,17 +8,28 @@ from __future__ import annotations
 
 from codeinsight.analysis.elisp_analyzer import Atom, Form, _head_name
 from codeinsight.analysis.elisp_dataflow_analysis import render
-from codeinsight.analysis.elisp_flow_analysis import _CONDITION_CASE, function_parts
+from codeinsight.analysis.elisp_flow_analysis import function_parts
+from codeinsight.analysis.elisp_forms import (
+    CONDITION_CASE_FORMS,
+    EXHAUSTIVE_MATCH_SUFFIXES,
+    IF_FORMS,
+    LOOP_FORMS,
+    MATCH_FORMS,
+    RETURN_FORMS,
+    SIGNAL_FORMS,
+    TERMINATE_FORMS,
+    WHEN_FORMS,
+)
 from codeinsight.application.cfg_base import CfgBase, Exit, Loop
 from codeinsight.application.graph_builder import GraphModel
 
-_IF = frozenset({"if", "if-let", "if-let*"})
-_WHEN = frozenset({"when", "unless", "when-let", "when-let*", "and-let*"})
-_MATCH = frozenset({"pcase", "pcase-exhaustive", "cl-case", "cl-ecase", "ecase", "cl-typecase", "cl-etypecase"})
-_LOOPS = frozenset({"while", "dolist", "dotimes", "cl-dolist", "cl-dotimes", "while-let"})
-_SIGNALS = frozenset({"error", "user-error", "signal", "throw", "cl-assert", "cl-check-type"})
-_RETURNS = frozenset({"cl-return", "cl-return-from"})
-_TERMINATE = frozenset({"kill-emacs", "kill-terminal"})
+_IF = IF_FORMS
+_WHEN = WHEN_FORMS
+_MATCH = MATCH_FORMS
+_LOOPS = LOOP_FORMS
+_SIGNALS = frozenset(SIGNAL_FORMS)
+_RETURNS = RETURN_FORMS
+_TERMINATE = TERMINATE_FORMS
 _WRAPPERS = frozenset({"progn", "save-excursion", "save-restriction", "save-current-buffer", "with-temp-buffer", "cl-block", "with-no-warnings",
                        "with-suppressed-warnings", "eval-when-compile", "eval-and-compile", "save-match-data", "prog1", "catch"})
 _WRAPPERS_SKIP_FIRST = frozenset({"let", "let*", "letrec", "dlet", "lexical-let", "with-current-buffer", "with-temp-file", "with-output-to-string", "cl-letf",
@@ -97,7 +108,7 @@ class LispCfgBuilder(CfgBase):
 
     @staticmethod
     def _is_control(name: str) -> bool:
-        return (name in _IF or name in _WHEN or name == "cond" or name in _MATCH or name in _LOOPS or name in _CONDITION_CASE or name in _SIGNALS
+        return (name in _IF or name in _WHEN or name == "cond" or name in _MATCH or name in _LOOPS or name in CONDITION_CASE_FORMS or name in _SIGNALS
                 or name in _RETURNS or name in _TERMINATE or name in _WRAPPERS or name in _WRAPPERS_SKIP_FIRST
                 or name in ("ignore-errors", "unwind-protect", "with-demoted-errors"))
 
@@ -147,7 +158,7 @@ class LispCfgBuilder(CfgBase):
             for clause in rest[1:]:
                 if isinstance(clause, Form) and clause.items and not clause.quoted:
                     exits += self._clause_body(clause.items[1:], decision, f"case {render(clause.items[0], 24)}")
-            if not name.endswith(("exhaustive", "ecase", "etypecase")):
+            if not name.endswith(EXHAUSTIVE_MATCH_SUFFIXES):
                 exits.append((decision, "どれにも一致しない"))
             return exits
         if name in _LOOPS:
@@ -159,7 +170,7 @@ class LispCfgBuilder(CfgBase):
             self._loops.pop()
             self._connect([(n, "次の繰り返し") for n, _ in body_exits], head)
             return [(head, "終了")] + loop.breaks
-        if name in _CONDITION_CASE:
+        if name in CONDITION_CASE_FORMS:
             try_node = self._node("block", f"L{form.line}: {name} {render(rest[0], 14) if rest else ''}".strip(), form.line)
             self._connect(entering, try_node)
             handler_nodes: list[tuple[Form, str]] = []

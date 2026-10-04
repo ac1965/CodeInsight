@@ -41,6 +41,7 @@ src/codeinsight/
 │   ├── flow_service.py          制御フロー・データフロー・状態・例外経路（ソースの鮮度を確認して実行）
 │   ├── risk_service.py          潜在的な問題の手がかり
 │   ├── external_service.py      外部連携の分類・副作用の候補
+│   ├── graph_service.py         グラフ（呼び出し・依存・継承・制御フロー等）の組み立て。CLIとWebサーバーで共有
 │   ├── external_findings_service.py 外部ツール（SARIF）の指摘の取り込みと、古さの判定
 │   ├── external_index_service.py   外部のコード索引（SCIP）の取り込みと、自身の参照解決との比較
 │   ├── architecture_service.py  コンポーネント・層構造・循環・層の逆向き依存の候補

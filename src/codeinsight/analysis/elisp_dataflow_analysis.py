@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.analysis.elisp_analyzer import _NO_CALL, Atom, Form, _head_name, _quoted_symbol
 from codeinsight.analysis.elisp_flow_analysis import _CONDITION_CASE, _executed, _is_code, _local_names, function_parts
+from codeinsight.analysis.elisp_forms import PLACE_SECOND_FORMS, SETQ_FORMS, VARIABLE_BINDERS
 
-_BINDERS = frozenset({"let", "let*", "letrec", "dlet", "lexical-let", "if-let", "if-let*", "when-let", "when-let*", "and-let*", "while-let"})
-_SETQ = frozenset({"setq", "setq-local", "setq-default"})
+_BINDERS = VARIABLE_BINDERS
+_SETQ = SETQ_FORMS
 _AUGMENT = frozenset({"push", "add-to-list", "cl-pushnew", "cl-incf", "cl-decf", "incf", "decf", "add-to-ordered-list"})
-_PLACE_SECOND = frozenset({"push", "cl-pushnew"})
+_PLACE_SECOND = PLACE_SECOND_FORMS
 _STORE_FIRST = {"aset": 2, "setcar": 1, "setcdr": 1, "nconc": 1, "puthash": 2, "set-char-table-range": 2}  # 書き込み先（オブジェクト）の引数の位置
 _STORE_TARGET = {"puthash": 2}
 _TAIL_PASS = frozenset({"progn", "let", "let*", "letrec", "dlet", "save-excursion", "save-restriction", "save-current-buffer", "with-temp-buffer",
