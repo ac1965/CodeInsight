@@ -1,24 +1,18 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 from typing import cast
 
 from codeinsight.analysis import flow_analysis as fa
-from codeinsight.application.graph_builder import EdgeStyle, GraphEdge, GraphModel, GraphNode
+from codeinsight.application.cfg_base import CfgBase, Exit, Loop
+from codeinsight.application.graph_builder import GraphModel
 
 _SIMPLE = (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Expr, ast.Import, ast.ImportFrom,
            ast.Pass, ast.Delete, ast.Global, ast.Nonlocal, ast.Assert)
-Exit = tuple[str, str]  # (ノードID, 次へ進む辺のラベル)
+_Loop = Loop
 
 
-@dataclass
-class _Loop:
-    head: str
-    breaks: list[Exit]
-
-
-class CfgBuilder:
+class CfgBuilder(CfgBase):
     """関数のASTから、制御フロー図（基本ブロックと分岐の有向グラフ）を組み立てる（Python）。
 
     構文から作った近似で、実行時の到達可能性は保証しない。tryの内側の文は、どれも例外を
@@ -27,13 +21,7 @@ class CfgBuilder:
     """
 
     def build(self, function: ast.FunctionDef | ast.AsyncFunctionDef, path: str, title: str) -> GraphModel:
-        self._path = path
-        self._nodes: list[GraphNode] = []
-        self._edges: list[GraphEdge] = []
-        self._loops: list[_Loop] = []
-        self._handlers: list[list[str]] = []
-        self._counter = 0
-        self._raise_exit: str | None = None
+        self._reset(path)
 
         start = self._node("terminal", f"開始: {function.name}()", function.lineno)
         end = self._node("terminal", "終了", getattr(function, "end_lineno", function.lineno))
@@ -51,32 +39,6 @@ class CfgBuilder:
             ],
             meta={"function": function.name, "path": path},
         )
-
-    # --- 部品 ---
-
-    def _node(self, kind: str, label: str, line: int) -> str:
-        node_id = f"n{self._counter}"
-        self._counter += 1
-        self._nodes.append(GraphNode(node_id, label, kind, self._path, line))
-        return node_id
-
-    def _edge(self, source: str, target: str, label: str = "") -> None:
-        self._edges.append(
-            GraphEdge(source, target, "flow", EdgeStyle.CONFIRMED, (f"{self._path}:{self._nodes[int(source[1:])].line}",), label=label)
-        )
-
-    def _connect(self, exits: list[Exit], target: str) -> None:
-        for source, label in exits:
-            self._edge(source, target, label)
-
-    def _terminate_raise(self, source: str, label: str = "") -> None:
-        if self._handlers:
-            for handler in self._handlers[-1]:
-                self._edge(source, handler, "例外" if not label else label)
-        else:
-            if self._raise_exit is None:
-                self._raise_exit = self._node("terminal", "例外で終了", 0)
-            self._edge(source, self._raise_exit, label)
 
     # --- 文 ---
 

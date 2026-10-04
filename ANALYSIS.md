@@ -165,14 +165,15 @@ Sourcegraphのコード索引の形式 SCIP（[Apache-2.0](https://github.com/so
 
 ## 読解のための解析（Python）
 
-次の解析は、保存済みの解析結果（シンボルの位置・呼び出しの解決結果）と、**現在のソースのAST**を組み合わせて、問い合わせ時に行う。解析時とファイルの内容（ハッシュ）が異なる場合は、位置がずれて誤った結果になるため、実行せず再解析を促す（一括走査するコマンドは、そのファイルを対象外にして示す）。Pythonに加え、`flow`・`dataflow`・`state`・`exceptions`・`risks`・`understand` はCの関数にも使える（後述の「C言語の関数単位の解析」）。例外の伝播・制御フロー図・設定値・実行環境・境界の詳細はPythonのみ。
+次の解析は、保存済みの解析結果（シンボルの位置・呼び出しの解決結果）と、**現在のソースのAST**を組み合わせて、問い合わせ時に行う。解析時とファイルの内容（ハッシュ）が異なる場合は、位置がずれて誤った結果になるため、実行せず再解析を促す（一括走査するコマンドは、そのファイルを対象外にして示す）。Pythonに加え、`flow`・`dataflow`・`state`・`exceptions`・`risks`・`understand` はCの関数にも使える（後述の「C言語の関数単位の解析」）。制御フロー図は、C・Emacs Lispの関数にも使える（後述）。例外の伝播・設定値・実行環境・境界の詳細はPythonのみ。
 
 ### 制御フロー（`flow`、`graph flow`）
 
 * 分岐（if/elif/else）、ループ（for/while、break/continue）、例外処理（try/except/finally）、with、match、return/raise/yield/await を、行番号とネストつきで抽出する。循環的複雑度は、分岐・ループ・except・論理演算子・内包表記の条件・三項演算子・case の数 + 1。
 * 例外処理は、握りつぶし（本体が pass/continue/break のみ）、再送出、ログ出力の有無を示す。
 * リトライ・タイムアウト・待機の手がかりは、構文からの**推定**: ループ内のtryで例外を受けて関数を抜けずに繰り返す形、`timeout=` 引数、`sleep` の呼び出し、`retry`/`backoff` を含むデコレータ。
-* 制御フロー図は、基本ブロックと分岐の有向グラフ（連続する単純な文は1ブロック、`return`/`raise`/`break`/`continue` の後の到達不能な文は含めない）。tryの内側は、どの文も例外を送出しうるものとして、exceptへの辺で表す近似。
+* **C・Emacs Lispの制御フロー図**（`graph flow --root <関数>`）: Pythonと同じ形式（基本ブロックと分岐の有向グラフ）で、言語を自動で判別する。Cは、Clang ASTから `if`・`for`・`while`・`do`・`switch`/`case`/`default`（`break` なしで続く「落ち込み」の辺を含む）・`break`・`continue`・`goto`/ラベル・`return`・終了呼び出し（`exit`・`abort`）を、Emacs Lispは、S式から `if`/`when`/`unless`/`cond`/`pcase`・`while`/`dolist`・`condition-case`（シグナルをハンドラへつなぐ）・`ignore-errors`・`unwind-protect`（シグナル時も後始末を実行）・`signal`/`error`・`cl-return`・`kill-emacs` を図にする。いずれも構文からの近似で、条件の中の短絡評価・式に埋め込まれた分岐・マクロの展開内部は分解しない。Emacs Lispの `cl-loop` は1つの処理として示す。図の配置は、層ごとの自動配置で、ループの戻り辺が長くなることがある。
+* 制御フロー図（Python）は、基本ブロックと分岐の有向グラフ（連続する単純な文は1ブロック、`return`/`raise`/`break`/`continue` の後の到達不能な文は含めない）。tryの内側は、どの文も例外を送出しうるものとして、exceptへの辺で表す近似。
 
 ### データフロー（`dataflow`）
 

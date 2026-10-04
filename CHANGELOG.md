@@ -2,6 +2,7 @@
 
 ## 可視化の改善（未リリース）
 
+* 制御フロー図（`graph flow`）を、C（Clang AST）とEmacs Lispに拡張。言語は自動で判別する。Cは `switch` の落ち込み・`goto`・`continue`/`break`・終了呼び出しを、Emacs Lispはシグナルのハンドラへの経路・`unwind-protect` の後始末・`cond` の節を表す。共通部分を `cfg_base.py` に分離。
 * `graph --root` の出力を、起点に焦点を当てた Depends On / Depended On By の形にした（HTML: 距離ごとの列・ファイルごとのまとまり・起点の強調・選択時の依存先と依存元の一覧、Mermaid: `subgraph`、DOT: クラスターと `rank=same`、JSON: `focus`・`distance`・`group`）。
 
 ## Cの参照解決の改善（未リリース）

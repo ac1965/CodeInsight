@@ -8,10 +8,14 @@ from pathlib import Path
 
 from codeinsight.application import CfgBuilder, FlowAnalysisError, FlowService, NavigationService, ProjectIndex
 from codeinsight.application.architecture_service import ArchitectureService
+from codeinsight.application.c_flow_service import CFlowService
+from codeinsight.application.cfg_builder_c import CCfgBuilder
+from codeinsight.application.cfg_builder_lisp import LispCfgBuilder
+from codeinsight.application.elisp_flow_service import ElispFlowService
 from codeinsight.application.external_service import ExternalService
 from codeinsight.application.graph_builder import GraphBuilder, GraphModel, Traversal
 from codeinsight.cli.common import CliError, prepare_read, resolve_symbol_arg, safe, warn_if_stale
-from codeinsight.domain import Project
+from codeinsight.domain import Language, Project
 from codeinsight.presentation import render_html, to_dot, to_json, to_mermaid
 
 
@@ -39,11 +43,17 @@ def _build_graph(
         if not args.root:
             raise CliError("graph flow には --root で関数・メソッド名を指定してください。")
         symbol = resolve_symbol_arg(args, navigation, index, args.root, project).symbol
+        language = index.files[symbol.file_id].language
+        path = index.path_of(symbol.file_id)
         try:
+            if language == Language.C:
+                return CCfgBuilder().build(CFlowService(navigation).load(project, index, symbol), path, symbol.qualified_name)
+            if language == Language.ELISP:
+                return LispCfgBuilder().build(ElispFlowService(navigation).load(project, index, symbol), path, symbol.qualified_name)
             function = FlowService(navigation).function_ast(project, index, symbol)
-        except FlowAnalysisError as exc:
+        except (FlowAnalysisError, ValueError) as exc:
             raise CliError(str(exc)) from exc
-        return CfgBuilder().build(function, index.path_of(symbol.file_id), symbol.qualified_name)
+        return CfgBuilder().build(function, path, symbol.qualified_name)
     try:
         return builder.file_dependency_graph(
             args.root,
