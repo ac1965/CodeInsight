@@ -81,6 +81,17 @@ make explain-dry NAME=main MODEL=qwen3-coder:latest   # AIへ送る内容の確�
 make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の許可が必要)
 ```
 
+### Docker で動かす(Ollama はホストのものを使う)
+
+```bash
+make docker-build
+make docker-analyze TARGET=../my-repo        # 対象は読み取り専用で割り当て、解析結果はボリュームに保存
+make docker-serve TARGET=../my-repo          # ビューアー（ホストの 127.0.0.1 だけに公開）
+make docker-run TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1 ARGS="explain main"   # AI解説はホストの Ollama（host.docker.internal）
+```
+
+詳細は [OPERATIONS.md](OPERATIONS.md) の「Docker で動かす」。
+
 ### コードリーディング資料を一式作る(`make reading`)
 
 対象のリポジトリから、読むための資料を出力ディレクトリにまとめて作ります。対象のソースは変更せず(出力先が対象の中だとエラー)、対象のプログラムは実行しません。

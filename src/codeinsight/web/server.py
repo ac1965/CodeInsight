@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import secrets
 import socket
 import sys
@@ -22,14 +23,23 @@ from codeinsight.web.api import ApiError, BinaryResponse, ViewerApi
 from codeinsight.web.app_page import content_security_policy, render_app
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+ENV_IN_CONTAINER = "CODEINSIGHT_IN_CONTAINER"
+
+
+def bindable(host: str) -> bool:
+    """バインドしてよいアドレス。ループバックのみ。ただし、コンテナの中（CODEINSIGHT_IN_CONTAINER=1。公式の Dockerfile が設定する）では、
+    ホスト側へ公開するために `0.0.0.0` を許可する。この場合も、ホスト側では 127.0.0.1 にだけ公開すること（compose.yaml がそうする）。
+    トークンとHostの検査は、そのまま有効。"""
+
+    return host in LOOPBACK_HOSTS or (host == "0.0.0.0" and os.environ.get(ENV_IN_CONTAINER) == "1")
 TOKEN_HEADER = "X-CodeInsight-Token"
 MAX_URL = 4096
 
 
 class ViewerServer(HTTPServer):
     def __init__(self, host: str, port: int, api: ViewerApi, token: str | None = None) -> None:
-        if host not in LOOPBACK_HOSTS:
-            raise ValueError(f"ループバック以外にはバインドできません: {host}（127.0.0.1・localhost・::1 のみ）")
+        if not bindable(host):
+            raise ValueError(f"ループバック以外にはバインドできません: {host}（127.0.0.1・localhost・::1 のみ。コンテナ内に限り 0.0.0.0）")
         self.address_family = socket.AF_INET6 if host == "::1" else socket.AF_INET
         super().__init__((host, port), _Handler)
         self.api = api
@@ -39,7 +49,7 @@ class ViewerServer(HTTPServer):
 
     @property
     def url(self) -> str:
-        host = "[::1]" if self.server_address[0] == "::1" else "127.0.0.1"
+        host = "[::1]" if self.server_address[0] == "::1" else "127.0.0.1"  # 0.0.0.0（コンテナ内）の場合も、ホストから開く先は 127.0.0.1
         return f"http://{host}:{self.server_address[1]}/?token={self.token}"
 
 

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from codeinsight.infrastructure.config import default_data_dir
 
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+_CONTAINER_HOST = "host.docker.internal"
 _TRUE = frozenset({"1", "true", "yes", "on"})
 DEFAULT_BASE_URL = "http://localhost:11434/v1"  # Ollama の OpenAI 互換エンドポイント
 
@@ -44,6 +45,11 @@ class AIConfig:
 
     @property
     def is_local(self) -> bool:
+        """この計算機の中か。コンテナの中（CODEINSIGHT_IN_CONTAINER=1）では、ホストの Ollama を指す host.docker.internal も、この計算機とみなす
+        （ホストとコンテナは同じ計算機。それ以外の名前は、これまでどおり外部）。"""
+
+        if self.host == _CONTAINER_HOST and os.environ.get("CODEINSIGHT_IN_CONTAINER") == "1":
+            return True
         return self.host in _LOCAL_HOSTS
 
     def check_consent(self, require_model: bool = True) -> None:

@@ -110,9 +110,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import webbrowser
 
     from codeinsight.web.api import ViewerApi
-    from codeinsight.web.server import LOOPBACK_HOSTS, ViewerServer
+    from codeinsight.web.server import LOOPBACK_HOSTS, ViewerServer, bindable
 
-    if args.host not in LOOPBACK_HOSTS:
+    if not bindable(args.host):
         raise CliError(f"--host は、ループバック（{', '.join(LOOPBACK_HOSTS)}）だけを指定できます。外部のホストへは公開しません。")
     repository, project = open_project_context(args)
     reading_dir = Path(args.reading_dir).expanduser() if args.reading_dir else None

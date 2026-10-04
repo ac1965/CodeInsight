@@ -219,3 +219,14 @@ def test_guide_is_bundled_and_every_image_it_references_exists(server) -> None:
     status, headers, body = _request(httpd, f"/api/guide/image?name={referenced[0]}", headers={TOKEN_HEADER: httpd.token})
     assert status == 200 and headers["Content-Type"] == "image/png" and body.startswith(b"\x89PNG")
     assert _request(httpd, f"/api/guide/image?name={referenced[0]}")[0] == 401  # 画像も、トークンが必要
+
+
+def test_binding_to_all_interfaces_is_allowed_only_inside_the_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    from codeinsight.web.server import bindable
+
+    monkeypatch.delenv("CODEINSIGHT_IN_CONTAINER", raising=False)
+    assert bindable("127.0.0.1") and bindable("localhost") and bindable("::1")
+    assert not bindable("0.0.0.0") and not bindable("192.168.1.5") and not bindable("")  # コンテナの外では、ループバックのみ
+    monkeypatch.setenv("CODEINSIGHT_IN_CONTAINER", "1")
+    assert bindable("0.0.0.0") and bindable("127.0.0.1")
+    assert not bindable("192.168.1.5") and not bindable("example.com")  # コンテナの中でも、任意のアドレスは不可

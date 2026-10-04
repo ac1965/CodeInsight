@@ -611,3 +611,19 @@ def test_names_the_project_imports_are_real_even_outside_the_given_context(analy
     )
     # プロジェクトが実際にimportしている名前は、創作ではない。importしていない外部の名前や、存在しない名前は従来どおり指摘する
     assert [name for _, name in report.unknown_identifiers] == ["requests.exceptions.RequestException", "PaymentGateway"]
+
+
+def test_host_docker_internal_is_local_only_inside_the_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    from codeinsight.ai.config import AIConfig, ConsentError
+
+    config = AIConfig(base_url="http://host.docker.internal:11434/v1", model="m", allow_send=True)
+    monkeypatch.delenv("CODEINSIGHT_IN_CONTAINER", raising=False)
+    assert not config.is_local
+    with pytest.raises(ConsentError):  # コンテナの外では、外部扱い（追加の許可が必要）
+        config.check_consent()
+    monkeypatch.setenv("CODEINSIGHT_IN_CONTAINER", "1")
+    assert config.is_local
+    config.check_consent()  # コンテナの中では、ホストの Ollama は、この計算機
+    other = AIConfig(base_url="http://ollama.example.com/v1", model="m", allow_send=True)
+    with pytest.raises(ConsentError):
+        other.check_consent()  # それ以外の名前は、コンテナの中でも外部

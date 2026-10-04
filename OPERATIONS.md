@@ -460,6 +460,24 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 * 入力は、種類・長さ・範囲を検査します（`depth` は 1〜3 など）。誤りは、ツールのエラー（`isError`）として返し、サーバーは止まりません。内部のエラーの詳細は返しません。標準出力にはプロトコルのメッセージだけを書きます（ログは標準エラー）。
 * **確認**: Claude Code（`claude -p` に `--mcp-config` で登録）から、検索 → 定義 → 呼び出し元 → 影響範囲 → 切り出しを呼び出し、結果を正しく読み取れることを確かめました（解決状態と推定の区別、`children_not_expanded` の意味、解析後に変更されたファイルの検出）。
 
+### 10.1c2 Docker で動かす（AIは、ホストの Ollama）
+
+解析・ビューアー・AI解説を、コンテナで動かせます（`Dockerfile`、`make docker-*`）。**Ollama はコンテナに含めず、ホスト（macOS など）で動いているものを使います**（コンテナから `http://host.docker.internal:11434/v1` で接続。Ollama の既定の設定（127.0.0.1 で待ち受け）のままで届くことを、macOS の Docker Desktop で確認済み）。
+
+```bash
+make docker-build                                          # イメージを作る（codeinsight:local）
+make docker-analyze TARGET=../my-repo                      # 解析して、名前付きボリューム codeinsight-data のDBに保存する
+make docker-serve TARGET=../my-repo PORT=8765              # ビューアー。ホストの http://127.0.0.1:8765/ だけに公開する（表示されたURLを開く）
+make docker-run TARGET=../my-repo ARGS="overview"          # 任意のサブコマンド（--project は自動で付く）
+make docker-run TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1 ARGS="explain main"   # AI解説（ホストの Ollama。送信の許可 AI_SEND=1 が必要）
+```
+
+* 対象は、**読み取り専用**で `/work/target` に割り当てる（変更しない）。解析結果は、ボリュームに保存される。プロジェクトのルートは、ホストのパスではなく `/work/target` として記録される。
+* ビューアーは、コンテナの中では `0.0.0.0` で待ち受けるが（`CODEINSIGHT_IN_CONTAINER=1`。Dockerfile が設定。この環境変数がある場合に限り許可）、**ホスト側では `127.0.0.1` にだけ公開**する（LAN側のアドレスからは届かないことを確認済み）。トークンとHostの検査は、通常どおり有効。ホスト側とコンテナ側のポートは、同じ値にすること（Hostの検査のため）。
+* AIの送信先 `host.docker.internal` は、コンテナの中（`CODEINSIGHT_IN_CONTAINER=1`）に限り、この計算機として扱う（ホストとコンテナは同じ計算機のため）。それ以外の名前は、これまでどおり外部（`--allow-remote` が必要）。ソースの送信は、これまでどおり、`AI_SEND=1`（`--allow-send`）の明示的な許可が必要。
+* コンテナには、Goのツールチェーンを含めないため、Goのファイルは解析失敗として記録される。`make reading` のコンテナ版は、まだない。
+* 動的解析（`dynamic-run`）は、コンテナの中からは動かない（Docker を入れ子にしないため）。ホストで実行する。
+
 ### 10.1d Webビューアー（`serve`）
 
 解析結果を、ローカルのWebビューアーとしてブラウザで見られます。グラフ（呼び出し・制御フロー・ファイル依存・継承・アーキテクチャ。起点を指定すると Depends On / Depended On By の表示）を描画し、**ノードを選ぶとその場でソースを表示**し、**選択した関数を起点にソースを切り出して**（`extract` と同じ内容）Markdownとして保存できます。

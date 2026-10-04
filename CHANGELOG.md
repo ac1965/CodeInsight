@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## Docker 対応（未リリース）
+
+* `Dockerfile`・`.dockerignore`・`make docker-build / docker-analyze / docker-serve / docker-run` を追加。解析・ビューアー・AI解説をコンテナで動かせる。対象は読み取り専用で割り当て、解析結果は名前付きボリュームに保存する。
+* Ollama はコンテナに含めず、ホスト（macOS）のものを使う（`host.docker.internal:11434`）。実機（Docker Desktop）で、解析・`ai-status`・qwen3-coder による `explain` を確認した。
+* コンテナの中（`CODEINSIGHT_IN_CONTAINER=1`）に限り、ビューアーが `0.0.0.0` にバインドでき、AIの送信先 `host.docker.internal` を、この計算機として扱う。ホスト側の公開は `127.0.0.1` のみ（LAN側から届かないこと、トークンなし・不正なHostが拒否されることを確認）。
+
 ## 動的解析 段階1（未リリース）
 
 * `dynamic-run --allow-run -- <コマンド>` が、Pythonをコンテナ（ネットワーク遮断・対象は読み取り専用・非特権・capability削除・資源の上限・環境変数は許可リストのみ）で実行し、観測（実行された関数・呼び出し・行・例外の型と位置・終了コード。**値は記録しない**）を保存する。実行は `dynamic/executor.py` だけが行い、`PermittedRun`（許可の確認済み）が必須。イメージの取得は自動では行わない（`--image`）。
