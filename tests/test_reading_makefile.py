@@ -14,8 +14,17 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 pytestmark = pytest.mark.skipif(shutil.which("make") is None or shutil.which("uv") is None, reason="make / uv が必要")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """解析結果のDBは、make analyze と共有する既定のDBになるため、テストでは利用者のDBを使わない。"""
+
+    monkeypatch.setenv("CODEINSIGHT_DATA_DIR", str(tmp_path / "data"))
+
+
 def _make(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
-    return subprocess.run(["make", "--no-print-directory", *args], cwd=cwd, capture_output=True, text=True, timeout=300)
+    # make reading は、既定でビューアーを起動して待ち続けるため、テストでは起動しない（SERVE=0）
+    extra = [] if any(a.startswith("SERVE=") or a == "-n" for a in args) else ["SERVE=0"]
+    return subprocess.run(["make", "--no-print-directory", *args, *extra], cwd=cwd, capture_output=True, text=True, timeout=300)
 
 
 def _snapshot(directory: Path) -> dict[str, bytes]:
@@ -116,7 +125,7 @@ def test_tilde_in_paths_is_expanded_even_when_the_shell_does_not_expand_it(tmp_p
     home.mkdir()
     env = {**os.environ, "HOME": str(home)}
     result = subprocess.run(
-        ["make", "--no-print-directory", "reading", f"TARGET={target}", "OUT=~/reading_out", "TOP=2"],
+        ["make", "--no-print-directory", "reading", f"TARGET={target}", "OUT=~/reading_out", "TOP=2", "SERVE=0"],
         cwd=ROOT, capture_output=True, text=True, timeout=300, env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -130,18 +139,25 @@ def test_paths_with_spaces_are_refused_clearly(tmp_path: Path) -> None:
     assert result.returncode == 2 and "空白は使えません" in result.stdout + result.stderr
 
 
-def test_make_reading_serve_targets_start_the_local_viewer_without_executing_it_here(tmp_path: Path) -> None:
+def test_make_reading_shares_the_analyze_db_and_serves_by_default(tmp_path: Path) -> None:
     target = tmp_path / "target"
     shutil.copytree(FIXTURES / "layered", target)
     out = tmp_path / "out"
+    data = tmp_path / "data"  # autouse の CODEINSIGHT_DATA_DIR
+    # 解析結果が無ければ、ビューアーを起動せずに案内して終了する
+    missing = _make("reading-serve-run", f"TARGET={target}", f"OUT={out}")
+    assert missing.returncode == 2 and "make analyze" in missing.stdout + missing.stderr
+    # make analyze と同じDBに解析すると、reading は、同じDB・同じプロジェクトを使う（OUT 内に別のDBを作らない）
+    assert main(["analyze", str(target), "--db", str(data / "codeinsight.db")]) == 0
+    result = _make("reading", f"TARGET={target}", f"OUT={out}", "TOP=2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (out / "analysis" / "codeinsight.db").exists()
+    assert (out / "overview.txt").read_text(encoding="utf-8").strip()
     # 起動コマンドの内容だけを確認する（-n: 実行しない）
     dry = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "PORT=9123", "OPEN=1")
-    # 解析結果が無ければ、起動せずに案内して終了する
-    missing = _make("reading-serve-run", f"TARGET={target}", f"OUT={out}")
-    assert missing.returncode == 2 and "解析結果がありません" in missing.stdout + missing.stderr
-    assert "serve --db" in dry.stdout and "--port 9123" in dry.stdout and "--open" in dry.stdout and "127.0.0.1" not in dry.stdout
-    # SERVE=1 が無ければ、make reading は起動しない（資料を作って終わる）
-    plain = _make("-n", "reading", f"TARGET={target}", f"OUT={out}")
-    assert 'if [ "" = "1" ]' in plain.stdout
-    with_serve = _make("-n", "reading", f"TARGET={target}", f"OUT={out}", "SERVE=1")
-    assert 'if [ "1" = "1" ]' in with_serve.stdout and "reading-serve-run" in with_serve.stdout
+    assert "serve" in dry.stdout and "--port 9123" in dry.stdout and "--open" in dry.stdout and f"--project {target}" in dry.stdout
+    # 既定（SERVE の指定なし）では、ビューアーを起動する。SERVE=0 なら、資料を作って終わる
+    default = _make("-n", "reading", f"TARGET={target}", f"OUT={out}")
+    assert 'if [ "1" != "0" ]' in default.stdout and "reading-serve-run" in default.stdout
+    off = _make("-n", "reading", f"TARGET={target}", f"OUT={out}", "SERVE=0")
+    assert 'if [ "0" != "0" ]' in off.stdout

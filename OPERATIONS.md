@@ -427,11 +427,12 @@ timeout = 600
 uv run codeinsight serve --project <プロジェクト>            # 表示されたURLをブラウザで開く
 uv run codeinsight serve --project <プロジェクト> --port 9000 --open
 
-make reading TARGET=../my-repo SERVE=1                       # 資料一式を作ったあと、そのままビューアーを起動する（PORT=、OPEN=1）
+make analyze TARGET=../my-repo                               # 対象を解析して保存する
+make reading TARGET=../my-repo                               # 資料一式を作ったあと、そのままビューアーを起動する（PORT=、OPEN=1。SERVE=0 で起動しない）
 make reading-serve TARGET=../my-repo                         # 解析して、ビューアーだけを起動する（資料一式は作らない）
 ```
 
-`make reading ... SERVE=1` / `make reading-serve` は、資料の出力先（`OUT/analysis/codeinsight.db`）の解析結果を使います。上部の種類・方向・深さを変えると、すぐに描き直します。グラフで関数を選ぶと上部の入力にも反映されるので、種類を「制御フロー」に切り替えると、その関数の制御フロー図になります。
+`make reading` は、**既定で、資料一式を作ったあとにビューアーを起動します**（`SERVE=0` で起動しない。CI・自動化では `SERVE=0` を付けてください）。解析結果は、`make analyze` と同じDB（`DB=` があればそれ、無ければ既定の `~/.codeinsight/codeinsight.db`）を使います。`make analyze TARGET=…` のあとに `make reading TARGET=…` を実行すると、解析は1回で済みます（`reading` の解析は、変更のないファイルを再解析しません）。上部の種類・方向・深さを変えると、すぐに描き直します。グラフで関数を選ぶと上部の入力にも反映されるので、種類を「制御フロー」に切り替えると、その関数の制御フロー図になります。
 
 * **読み取り専用**で、標準ライブラリだけで動きます（追加の依存なし）。解析の実行・ソースの変更・AIへの送信・外部通信を行うAPIはありません。
 * **ローカルからのみ**: `127.0.0.1`（`localhost`・`::1`）にだけバインドします。外部のホストへ公開する指定は、拒否します。

@@ -13,13 +13,14 @@
 #   MODEL    AIのモデル名（explain 系で必須。例: qwen3-coder:latest）
 #
 # コードリーディング成果物（対象のリポジトリから、読むための資料一式を出力ディレクトリに作る）:
-#   make reading TARGET=../my-repo                       # 解析 → 資料一式 → 目次(README.md)
+#   make analyze TARGET=../my-repo                        # 対象を解析して保存する（以降の make reading と、同じ解析結果を使う）
+#   make reading TARGET=../my-repo                       # 解析（済みなら差分のみ）→ 資料一式 → 目次(README.md) → ローカルのWebビューアーを起動
 #   make reading TARGET=../my-repo OUT=out TOP=12        # 出力先・主要な関数の数を指定
 #   make reading TARGET=../c-proj COMPILE_DB=/tmp/build  # Cで compile_commands.json がある場合
 #   make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure+ビルド記録
 #   make reading TARGET=... AI_SEND=1 AI_WORKERS=4             # AI解説を並列に追記する（保存済みは再利用。中断しても同じコマンドで再開）
 #   make reading TARGET=... AI_SEND=1                          # AI解説を追記する（モデルは MODEL=、環境変数 CODEINSIGHT_AI_MODEL、設定ファイル。既定では送信しない）
-#   make reading TARGET=... SERVE=1                            # 資料一式を作ったあと、ローカルのWebビューアーを起動する（PORT=8765、OPEN=1 でブラウザを開く）
+#   make reading TARGET=... SERVE=0                            # 資料一式だけを作り、ビューアーは起動しない（CI・自動化向け）。既定は SERVE=1（PORT=8765、OPEN=1 でブラウザを開く）
 #   make reading-serve TARGET=...                              # 解析して、Webビューアーだけを起動する（資料一式は作らない）
 
 UV      ?= uv
@@ -41,9 +42,12 @@ OUT         ?= reading/$(READING_NAME)
 override OUT := $(call expand_path,$(OUT))
 TOP         ?= 8
 AI_WORKERS  ?= 2
-RDB          = $(OUT)/analysis/codeinsight.db
+# 解析結果のDBは、make analyze と同じもの（DB= があればそれ、無ければ既定の ~/.codeinsight/codeinsight.db。環境変数 CODEINSIGHT_DATA_DIR で変更可）を使う。
+# make analyze → make reading の順に実行すると、解析は1回で済む（reading の解析は、変更のないファイルを再解析しない）。
+RDB_OPT      = $(if $(DB),--db $(call expand_path,$(DB)))
 RCI          = $(CODEINSIGHT)
-RFLAGS       = --db $(RDB)
+RFLAGS       = $(RDB_OPT) --project $(TARGET)
+SERVE       ?= 1
 BUILD       ?= $(OUT)/build
 override BUILD := $(call expand_path,$(BUILD))
 COMPILE_DB  ?= $(if $(wildcard $(BUILD)/compile_commands.json),$(BUILD),)
@@ -245,9 +249,9 @@ reading-check:
 	case "$$(mkdir -p "$(OUT)" && cd "$(OUT)" && pwd -P)/" in \
 	  "$$(cd "$(TARGET)" && pwd -P)/"*) echo "OUT は TARGET の外に指定してください（対象を変更しないため）: $(OUT)"; exit 2;; esac
 
-reading-analyze: reading-check ## [資料] 対象を解析する（OUT/analysis に保存）
+reading-analyze: reading-check ## [資料] 対象を解析する（make analyze と同じDBに保存。変更のないファイルは再解析しない）
 	@mkdir -p $(OUT)/analysis $(OUT)/logs
-	$(RCI) analyze $(TARGET) --db $(RDB) $(if $(COMPILE_DB),--compile-commands $(COMPILE_DB)) > $(OUT)/analysis/analyze.txt 2> $(OUT)/logs/analyze.log; \
+	$(RCI) analyze $(TARGET) $(RDB_OPT) $(if $(COMPILE_DB),--compile-commands $(COMPILE_DB)) > $(OUT)/analysis/analyze.txt 2> $(OUT)/logs/analyze.log; \
 	  rc=$$?; cat $(OUT)/analysis/analyze.txt | head -5; [ $$rc -le 1 ] || exit $$rc
 	$(call gen,$(OUT)/analysis/status.txt,status)
 
@@ -311,7 +315,7 @@ reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] �
 	  $(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP); \
 	fi
 	@echo "完了: $(OUT)/README.md から読み始められます"
-	@if [ "$(SERVE)" = "1" ]; then $(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN); fi
+	@if [ "$(SERVE)" != "0" ]; then $(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN); fi
 
 PORT ?= 8765
 
@@ -320,9 +324,9 @@ reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビ�
 
 reading-serve-run:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-serve TARGET=../my-repo))
-	@test -f "$(RDB)" || { echo "解析結果がありません: $(RDB)（make reading-analyze TARGET=... を先に実行してください）"; exit 2; }
+	@$(RCI) status $(RFLAGS) > /dev/null 2>&1 || { echo "解析結果がありません（make analyze TARGET=$(TARGET) を先に実行してください）"; exit 2; }
 	@echo "Webビューアーを起動します（Ctrl-C で終了）。表示されたURLをブラウザで開いてください。URLにはトークンが含まれます。共有しないでください。"
-	$(RCI) serve --db $(RDB) --project $(TARGET) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
+	$(RCI) serve $(RFLAGS) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
 
 reading-c-build: reading-check ## [資料] autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）
 	$(if $(filter 1,$(ALLOW_BUILD)),,$(error 対象の configure と make を実行します（対象のコードは変更しませんが、ビルドの手順を動かします）。許可する場合は ALLOW_BUILD=1 を付けてください))
