@@ -44,6 +44,7 @@ KEY_SELF = "pyself:"  # self/cls経由のメソッド呼び出し  pyself:<ク�
 KEY_SUPER = "pysuper:"  # super()経由のメソッド呼び出し  pysuper:<クラス修飾名>:<属性>
 KEY_EXPORT = "pyexport:"  # モジュールが公開するimport名  pyexport:<公開名>=<import元の修飾名>
 KEY_STAR = "pystar:"  # `from M import *` 経由の名前  pystar:<M;M...>|<名前>
+KEY_NESTED = "pynested:"  # ネストした関数の定義位置から、囲む関数への辺（呼び出しは確定できない。推定）
 KEY_TYPED = "pytyped:"  # 型注釈/単一代入で型を推定した変数経由  pytyped:<型の照合キー>|<属性>
 
 
@@ -307,6 +308,8 @@ class _SymbolBuilder:
         )
         self._result.symbols.append(symbol)
         self._node_symbols[id(node)] = symbol
+        for inner in _nested_function_defs(node.body):  # 関数の中で定義された関数（クロージャ）
+            self._function(inner, symbol)
 
     def _class(self, node: ast.ClassDef, parent: Symbol) -> None:
         symbol = build_symbol(
@@ -378,6 +381,13 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._self_names: list[str | None] = [None]
         self._star_modules = star_modules
         self._class_attr_types: dict[str, dict[str, str]] = {}
+        # 関数の中で定義された関数（親の関数のシンボルID -> 名前 -> シンボル）。呼び出しの解決と、定義位置からの辺に使う。
+        self._nested: dict[str, dict[str, list[Symbol]]] = {}
+        for nested_symbol in node_symbols.values():
+            if nested_symbol.kind == SymbolKind.FUNCTION and nested_symbol.parent_symbol_id is not None:
+                self._nested.setdefault(nested_symbol.parent_symbol_id, {}).setdefault(nested_symbol.name, []).append(nested_symbol)
+        self._nested_called: set[str] = set()
+        self._inferring: tuple[str, Symbol] | None = None  # 型の推定中の (self の名前, クラス)。関数のスコープを積む前に推定するため
         # 関数ごとの型推定結果。クラス属性の推定と関数本体の解析で同じ走査を繰り返さない。
         self._scope_cache: dict[int, dict[str, str]] = {}
         self._types: list[dict[str, str]] = [{}]
@@ -389,6 +399,14 @@ class _ReferenceCollector(ast.NodeVisitor):
             for name, key in self._infer_scope(tree.body, []).items()
             if name not in reassigned
         }
+        # 関数・メソッドの戻り値の型注釈（修飾名 -> 型の照合キー）。呼び出し結果の型の推定に使う。
+        self._return_types: dict[str, str] = {}
+        for function in ast.walk(tree):
+            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.returns is not None:
+                owner = node_symbols.get(id(function))
+                return_key = self._type_key(self._annotation_parts(function.returns)) if owner is not None else None
+                if owner is not None and return_key:
+                    self._return_types[owner.qualified_name] = return_key
 
     # --- スコープ追跡 ---
 
@@ -445,18 +463,21 @@ class _ReferenceCollector(ast.NodeVisitor):
 
         local_names = _local_names(node)
         self_name: str | None = self._self_names[-1]
+        # 関数の中で定義された関数は、囲む関数の変数・self を（クロージャとして）引き継ぐ
+        is_closure = symbol is None or (symbol.parent_symbol_id is not None and symbol.parent_symbol_id in self._function_ids())
         if symbol is not None:
             self._symbols.append(symbol)
-            self_name = None
-            positional = [*node.args.posonlyargs, *node.args.args]
-            is_static = any(_unparse(d) == "staticmethod" for d in node.decorator_list)
-            if symbol.kind == SymbolKind.METHOD and positional and not is_static:
-                self_name = positional[0].arg
-        else:
+            if not is_closure:
+                self_name = None
+                positional = [*node.args.posonlyargs, *node.args.args]
+                is_static = any(_unparse(d) == "staticmethod" for d in node.decorator_list)
+                if symbol.kind == SymbolKind.METHOD and positional and not is_static:
+                    self_name = positional[0].arg
+        if is_closure:
             local_names = local_names | self._locals[-1]
         # 型の推定は、関数の外側のスコープで名前を解決して行う。
-        inferred_types = self._infer_types(node)
-        if symbol is None:
+        inferred_types = self._infer_types(node, self_name, self._enclosing_class())
+        if is_closure:
             inferred_types = {**self._types[-1], **inferred_types}
         self._locals.append(local_names)
         self._self_names.append(self_name)
@@ -467,7 +488,39 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._self_names.pop()
         self._types.pop()
         if symbol is not None:
+            self._nested_definition_edges(node, symbol)
             self._symbols.pop()
+
+    def _function_ids(self) -> set[str]:
+        return {s.symbol_id for s in self._symbols if s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)}
+
+    def _nested_definition_edges(self, node: ast.FunctionDef | ast.AsyncFunctionDef, symbol: Symbol) -> None:
+        """関数の中で定義された関数のうち、この関数の中で直接呼ばれなかったものへの辺（定義位置から。推定）。
+
+        コールバックとして渡す・返して使う・デコレータで登録する場合など、呼び出しを静的に確定できないため、
+        「定義した関数の本体の処理は、この関数の処理に含まれる」という見方を保つ（呼び出しグラフ・副作用の追跡で、
+        ネストした関数の本体の呼び出しが失われないようにする）。直接呼ばれているものには、通常の呼び出しの辺がある。
+        """
+
+        for inner in _nested_function_defs(node.body):
+            child = self._node_symbols.get(id(inner))
+            if child is None or child.qualified_name in self._nested_called:
+                continue
+            self._add_reference(
+                ReferenceKind.CALL, inner, symbol, child.name, f"{KEY_NESTED}{child.qualified_name}", ResolutionStatus.UNRESOLVED,
+                "ネストした関数の定義位置からの辺。呼び出しは静的に確定できない（コールバックとして渡す・返して使う場合など）",
+            )
+
+    def _nested_function(self, name: str) -> Symbol | None:
+        """現在のスコープから見える、関数の中で定義された関数（内側のスコープを優先。クラスのスコープは越えない）。"""
+
+        for scope in reversed(self._symbols):
+            if scope.kind == SymbolKind.CLASS:
+                return None
+            found = self._nested.get(scope.symbol_id, {}).get(name)
+            if found:
+                return found[0]
+        return None
 
     visit_FunctionDef = _visit_function
     visit_AsyncFunctionDef = _visit_function
@@ -480,11 +533,17 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._locals.pop()
         self._types.pop()
 
-    def _infer_types(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
+    def _infer_types(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef, self_name: str | None = None, class_symbol: Symbol | None = None
+    ) -> dict[str, str]:
         cached = self._scope_cache.get(id(node))
         if cached is None:
             args = node.args
-            cached = self._infer_scope(node.body, [*args.posonlyargs, *args.args, *args.kwonlyargs])
+            self._inferring = (self_name, class_symbol) if self_name and class_symbol else None  # type: ignore[assignment]
+            try:
+                cached = self._infer_scope(node.body, [*args.posonlyargs, *args.args, *args.kwonlyargs])
+            finally:
+                self._inferring = None
             self._scope_cache[id(node)] = cached
         return cached
 
@@ -573,7 +632,7 @@ class _ReferenceCollector(ast.NodeVisitor):
             if not positional or any(_unparse(d) == "staticmethod" for d in statement.decorator_list):
                 continue
             self_name = positional[0].arg
-            parameter_types = self._infer_types(statement)
+            parameter_types = self._infer_types(statement, self_name, self._node_symbols.get(id(node)))
             stack: list[ast.AST] = list(statement.body)
             while stack:
                 current = stack.pop()
@@ -622,7 +681,7 @@ class _ReferenceCollector(ast.NodeVisitor):
         """代入される式から型の照合キーを推定する（クラスの生成・リテラル）。"""
 
         if isinstance(value, ast.Call):
-            return self._type_key(self._dotted_parts(value.func))
+            return self._call_result_type(value)
         if isinstance(value, (ast.List, ast.ListComp)):
             return "builtin:list"
         if isinstance(value, (ast.Dict, ast.DictComp)):
@@ -637,12 +696,33 @@ class _ReferenceCollector(ast.NodeVisitor):
             return "builtin:str"
         return None
 
+    def _call_result_type(self, call: ast.Call) -> str | None:
+        """呼び出しの結果の型の照合キー。クラスの生成、または同じファイルの関数・自クラスのメソッドの戻り値の型注釈から推定する。"""
+
+        parts = self._dotted_parts(call.func)
+        key = self._type_key(parts)
+        if key is not None or parts is None:
+            return key
+        self_name, enclosing_class = self._inferring or (self._self_names[-1], self._enclosing_class())
+        if len(parts) == 2 and self_name is not None and parts[0] == self_name and enclosing_class is not None:
+            return self._return_types.get(f"{enclosing_class.qualified_name}.{parts[1]}")
+        if len(parts) == 1 and parts[0] in self._module_names and parts[0] not in self._locals[-1]:
+            return self._return_types.get(f"{self._module_name}.{parts[0]}")
+        return None
+
     def _annotation_parts(self, annotation: ast.expr) -> list[str] | None:
         if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
             try:
                 annotation = ast.parse(annotation.value, mode="eval").body
             except SyntaxError:
                 return None
+        # `X | None`・`Optional[X]` は X として扱う（None を除いた型が1つだけの場合）
+        if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+            sides = [s for s in (annotation.left, annotation.right) if not (isinstance(s, ast.Constant) and s.value is None)]
+            if len(sides) == 1:
+                return self._annotation_parts(sides[0])
+        if isinstance(annotation, ast.Subscript) and self._dotted_parts(annotation.value) in (["Optional"], ["typing", "Optional"]):
+            return self._annotation_parts(annotation.slice)
         if (
             isinstance(annotation, ast.Subscript)
             and isinstance(annotation.value, ast.Name)
@@ -742,7 +822,7 @@ class _ReferenceCollector(ast.NodeVisitor):
     def _add_reference(
         self,
         kind: ReferenceKind,
-        node: ast.expr,
+        node: ast.expr | ast.stmt,
         symbol: Symbol,
         target_name: str,
         key: str | None,
@@ -779,7 +859,7 @@ class _ReferenceCollector(ast.NodeVisitor):
                 return
             if isinstance(receiver, ast.Call):
                 # `クラス(...).メソッド()` は、生成されるクラスのメソッドとして解決する。
-                typed = self._typed(self._type_key(self._dotted_parts(receiver.func)), [func.attr])
+                typed = self._typed(self._call_result_type(receiver), [func.attr])
                 if typed is not None:
                     key, status, note = typed
                     self._add_reference(
@@ -806,6 +886,8 @@ class _ReferenceCollector(ast.NodeVisitor):
         self._maybe_dynamic_import(node, parts)
         target_name = ".".join(parts)
         key, status, note = self._resolve_parts(parts)
+        if key and len(parts) == 1 and key.startswith(KEY_DIRECT):
+            self._nested_called.add(key[len(KEY_DIRECT):])  # ネストした関数への直接の呼び出し（定義位置からの辺は不要）
         self._add_reference(ReferenceKind.CALL, node, symbol, target_name, key, status, note)
 
     def _inheritance(self, base: ast.expr, class_symbol: Symbol) -> None:
@@ -878,6 +960,9 @@ class _ReferenceCollector(ast.NodeVisitor):
                 "self/cls 経由の属性であり、インスタンス属性の型を静的に確定できない"
             )
         if head in self._locals[-1]:
+            nested = self._nested_function(head)
+            if nested is not None and not rest:
+                return f"{KEY_DIRECT}{nested.qualified_name}", ResolutionStatus.UNRESOLVED, ""
             typed = self._typed(self._types[-1].get(head), rest)
             if typed is not None:
                 return typed
@@ -979,6 +1064,29 @@ def _assignment_names(target: ast.expr):
     elif isinstance(target, (ast.Tuple, ast.List)):
         for elt in target.elts:
             yield from _assignment_names(elt)
+
+
+def _nested_function_defs(body: list[ast.stmt]) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """関数の本体の中で定義された関数（if・try・for・with などの内側を含む。さらに内側の関数は、その関数が持つ）。"""
+
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+    def visit(statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                found.append(statement)
+            elif not isinstance(statement, ast.ClassDef):
+                for name in ("body", "orelse", "finalbody"):
+                    inner = getattr(statement, name, None)
+                    if isinstance(inner, list):
+                        visit(inner)
+                for handler in getattr(statement, "handlers", []) or []:
+                    visit(handler.body)
+                for case in getattr(statement, "cases", []) or []:
+                    visit(case.body)
+
+    visit(body)
+    return found
 
 
 def _local_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:

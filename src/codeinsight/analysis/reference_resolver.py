@@ -8,6 +8,7 @@ from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
     KEY_EXPORT,
     KEY_IMPORT,
+    KEY_NESTED,
     KEY_SELF,
     KEY_STAR,
     KEY_SUPER,
@@ -356,6 +357,12 @@ class ReferenceResolver:
             self._resolve_python_typed(reference, key[len(KEY_TYPED):])
         elif key.startswith(KEY_SELF) or key.startswith(KEY_SUPER):
             self._resolve_python_method(reference, key)
+        elif key.startswith(KEY_NESTED):
+            outcome = self._lookup_name(key[len(KEY_NESTED):], False)
+            if outcome.target is not None:
+                self._resolved(reference, outcome.target, "ネストした関数の定義位置からの辺（呼び出しは静的に確定できない）", Confidence.INFERRED)
+            else:
+                self._set(reference, outcome.status, outcome.note)
         elif key.startswith(KEY_DIRECT):
             self._resolve_python_name(reference, key[len(KEY_DIRECT):], imported=False)
         elif key.startswith(KEY_IMPORT):
