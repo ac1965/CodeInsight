@@ -111,3 +111,11 @@ def test_term_matching_respects_word_boundaries() -> None:
     assert _mentions("SQLAlchemy の ORM を使う", "ORM")
     assert _mentions("`math.pi` を使う", "math.pi") and not _mentions("mathxpi", "math.pi")
     assert _mentions("orders.log に書く", "orders.log") and _mentions("再帰呼び出し", "再帰")
+
+
+def test_ai_eval_rejects_dry_run_instead_of_silently_sending(capsys) -> None:
+    """--dry-run は「送信しない」の意味。評価は送信しないと成り立たないので、無視して送信せず、拒否する。"""
+
+    assert main(["ai-eval", "--dry-run", "--allow-send", "--ai-model", "x", "--ai-base-url", "http://127.0.0.1:1/v1"]) == 2
+    err = capsys.readouterr().err
+    assert "対応していません" in err and "何も送信していません" in err

@@ -338,6 +338,9 @@ def cmd_ai_eval(args: argparse.Namespace) -> int:
             print(f"{case.case_id:<26} {case.kind:<8} {Path(case.project).name:<18} {case.note}")
         return 0
 
+    if args.dry_run:  # 評価は、実際にAIへ送信しないと成り立たない。--dry-run を黙って無視して送信してしまうことを防ぐ
+        raise CliError("ai-eval は --dry-run に対応していません（AIへは何も送信していません）。ケースの確認は --list、"
+                       "送信内容の確認は explain / ask の --dry-run を使ってください。", 2)
     config = _config(args)
     _guard(config.check_consent)  # 送信の許可・モデルの確認（許可が無ければ、何も送信しない）
     marks = {"pass": "✓", "fail": "✗", "error": "!"}
