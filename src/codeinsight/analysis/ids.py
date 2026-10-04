@@ -69,3 +69,6 @@ def build_symbol(
         parent_symbol_id=parent.symbol_id if parent else None,
         **extra,  # type: ignore[arg-type]
     )
+
+# Cの関数の照合キー（USR）の末尾に付ける印: コンパイラが、システムヘッダーに宣言を見つけた関数（プロジェクトの外で定義される）
+KEY_SYSTEM_HEADER = "|system-header"

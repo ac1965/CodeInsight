@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from codeinsight.analysis.ids import KEY_SYSTEM_HEADER
 from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
     KEY_EXPORT,
@@ -277,11 +278,28 @@ class ReferenceResolver:
             self._set(reference, ResolutionStatus.EXTERNAL, "プロジェクト内に定義がない（Emacs本体・他のパッケージ、または動的に定義）")
 
     def _resolve_c(self, reference: Reference) -> None:
-        candidates = self._by_usr.get(reference.target_key or "", [])
+        key = reference.target_key or ""
+        system_header = key.endswith(KEY_SYSTEM_HEADER)
+        candidates = self._by_usr.get(key[: -len(KEY_SYSTEM_HEADER)] if system_header else key, [])
         kind = reference.reference_kind
         if kind in (ReferenceKind.CALL, ReferenceKind.FUNCTION_REF):
             definitions = [s for s in candidates if s.kind == SymbolKind.FUNCTION]
             declarations = [s for s in candidates if s.kind == SymbolKind.FUNCTION_DECLARATION]
+            if system_header:
+                # システムヘッダーで宣言された関数（標準ライブラリなど）。プロジェクトの `.c` 内のプロトタイプ宣言は、解決先にしない。
+                if definitions:
+                    self._set(
+                        reference,
+                        ResolutionStatus.AMBIGUOUS,
+                        "システムヘッダーで宣言された関数と同名の定義がプロジェクトにある（代替実装など）。どちらが使われるかは、ビルドの構成による",
+                    )
+                else:
+                    self._set(
+                        reference,
+                        ResolutionStatus.EXTERNAL,
+                        "システムヘッダーで宣言された関数（定義はプロジェクトの外）",
+                    )
+                return
             if len(definitions) == 1:
                 self._resolved(reference, definitions[0])
             elif len(definitions) > 1:

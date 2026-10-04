@@ -7,7 +7,7 @@ from pathlib import Path
 
 import clang.cindex as cindex
 
-from codeinsight.analysis.ids import IdAllocator, build_symbol
+from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, IdAllocator, build_symbol
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
 from codeinsight.domain import (
     Dependency,
@@ -454,6 +454,24 @@ class CAnalyzer:
             current = inner[0]
         return current
 
+    @staticmethod
+    def _function_key(referenced) -> str | None:
+        """関数の照合キー（USR）。システムヘッダーで宣言された関数には、その印を付ける（標準ライブラリ関数など）。
+
+        コンパイラが、最初の宣言（canonical）をシステムヘッダーに見つけた関数は、プロジェクトの外で定義される。
+        プロジェクトの `.c` 内に同じ関数のプロトタイプ宣言があっても、それを「解決先」にはしない。
+        """
+
+        usr = referenced.get_usr()
+        if not usr:
+            return None
+        try:
+            if referenced.canonical.location.is_in_system_header or referenced.location.is_in_system_header:
+                return usr + KEY_SYSTEM_HEADER
+        except (AttributeError, ValueError):
+            pass
+        return usr
+
     def _collect_call(self, cursor, source, callee_locations, add_reference) -> None:
         callee = self._callee_chain(cursor)
         if callee is None:
@@ -462,7 +480,7 @@ class CAnalyzer:
             callee_locations.add((callee.extent.start.line, callee.extent.start.column))
             referenced = callee.referenced
             if referenced is not None and referenced.kind == cindex.CursorKind.FUNCTION_DECL:
-                usr = referenced.get_usr()
+                usr = self._function_key(referenced)
                 if usr:
                     add_reference(
                         ReferenceKind.CALL,
@@ -495,6 +513,7 @@ class CAnalyzer:
         if not usr:
             return
         if referenced.kind == cindex.CursorKind.FUNCTION_DECL:
+            usr = self._function_key(referenced) or usr
             add_reference(
                 ReferenceKind.FUNCTION_REF,
                 cursor,
