@@ -36,7 +36,7 @@ C言語およびPythonを主要な対象言語とし(Emacs Lispは関数単位�
 * 対象リポジトリのソースは変更せず、プログラムも実行しません(Gitは読み取り専用)。
 * AIには**既定では何も送信しません**。送信は利用者の明示的な許可が必要で、ローカルLLM(Ollama等)ならこの計算機の中で完結します。AIの解説は、解析結果(事実)とは別に管理し、引用を機械的に検証したうえで、根拠を確認できない記述を「未確認」と示します。
 
-実践的な検証対象は、以下の開発中リポジトリです(詳細は [AGENTS.md §2.3](AGENTS.md#23-実プロジェクトでの解析対象検証用) を参照)。現在のスコープはC言語・Pythonのため、[narou_dl](https://github.com/ac1965/narou_dl) が対象です。[PownForge](https://github.com/ac1965/PownForge) は未コミットの変更が多いため当面除外しています。Go製の[RiskForge](https://github.com/ac1965/RiskForge)とEmacs Lisp製の[.emacs.d](https://github.com/ac1965/.emacs.d)は将来の言語追加後の対象候補です。
+実践的な検証対象は、以下の開発中リポジトリです(詳細は [AGENTS.md §2.3](AGENTS.md#23-実プロジェクトでの解析対象検証用) を参照)。現在のスコープはC言語・Python・Emacs Lispのため、[narou_dl](https://github.com/ac1965/narou_dl) と、Emacs Lisp製の [.emacs.d](https://github.com/ac1965/.emacs.d)(README.org内のブロックを含む)が対象です。[PownForge](https://github.com/ac1965/PownForge) は未コミットの変更が多いため当面除外しています。Go製の[RiskForge](https://github.com/ac1965/RiskForge)は将来の言語追加後の対象候補です。
 
 ## アーキテクチャ概要
 
