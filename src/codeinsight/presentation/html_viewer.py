@@ -55,7 +55,14 @@ button:hover { background:var(--panel); }
 .group-title { fill:var(--muted); font-size:10px; }
 .group-line { stroke:var(--border); stroke-width:1; }
 .neighbors { margin:4px 0 0; padding-left:16px; font-size:12px; }
-body.app main { height:calc(100vh - 380px); min-height:280px; }
+[hidden] { display:none !important; }
+body.app { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+body.app main { flex:1 1 auto; height:auto; min-height:160px; }
+#splitter { flex:0 0 8px; height:8px; cursor:row-resize; background:var(--border); touch-action:none; }
+#splitter:hover, #splitter:focus-visible, #splitter.dragging { background:var(--node-stroke); outline:none; }
+body.app #reader { flex:0 0 var(--reader-h, 300px); min-height:80px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
+body.app #reader > div[id^="pane-"] { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+body.app #reader pre { flex:1 1 auto; max-height:none; min-height:0; }
 #reader { border-top:1px solid var(--border); padding:8px 16px; }
 #reader .tabs button.active { background:var(--hit); }
 #reader pre { margin:6px 0; max-height:40vh; overflow:auto; padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:4px; font:12px/1.45 ui-monospace, monospace; white-space:pre; }

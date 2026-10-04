@@ -81,6 +81,8 @@ def test_page_has_csp_and_no_token_in_logs_or_cors(server) -> None:
     assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp and "connect-src 'self'" in csp and "unsafe-eval" not in csp
     assert "Access-Control-Allow-Origin" not in headers and headers["Cache-Control"] == "no-store"
     assert headers["Referrer-Policy"] == "no-referrer"
+    # グラフとソース・切り出しの境界は、ドラッグ・キー操作で動かせる（キーボードで操作でき、ダブルクリックで元に戻る）
+    assert b'id="splitter"' in body and b'role="separator"' in body and b"tabindex" in body and b"onpointerdown" in body and b"ArrowUp" in body and b"ondblclick" in body
 
 
 def test_only_get_is_allowed(server) -> None:

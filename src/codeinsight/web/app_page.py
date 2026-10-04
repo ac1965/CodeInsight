@@ -26,7 +26,8 @@ _CONTROLS = """<div id="controls">
   <span id="message" class="notes" role="status"></span>
 </div>"""
 
-_READER = """<section id="reader" aria-label="コードリーディング">
+_READER = """<div id="splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="グラフとソースの境界。ドラッグ、または上下キーで高さを変更。ダブルクリックで元に戻す"></div>
+<section id="reader" aria-label="コードリーディング">
   <div class="tabs">
     <button id="tab-source" type="button" class="active">ソース</button>
     <button id="tab-extract" type="button">切り出し</button>
@@ -48,6 +49,40 @@ _BOOT = r"""
   var TOKEN = __TOKEN__;
   history.replaceState(null, "", location.pathname);
   document.body.classList.add("app");
+
+  // グラフとソース・切り出しの境界を、ドラッグ（または上下キー）で動かす。高さは、このブラウザに記憶する（使えなければ記憶しない）。
+  var splitter = document.getElementById("splitter"), reader = document.getElementById("reader"), MIN_READER = 80, KEY = "codeinsight.readerHeight";
+  function setReaderHeight(px, save) {
+    var h = Math.round(Math.max(MIN_READER, Math.min(window.innerHeight - 260, px)));
+    reader.style.setProperty("--reader-h", h + "px");
+    document.documentElement.style.setProperty("--reader-h", h + "px");
+    if (save) { try { localStorage.setItem(KEY, String(h)); } catch (e) { /* 記憶できなくても動作する */ } }
+    return h;
+  }
+  try { var stored = parseInt(localStorage.getItem(KEY), 10); if (stored > 0) setReaderHeight(stored, false); } catch (e) { /* 記憶は任意 */ }
+  splitter.onpointerdown = function (ev) {
+    ev.preventDefault();
+    try { splitter.setPointerCapture(ev.pointerId); } catch (e) { /* キャプチャできなくても、ドラッグは動作する */ }
+    splitter.classList.add("dragging");
+  };
+  splitter.onpointermove = function (ev) {
+    if (!splitter.classList.contains("dragging")) return;
+    setReaderHeight(window.innerHeight - ev.clientY - 4, false);
+  };
+  splitter.onpointerup = function (ev) {
+    splitter.classList.remove("dragging");
+    try { splitter.releasePointerCapture(ev.pointerId); } catch (e) { /* 既に解放済み */ }
+    setReaderHeight(reader.getBoundingClientRect().height, true);
+  };
+  splitter.onkeydown = function (ev) {
+    var step = ev.shiftKey ? 120 : 24, now = reader.getBoundingClientRect().height;
+    if (ev.key === "ArrowUp") { ev.preventDefault(); setReaderHeight(now + step, true); }
+    else if (ev.key === "ArrowDown") { ev.preventDefault(); setReaderHeight(now - step, true); }
+  };
+  splitter.ondblclick = function () {
+    reader.style.removeProperty("--reader-h"); document.documentElement.style.removeProperty("--reader-h");
+    try { localStorage.removeItem(KEY); } catch (e) { /* 記憶は任意 */ }
+  };
   var $ = function (id) { return document.getElementById(id); };
   var selected = null, lastMarkdown = "";
 
