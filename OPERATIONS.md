@@ -442,7 +442,7 @@ uv run codeinsight compare-scip --project <プロジェクト>      # 一致・�
 uv run codeinsight import-scip --clear --project <プロジェクト>
 ```
 
-索引は外部ツールの結果で、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると、そのファイルは比較から除かれます。動作を確認したのは scip-python 0.6.6 の索引だけです（scip-clang は未確認）。
+索引は外部ツールの結果で、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると、そのファイルは比較から除かれます。動作を確認したのは scip-python 0.6.6 と scip-clang 0.4.0 の索引です。
 
 `scip-python` は Node.js で動きます。システムを変更せず、利用者のディレクトリに入れる例です。
 
@@ -450,6 +450,15 @@ uv run codeinsight import-scip --clear --project <プロジェクト>
 npm install --prefix ~/.local/share/codeinsight-tools/scip-python @sourcegraph/scip-python
 ~/.local/share/codeinsight-tools/scip-python/node_modules/.bin/scip-python index . --project-name <名前> --output index.scip --target-only <ソースのディレクトリ>
 ```
+
+`scip-clang` は、[GitHubのリリース](https://github.com/sourcegraph/scip-clang/releases)から、実行ファイル（macOS arm64 の `scip-clang-arm64-darwin`、Apache-2.0）を取得し、`shasum -a 256` でリリースのdigestと一致を確認してから、同様にユーザーのディレクトリに置きます。**実行したディレクトリがプロジェクトのルートになり、その下のファイルだけが索引になります**。ソースと `compile_commands.json` の場所が違う場合は、ソースのディレクトリで実行し、`--compdb-path` を指定します。
+
+```bash
+cd <ソースのディレクトリ>
+scip-clang-arm64-darwin --compdb-path=<compile_commands.json> --index-output-path=index.scip
+```
+
+Emacs Lispに対応するSCIPの索引ツールは、確認した範囲では見つかっていません（2026年10月時点）。
 
 生成には、対象のコードは実行されませんが、Pythonの環境（インストール済みの依存）を読みます。出力先は、対象リポジトリの外にしてください。
 

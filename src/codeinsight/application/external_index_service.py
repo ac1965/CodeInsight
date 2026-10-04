@@ -113,6 +113,12 @@ class ExternalIndexService:
                 if not info.symbol.startswith("local "):
                     symbols[info.symbol] = (info.symbol, info.display_name, info.kind, info.documentation)
         report.occurrences = len(occurrences)
+        if report.documents == 0:
+            raise ScipError(
+                "取り込める文書がありません（索引の文書が、プロジェクトのルートの外、または存在しないファイルです）。"
+                + (report.root_note + "。" if report.root_note else "")
+                + f"索引のルート: {metadata.project_root or '（なし）'}。scip-clang は、実行したディレクトリがルートになり、その下のファイルだけを索引にします。"
+            )
         meta = {
             "index_id": uuid.uuid4().hex, "tool": metadata.tool or "不明なツール", "tool_version": metadata.tool_version, "project_root": metadata.project_root,
             "source_name": path.name[:120], "source_sha256": digest, "imported_at": datetime.now().isoformat(), "documents": report.documents, "occurrences": report.occurrences,

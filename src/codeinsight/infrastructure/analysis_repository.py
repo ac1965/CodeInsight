@@ -522,6 +522,7 @@ class AnalysisRepository:
         """同じ索引（内容のハッシュが同じ）の取り込み済みデータを、置き換える。"""
 
         self.delete_external_indexes(project_id, source_sha256=meta["source_sha256"], commit=False)
+        self.delete_external_indexes(project_id, tool=meta["tool"], source_name=meta["source_name"], commit=False)  # 同じ名前で作り直した索引は、置き換える
         index_id = meta["index_id"]
         self._connection.execute(
             "INSERT INTO external_indexes (index_id, project_id, tool, tool_version, project_root, source_name, source_sha256, imported_at, "
@@ -555,7 +556,7 @@ class AnalysisRepository:
         return {row["symbol"]: (row["display_name"], row["kind"], row["documentation"]) for row in self._connection.execute(
             "SELECT symbol, display_name, kind, documentation FROM external_index_symbols WHERE index_id = ?", (index_id,))}
 
-    def delete_external_indexes(self, project_id: str, tool: str | None = None, source_sha256: str | None = None, commit: bool = True) -> int:
+    def delete_external_indexes(self, project_id: str, tool: str | None = None, source_sha256: str | None = None, source_name: str | None = None, commit: bool = True) -> int:
         query, params = "SELECT index_id FROM external_indexes WHERE project_id = ?", [project_id]
         if tool is not None:
             query += " AND tool = ?"
@@ -563,6 +564,9 @@ class AnalysisRepository:
         if source_sha256 is not None:
             query += " AND source_sha256 = ?"
             params.append(source_sha256)
+        if source_name is not None:
+            query += " AND source_name = ?"
+            params.append(source_name)
         ids = [row["index_id"] for row in self._connection.execute(query, params)]
         for index_id in ids:
             for table in ("external_index_occurrences", "external_index_symbols", "external_index_files", "external_indexes"):

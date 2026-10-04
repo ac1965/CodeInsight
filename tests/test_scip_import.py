@@ -148,6 +148,25 @@ def test_documents_outside_the_project_or_missing_are_not_imported(project: Path
     assert "文書 1件" in out and "ルートの外" in out and "存在しないファイル" in out
 
 
+def test_import_with_no_usable_document_fails_and_regenerated_index_replaces(project: Path, tmp_path: Path, capsys) -> None:
+    db = tmp_path / "s.db"
+    assert main(["analyze", str(project), "--db", str(db)]) == 0
+    args = ["--db", str(db), "--project", str(project)]
+    empty = tmp_path / "empty.scip"
+    empty.write_bytes(_index(project, [_document("nothing.py", [_occurrence(0, 0, 1, HELPER)])]))
+    capsys.readouterr()
+    assert main(["import-scip", str(empty), *args]) != 0  # 取り込める文書がない（ルートの食い違いなど）のに、成功扱いにしない
+    assert "取り込める文書がありません" in capsys.readouterr().err
+    first = tmp_path / "index.scip"
+    first.write_bytes(_index(project, [_document("a.py", [_occurrence(0, 4, 10, HELPER, 1)])]))
+    assert main(["import-scip", str(first), *args]) == 0
+    first.write_bytes(_index(project, [_document("a.py", [_occurrence(0, 4, 10, HELPER, 1), _occurrence(4, 4, 8, MAIN, 1)])]))  # 同じ名前で作り直す
+    assert main(["import-scip", str(first), *args]) == 0
+    capsys.readouterr()
+    assert main(["compare-scip", "--format", "json", *args]) == 0
+    assert len(json.loads(capsys.readouterr().out)["indexes"]) == 1
+
+
 def test_import_does_not_modify_the_target(project: Path, tmp_path: Path) -> None:
     db = tmp_path / "s.db"
     assert main(["analyze", str(project), "--db", str(db)]) == 0
