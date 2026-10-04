@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.domain import (
@@ -40,6 +40,8 @@ class GraphNode:
     kind: str  # function / method / class / module / file / external / unresolved ...
     path: str | None = None
     line: int | None = None
+    distance: int | None = None  # 起点に焦点を当てた表示の、起点からの距離（負: 起点に依存している側＝Depended On By、正: 起点が依存している側＝Depends On）
+    group: str = ""  # 同じ場所（ファイル・ディレクトリ）のノードをまとめる名前
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,53 @@ class GraphModel:
     edges: list[GraphEdge] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     meta: dict[str, object] = field(default_factory=dict)
+    focus: str | None = None  # 起点のノードID。指定されると、Depends On / Depended On By の形で表示できる
+
+
+def _group_of(node: GraphNode) -> str:
+    if node.kind == "external":
+        return "（外部）"
+    if node.kind == "unresolved":
+        return "（未解決）"
+    if node.kind == "file" and node.path:
+        return node.path.rsplit("/", 1)[0] if "/" in node.path else "."
+    return node.path or ""
+
+
+def _apply_focus(model: GraphModel, root_id: str) -> None:
+    """起点からの距離（辺を順方向にたどる = 正、逆方向 = 負）と、まとまり（ファイル等）をノードに付ける。"""
+
+    forward: dict[str, list[str]] = defaultdict(list)
+    backward: dict[str, list[str]] = defaultdict(list)
+    for edge in model.edges:
+        forward[edge.source].append(edge.target)
+        backward[edge.target].append(edge.source)
+
+    def distances(adjacent: dict[str, list[str]]) -> dict[str, int]:
+        found = {root_id: 0}
+        queue = deque([root_id])
+        while queue:
+            current = queue.popleft()
+            for neighbour in adjacent[current]:
+                if neighbour not in found:
+                    found[neighbour] = found[current] + 1
+                    queue.append(neighbour)
+        return found
+
+    ahead, behind = distances(forward), distances(backward)
+    nodes = []
+    for node in model.nodes:
+        if node.node_id == root_id:
+            distance: int | None = 0
+        elif node.node_id in ahead and (node.node_id not in behind or ahead[node.node_id] <= behind[node.node_id]):
+            distance = ahead[node.node_id]  # 起点が（直接・間接に）依存している側。双方向にたどれる場合は、近い側
+        elif node.node_id in behind:
+            distance = -behind[node.node_id]
+        else:
+            distance = None
+        nodes.append(replace(node, distance=distance, group=_group_of(node)))
+    model.nodes = nodes
+    model.focus = root_id
 
 
 def _style(status: ResolutionStatus, confidence: Confidence) -> EdgeStyle:
@@ -160,6 +209,7 @@ def _restrict(
         meta=dict(model.meta),
     )
     result.meta.update({"root": root_id, "depth": depth, "traversal": traversal.value})
+    _apply_focus(result, root_id)
     return result
 
 

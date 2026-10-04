@@ -193,3 +193,35 @@ def test_structure_tree_nests_symbols_and_marks_failures(tmp_path: Path, analyze
     as_dict = tree_to_dict(tree)
     assert as_dict["kind"] == "project"
     assert [c["label"] for c in as_dict["children"]] == ["pkg/", "bad.py"]  # ディレクトリが先
+
+
+def test_focus_graph_places_dependents_left_and_dependencies_right(analyzed, c_callgraph_dir: Path) -> None:
+    _, nav, index = _index(analyzed, c_callgraph_dir)
+    root = next(s for s in index.symbols.values() if s.name == "apply")
+    model = GraphBuilder(index).call_graph(root, 3, Traversal.BOTH)
+    assert model.focus == root.symbol_id
+    distances = {n.label: n.distance for n in model.nodes}
+    assert distances["apply"] == 0
+    assert distances["main"] == -1  # apply を呼ぶ側（Depended On By）は負
+    assert all(d is None or d >= 0 for label, d in distances.items() if label != "main")
+    assert next(n for n in model.nodes if n.label == "main").group.endswith("main.c")  # ファイルごとにまとめる
+
+
+def test_focus_graph_exports_group_clusters_and_root_highlight(analyzed, c_callgraph_dir: Path) -> None:
+    _, _, index = _index(analyzed, c_callgraph_dir)
+    root = next(s for s in index.symbols.values() if s.name == "apply")
+    model = GraphBuilder(index).call_graph(root, 2, Traversal.BOTH)
+    mermaid = to_mermaid(model)
+    assert "subgraph g0[" in mermaid and "class " in mermaid and "root" in mermaid and "Depended On By" in mermaid
+    dot = to_dot(model)
+    assert "subgraph cluster_0" in dot and "rank=same" in dot and "#fde68a" in dot  # 起点を強調
+    data = json.loads(to_json(model))
+    assert data["focus"] == root.symbol_id and {n["distance"] for n in data["nodes"]} >= {0, -1}
+    html = render_html(model)
+    assert "Depended On By" in html and "Depends On" in html and '"focus"' in html
+
+
+def test_graph_without_root_has_no_focus(analyzed, c_callgraph_dir: Path) -> None:
+    _, _, index = _index(analyzed, c_callgraph_dir)
+    model = GraphBuilder(index).call_graph()
+    assert model.focus is None and all(n.distance is None for n in model.nodes)

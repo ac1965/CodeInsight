@@ -49,6 +49,12 @@ button:hover { background:var(--panel); }
 .edge.external { stroke:var(--ext); stroke-dasharray:2 4; }
 .edgeg.dim { opacity:0.12; }
 .edge-label { fill:var(--muted); font-size:10px; text-anchor:middle; pointer-events:none; }
+.node.root rect { fill:var(--hit); stroke:var(--warn); stroke-width:3; }
+.node.root text { font-weight:700; }
+.col-title { fill:var(--muted); font-size:12px; font-weight:600; }
+.group-title { fill:var(--muted); font-size:10px; }
+.group-line { stroke:var(--border); stroke-width:1; }
+.neighbors { margin:4px 0 0; padding-left:16px; font-size:12px; }
 .node.decision rect { fill:var(--warn-bg); stroke:var(--node-stroke); }
 .node.terminal rect { fill:var(--ext-bg); stroke:var(--ext); rx:14; }
 dt { color:var(--muted); font-size:12px; margin-top:8px; }
@@ -137,14 +143,48 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   var pos = [], maxX = 0, maxY = 0;
   // 制御フロー図は上から下へ、それ以外は左から右へ層を並べる。
   var vertical = data.graph_kind === "flow";
-  Object.keys(columns).forEach(function (r) {
-    columns[r].forEach(function (i, row) {
-      pos[i] = vertical
-        ? { x: PAD + row * (NODE_W + 40), y: PAD + r * (NODE_H + 46) }
-        : { x: PAD + r * (NODE_W + GAP_X), y: PAD + row * (NODE_H + GAP_Y) };
-      maxX = Math.max(maxX, pos[i].x + NODE_W + 50); maxY = Math.max(maxY, pos[i].y + NODE_H);
+  var focusNode = data.focus !== null && data.focus !== undefined && data.focus in ids;
+  var headers = [], groupTitles = [];
+  if (focusNode) {
+    // 起点を中心に、起点に依存している側（Depended On By）を左、起点が依存している側（Depends On）を右へ、距離ごとの列に並べる。
+    // 同じ列の中では、ファイル（ディレクトリ）ごとにまとめる。起点に結び付かないノードは、最後の列に置く。
+    var HEAD = 40, GROUP_GAP = 26;
+    var dist = data.nodes.map(function (n) { return typeof n.distance === "number" ? n.distance : null; });
+    var lo = 0, hi = 0;
+    dist.forEach(function (d) { if (d !== null) { lo = Math.min(lo, d); hi = Math.max(hi, d); } });
+    var byColumn = {};
+    dist.forEach(function (d, i) { var c = d === null ? hi + 1 : d; (byColumn[c] = byColumn[c] || []).push(i); });
+    Object.keys(byColumn).forEach(function (c) {
+      var members = byColumn[c].slice().sort(function (a, b) {
+        var ga = data.nodes[a].group || "", gb = data.nodes[b].group || "";
+        return ga < gb ? -1 : ga > gb ? 1 : (data.nodes[a].label < data.nodes[b].label ? -1 : 1);
+      });
+      var x = PAD + (Number(c) - lo) * (NODE_W + GAP_X), y = PAD + HEAD, last = null;
+      members.forEach(function (i) {
+        var group = data.nodes[i].group || "";
+        if (group !== last) {
+          if (last !== null) y += GROUP_GAP - GAP_Y;
+          groupTitles.push({ x: x, y: y + 2, text: group || "(その他)" });
+          y += 14; last = group;
+        }
+        pos[i] = { x: x, y: y };
+        y += NODE_H + GAP_Y;
+        maxX = Math.max(maxX, x + NODE_W + 50); maxY = Math.max(maxY, y);
+      });
+      var title = Number(c) < 0 ? "Depended On By（" + (-c) + "段階前）" : Number(c) === 0 ? "起点" :
+        Number(c) > hi ? "起点に結び付かないもの" : "Depends On（" + c + "段階先）";
+      headers.push({ x: x, y: PAD + 12, text: title });
     });
-  });
+  } else {
+    Object.keys(columns).forEach(function (r) {
+      columns[r].forEach(function (i, row) {
+        pos[i] = vertical
+          ? { x: PAD + row * (NODE_W + 40), y: PAD + r * (NODE_H + 46) }
+          : { x: PAD + r * (NODE_W + GAP_X), y: PAD + row * (NODE_H + GAP_Y) };
+        maxX = Math.max(maxX, pos[i].x + NODE_W + 50); maxY = Math.max(maxY, pos[i].y + NODE_H);
+      });
+    });
+  }
 
   var svg = document.getElementById("graph");
   var contentW = maxX + PAD, contentH = maxY + PAD, scale = 1;
@@ -174,6 +214,19 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   var arrow = document.createElementNS(NS, "path");
   arrow.setAttribute("d", "M0,0 L10,5 L0,10 z"); arrow.setAttribute("fill", "#9ca3af");
   marker.appendChild(arrow); defs.appendChild(marker); svg.appendChild(defs);
+
+  headers.forEach(function (h) {
+    var t = document.createElementNS(NS, "text");
+    t.setAttribute("class", "col-title"); t.setAttribute("x", h.x); t.setAttribute("y", h.y); t.textContent = h.text;
+    svg.appendChild(t);
+  });
+  groupTitles.forEach(function (g) {
+    var t = document.createElementNS(NS, "text");
+    t.setAttribute("class", "group-title"); t.setAttribute("x", g.x); t.setAttribute("y", g.y + 8);
+    t.textContent = g.text.length > 44 ? "…" + g.text.slice(-43) : g.text;
+    var title = document.createElementNS(NS, "title"); title.textContent = g.text; t.appendChild(title);
+    svg.appendChild(t);
+  });
 
   var detail = document.getElementById("detail");
   function row(dl, term, value) {
@@ -244,7 +297,7 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   var selected = null;
   data.nodes.forEach(function (n, i) {
     var g = document.createElementNS(NS, "g");
-    g.setAttribute("class", "node " + n.kind);
+    g.setAttribute("class", "node " + n.kind + (focusNode && n.id === data.focus ? " root" : ""));
     g.setAttribute("transform", "translate(" + pos[i].x + "," + pos[i].y + ")");
     var rect = document.createElementNS(NS, "rect");
     rect.setAttribute("width", NODE_W); rect.setAttribute("height", NODE_H); rect.setAttribute("rx", "5");
@@ -265,17 +318,26 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
       related.forEach(function (e) { near[e.source] = true; near[e.target] = true; });
       edgeEls.forEach(function (x) { x.el.classList.toggle("dim", related.indexOf(x.e) < 0); });
       nodeEls.forEach(function (x) { x.el.classList.toggle("faded", !near[x.n.id]); });
+      var dependsOn = edges.filter(function (e) { return e.source === n.id; }).map(function (e) { return data.nodes[ids[e.target]].label; });
+      var dependedBy = edges.filter(function (e) { return e.target === n.id; }).map(function (e) { return data.nodes[ids[e.source]].label; });
       show(n.label, [
         ["種別", n.kind],
         ["場所", n.path ? n.path + (n.line ? ":" + n.line : "") : ""],
-        ["出る辺", edges.filter(function (e) { return e.source === n.id; }).length],
-        ["入る辺", edges.filter(function (e) { return e.target === n.id; }).length]
+        ["Depends On（直接の依存先・呼び出し先）: " + dependsOn.length, dependsOn.slice(0, 40).join("\\n") + (dependsOn.length > 40 ? "\\n…" : "")],
+        ["Depended On By（直接の依存元・呼び出し元）: " + dependedBy.length, dependedBy.slice(0, 40).join("\\n") + (dependedBy.length > 40 ? "\\n…" : "")]
       ]);
     });
     svg.appendChild(g);
     nodeEls.push({ el: g, n: n });
   });
 
+  if (focusNode) {
+    var rootEl = nodeEls.filter(function (x) { return x.n.id === data.focus; })[0];
+    if (rootEl) {
+      rootEl.el.dispatchEvent(new Event("click"));
+      canvas.scrollTo(Math.max(0, pos[ids[data.focus]].x * scale - canvas.clientWidth / 3), 0);
+    }
+  }
   document.getElementById("filter").addEventListener("input", function (ev) {
     var q = ev.target.value.toLowerCase();
     var first = null;

@@ -61,7 +61,10 @@ def to_mermaid(model: GraphModel, direction: str | None = None) -> str:
     lines = [f"graph {direction}"]
     for note in model.notes:
         lines.append("%% " + " ".join(note.split()))
-    for node in model.nodes:
+    if model.focus is not None:
+        lines.append("%% 起点を中心に、左が Depended On By（起点に依存している側）、右が Depends On（起点が依存している側）です。")
+
+    def node_line(node, indent: str) -> str:
         if node.kind in ("external", "unresolved", "terminal"):
             shape_open, shape_close = "([", "])"
         elif node.kind == "decision":
@@ -69,7 +72,20 @@ def to_mermaid(model: GraphModel, direction: str | None = None) -> str:
         else:
             shape_open, shape_close = "[", "]"
         kind_class = _SAFE_CLASS.sub("_", node.kind)
-        lines.append(f'    {ids[node.node_id]}{shape_open}"{_mermaid_text(node.label)}"{shape_close}:::{kind_class}')
+        return f'{indent}{ids[node.node_id]}{shape_open}"{_mermaid_text(node.label)}"{shape_close}:::{kind_class}'
+
+    groups: dict[str, list] = {}
+    if model.focus is not None:
+        for node in model.nodes:
+            groups.setdefault(node.group, []).append(node)
+    for index, (group, members) in enumerate(groups.items()):
+        lines.append(f'    subgraph g{index}["{_mermaid_text(group or "(その他)")}"]')
+        lines.extend(node_line(node, "        ") for node in members)
+        lines.append("    end")
+    if model.focus is None:
+        lines.extend(node_line(node, "    ") for node in model.nodes)
+    elif model.focus in ids:
+        lines.append(f"    class {ids[model.focus]} root")
     link_styles: list[str] = []
     position = -1  # MermaidのlinkStyleは、実際に出力した辺の通し番号で指定する
     for edge in model.edges:
@@ -94,6 +110,7 @@ def to_mermaid(model: GraphModel, direction: str | None = None) -> str:
     lines.append("    classDef external fill:#f3f4f6,stroke:#6b7280,color:#374151")
     lines.append("    classDef terminal fill:#e5e7eb,stroke:#6b7280,color:#111827")
     lines.append("    classDef decision fill:#dbeafe,stroke:#2563eb,color:#1e3a8a")
+    lines.append("    classDef root fill:#fde68a,stroke:#b45309,stroke-width:3px,color:#111827")
     return "\n".join(lines) + "\n"
 
 
@@ -121,7 +138,7 @@ def to_dot(model: GraphModel) -> str:
         f'    label="{_dot_text(model.title)} — {note}";',
         '    node [shape=box, fontname="Helvetica"];',
     ]
-    for node in model.nodes:
+    def node_line(node, indent: str) -> str:
         attributes = f'label="{_dot_text(node.label)}"'
         if node.kind in ("external", "unresolved"):
             color = "#6b7280" if node.kind == "external" else "#b45309"
@@ -130,7 +147,29 @@ def to_dot(model: GraphModel) -> str:
             attributes += ", shape=oval"
         elif node.kind == "decision":
             attributes += ", shape=diamond"
-        lines.append(f"    {ids[node.node_id]} [{attributes}];")
+        if node.node_id == model.focus:
+            attributes += ', style="filled", fillcolor="#fde68a", color="#b45309", penwidth=3'
+        return f"{indent}{ids[node.node_id]} [{attributes}];"
+
+    if model.focus is None:
+        lines.extend(node_line(node, "    ") for node in model.nodes)
+    else:
+        # 起点を中心に、起点に依存している側（左）・起点が依存している側（右）を、距離ごとの列に並べ、ファイル等でまとめる。
+        lines.append("    compound=true;")
+        by_group: dict[str, list] = {}
+        for node in model.nodes:
+            by_group.setdefault(node.group, []).append(node)
+        for index, (group, members) in enumerate(by_group.items()):
+            lines.append(f"    subgraph cluster_{index} {{")
+            lines.append(f'        label="{_dot_text(group or "(その他)")}"; style="rounded"; color="#9ca3af"; fontsize=10;')
+            lines.extend(node_line(node, "        ") for node in members)
+            lines.append("    }")
+        by_distance: dict[int, list[str]] = {}
+        for node in model.nodes:
+            if node.distance is not None:
+                by_distance.setdefault(node.distance, []).append(ids[node.node_id])
+        for members in by_distance.values():
+            lines.append("    { rank=same; " + "; ".join(members) + "; }")
     for edge in model.edges:
         source, target = ids.get(edge.source), ids.get(edge.target)
         if source is None or target is None:
@@ -152,6 +191,7 @@ def model_to_dict(model: GraphModel) -> dict:
         "graph_kind": model.graph_kind,
         "notes": model.notes,
         "meta": model.meta,
+        "focus": model.focus,
         "nodes": [
             {
                 "id": n.node_id,
@@ -159,6 +199,8 @@ def model_to_dict(model: GraphModel) -> dict:
                 "kind": n.kind,
                 "path": n.path,
                 "line": n.line,
+                "distance": n.distance,
+                "group": n.group,
             }
             for n in model.nodes
         ],
