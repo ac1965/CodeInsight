@@ -66,11 +66,12 @@ body.view-docs .toolbar, body.view-docs main { display:none; }
 #docs-nav button { display:block; width:100%; text-align:left; margin:1px 0; border-color:transparent; background:transparent; }
 #docs-nav button.active { background:var(--hit); }
 #docs-body { flex:1 1 auto; overflow:auto; padding:12px 20px; max-width:100ch; }
-#docs-body h1 { font-size:20px; } #docs-body h2 { font-size:17px; border-bottom:1px solid var(--border); padding-bottom:2px; } #docs-body h3 { font-size:15px; }
+#docs-body h1, #x-out h1 { font-size:20px; } #docs-body h2, #x-out h2 { font-size:17px; border-bottom:1px solid var(--border); padding-bottom:2px; } #docs-body h3, #x-out h3 { font-size:15px; }
+#x-out { overflow:auto; padding:4px 12px; border:1px solid var(--border); border-radius:4px; background:var(--panel); } body.app #x-out { flex:1 1 auto; min-height:0; }
 .doc-code { background:var(--panel); border:1px solid var(--border); border-radius:4px; padding:8px; overflow:auto; font:12px/1.45 ui-monospace, monospace; white-space:pre; }
 .doc-table { border-collapse:collapse; margin:8px 0; font-size:13px; } .doc-table th, .doc-table td { border:1px solid var(--border); padding:3px 8px; text-align:left; }
-#docs-body blockquote { margin:8px 0; padding:2px 12px; border-left:3px solid var(--border); color:var(--muted); }
-#docs-body code { font:12px ui-monospace, monospace; background:var(--panel); padding:0 3px; border-radius:3px; }
+#docs-body blockquote, #x-out blockquote { margin:8px 0; padding:2px 12px; border-left:3px solid var(--border); color:var(--muted); }
+#docs-body code, #x-out code { font:12px ui-monospace, monospace; background:var(--panel); padding:0 3px; border-radius:3px; }
 .doc-image { max-width:100%; border:1px solid var(--border); border-radius:4px; margin:6px 0; }
 a.srclink { color:var(--node-stroke); text-decoration:underline; cursor:pointer; }
 @media (max-width: 640px) { #docs-nav { flex-basis:140px; } }

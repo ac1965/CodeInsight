@@ -52,7 +52,7 @@ _READER = """<div id="splitter" role="separator" aria-orientation="horizontal" t
     <button id="x-run" type="button">選択中の関数を起点に切り出す</button>
     <button id="x-save" type="button" disabled>Markdownを保存</button>
     </div>
-    <pre id="x-out" aria-label="切り出し結果"></pre>
+    <div id="x-out" class="md-out" aria-label="切り出し結果"></div>
   </div>
 </section>"""
 
@@ -359,7 +359,7 @@ _BOOT = r"""
     if (!root) { $("x-out").textContent = "グラフのノードを選ぶか、シンボルを入力してください。"; return; }
     $("x-out").textContent = "読み込み中…";
     api("/api/extract", { root: root, direction: $("x-direction").value, depth: $("x-depth").value }).then(function (data) {
-      lastMarkdown = data.markdown; $("x-out").textContent = data.markdown; $("x-save").disabled = false;
+      lastMarkdown = data.markdown; renderMarkdown($("x-out"), data.markdown, ""); $("x-save").disabled = false;
     }).catch(function (e) { $("x-out").textContent = e.message; $("x-save").disabled = true; });
   };
   $("x-save").onclick = function () {
