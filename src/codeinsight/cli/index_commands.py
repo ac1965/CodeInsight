@@ -78,3 +78,27 @@ def cmd_compare_scip(args: argparse.Namespace) -> int:
 def _json(item: Comparison) -> dict:
     return {"path": item.path, "line": item.line, "name": item.symbol, "ours": item.ours, "index_definitions": [{"path": p, "line": ln} for p, ln in item.index],
             "resolution": item.reference.resolution_status.value, "confidence": item.reference.confidence.value}
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+    """呼び出しグラフの範囲から、該当する関数のソースを切り出す。"""
+
+    from codeinsight.application import NavigationService
+    from codeinsight.application.extract_service import ExtractService
+    from codeinsight.cli.common import resolve_symbol_arg
+    from codeinsight.presentation import extract_export
+
+    repository, project, index, stale = prepare_read(args)
+    navigation = NavigationService(repository)
+    root = resolve_symbol_arg(args, navigation, index, args.name, project).symbol
+    direction = "both" if args.callers and args.callees else "callers" if args.callers else "callees"
+    result = ExtractService(navigation).extract(project, index, root, direction, args.depth, args.max_items, args.max_lines)
+    renderers = {"markdown": lambda r: extract_export.to_markdown(r, not args.no_line_numbers), "text": lambda r: extract_export.to_text(r, not args.no_line_numbers), "json": extract_export.to_json}
+    output = renderers[args.format](result)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"出力しました: {args.output}（{1 + len(result.items)}件）", file=sys.stderr)
+    else:
+        print(output, end="")
+    warn_if_stale(stale)
+    return 0

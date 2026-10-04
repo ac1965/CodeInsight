@@ -31,7 +31,7 @@ from codeinsight.cli.explore import (
     reference_command,
 )
 from codeinsight.cli.graph import cmd_graph
-from codeinsight.cli.index_commands import cmd_compare_scip, cmd_import_scip
+from codeinsight.cli.index_commands import cmd_compare_scip, cmd_extract, cmd_import_scip
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
 from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
 from codeinsight.domain import SymbolKind
@@ -188,6 +188,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare_scip = add("compare-scip", "取り込んだSCIPの索引と、CodeInsight自身の参照解決を比較する（一致・食い違い・自身が解決できないもの）", cmd_compare_scip)
     compare_scip.add_argument("--limit", type=int, default=15, help="種類ごとの表示件数")
+
+    extract = add("extract", "呼び出しグラフの範囲（呼び出し先・呼び出し元を深さまで）の関数のソースを、根拠位置・解決状態つきで切り出す（コードリーディング用）", cmd_extract, ("markdown", "text", "json"), exclude=False)
+    extract.add_argument("name", help="起点の関数・メソッドの名前または修飾名")
+    extract.add_argument("--callees", action="store_true", help="呼び出し先をたどる（既定）")
+    extract.add_argument("--callers", action="store_true", help="呼び出し元をたどる（--callees と併用で両方）")
+    extract.add_argument("--depth", type=int, default=1, help="たどる深さ（既定: 1）")
+    extract.add_argument("--max-items", type=int, default=30, help="切り出す関数の上限（既定: 30）")
+    extract.add_argument("--max-lines", type=int, default=200, help="1つの関数あたりの行数の上限（既定: 200）")
+    extract.add_argument("--no-line-numbers", action="store_true", help="行番号を付けない（コードとしてそのまま使う場合）")
+    extract.add_argument("--file", help="同名のシンボルが複数ある場合に、ファイルで絞り込む")
+    extract.add_argument("-o", "--output", help="出力先ファイル（省略時は標準出力）")
 
     externals = add("externals", "外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を分類して表示する", cmd_externals)
     externals.add_argument("--category", action="append", choices=list(CATEGORY_LABELS), help="カテゴリで絞り込む")
