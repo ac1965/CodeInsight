@@ -442,7 +442,16 @@ uv run codeinsight compare-scip --project <プロジェクト>      # 一致・�
 uv run codeinsight import-scip --clear --project <プロジェクト>
 ```
 
-索引は外部ツールの結果で、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると、そのファイルは比較から除かれます。索引の版や出力が異なる場合の互換性は、実際の索引での確認が済んでいません。
+索引は外部ツールの結果で、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると、そのファイルは比較から除かれます。動作を確認したのは scip-python 0.6.6 の索引だけです（scip-clang は未確認）。
+
+`scip-python` は Node.js で動きます。システムを変更せず、利用者のディレクトリに入れる例です。
+
+```bash
+npm install --prefix ~/.local/share/codeinsight-tools/scip-python @sourcegraph/scip-python
+~/.local/share/codeinsight-tools/scip-python/node_modules/.bin/scip-python index . --project-name <名前> --output index.scip --target-only <ソースのディレクトリ>
+```
+
+生成には、対象のコードは実行されませんが、Pythonの環境（インストール済みの依存）を読みます。出力先は、対象リポジトリの外にしてください。
 
 ### 10.2 「0件」「なし」の意味
 
