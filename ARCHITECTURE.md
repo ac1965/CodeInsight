@@ -42,6 +42,7 @@ src/codeinsight/
 │   ├── risk_service.py          潜在的な問題の手がかり
 │   ├── external_service.py      外部連携の分類・副作用の候補
 │   ├── external_findings_service.py 外部ツール（SARIF）の指摘の取り込みと、古さの判定
+│   ├── external_index_service.py   外部のコード索引（SCIP）の取り込みと、自身の参照解決との比較
 │   ├── architecture_service.py  コンポーネント・層構造・循環・層の逆向き依存の候補
 │   ├── config_service.py        設定値（環境変数・CLI引数・設定ファイル・定数）
 │   ├── boundary_service.py      入口と境界（CLI・HTTP・イベント・スレッド・非同期・キャッシュ）
@@ -149,7 +150,7 @@ cli ──> ai ──────────> application
 2. `FreshnessService` が現在のファイルのハッシュと解析時のハッシュを比較し、変更されたファイルがあれば警告を出す。
 3. `NavigationService` / `SearchService` / `GraphBuilder` が結果を返し、`presentation` と `cli` が整形して出力する。
 
-## 保存データ（SQLite、スキーマバージョン6）
+## 保存データ（SQLite、スキーマバージョン7）
 
 | テーブル | 内容 |
 |---|---|
@@ -159,6 +160,7 @@ cli ──> ai ──────────> application
 | `references_` | 参照（呼び出し・継承・import等）と、解決状態・確からしさ・理由・根拠位置 |
 | `dependencies` | ファイル/モジュール間の依存（include/import）と、解決状態・根拠位置 |
 | `analysis_results` | 解析実行の履歴（解析器バージョン、リビジョン、警告、エラー） |
+| `external_indexes` ほか | 外部のコード索引（SCIP。**解析結果とは別管理**）。ツール名・版・取り込み時のファイルのハッシュ・出現箇所・シンボル情報 |
 | `external_findings` | 外部ツール（SARIF）の指摘（**解析結果とは別管理**）。ツール名・版・規則名・水準・位置・取り込み時のファイルの内容ハッシュ・取り込んだSARIFのハッシュ |
 | `explanations` | AI解説（**解析結果とは別管理**）。モデル・プロンプトと入力のハッシュ・根拠にしたファイルの内容ハッシュ・検証結果・検証状態 |
 
@@ -166,6 +168,7 @@ cli ──> ai ──────────> application
 
 AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2-2）であり、専用の `explanations` テーブルに保存する。解析結果のテーブル（シンボル・参照・依存関係）には書き込まず、再解析でも解説は消えない（根拠にしたファイルが変わると「古い解説」と示す）。
 
+* v7: `external_indexes` / `external_index_files` / `external_index_occurrences` / `external_index_symbols`（`import-scip` で取り込んだSCIPの索引）。
 * v6: `external_findings`（`import-sarif` で取り込んだ外部ツールの指摘。再解析でも消えず、ファイルが変わると「古い」と示す）。
 * v5: `projects.compile_commands_dir`（解析時に使った compile_commands.json の場所。Cの関数単位の解析が、問い合わせ時に同じ設定で再解析するため）。旧版のDBは開いた時に列を追加して移行する。
 

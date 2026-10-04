@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -122,6 +122,46 @@ CREATE TABLE IF NOT EXISTS external_findings (
     source_sha256 TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_external_findings_project ON external_findings(project_id, path, start_line);
+"""
+
+# バージョン7: 外部のコード索引（SCIP）。事実のテーブルとは分離し、ツール名・版・取り込み時のファイルのハッシュを保持する。
+V7_TABLES = """
+CREATE TABLE IF NOT EXISTS external_indexes (
+    index_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(project_id),
+    tool TEXT NOT NULL,
+    tool_version TEXT NOT NULL,
+    project_root TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    documents INTEGER NOT NULL,
+    occurrences INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS external_index_files (
+    index_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY (index_id, path)
+);
+CREATE TABLE IF NOT EXISTS external_index_occurrences (
+    index_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    start_char INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    end_char INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    roles INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_index_occ ON external_index_occurrences(index_id, path, start_line);
+CREATE TABLE IF NOT EXISTS external_index_symbols (
+    index_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    kind INTEGER NOT NULL,
+    documentation TEXT NOT NULL
+);
 """
 
 V4_TABLES = """

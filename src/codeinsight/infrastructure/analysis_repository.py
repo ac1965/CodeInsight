@@ -35,6 +35,7 @@ from codeinsight.infrastructure.schema import (
     V2_TABLES,
     V4_TABLES,
     V6_TABLES,
+    V7_TABLES,
 )
 
 _PROJECT_COLUMNS = (
@@ -115,6 +116,7 @@ class AnalysisRepository:
         connection.executescript(V2_TABLES)
         connection.executescript(V4_TABLES)
         connection.executescript(V6_TABLES)
+        connection.executescript(V7_TABLES)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
 
@@ -188,6 +190,7 @@ class AnalysisRepository:
         self._connection.execute("DELETE FROM analysis_results WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM explanations WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM external_findings WHERE project_id = ?", (project_id,))
+        self.delete_external_indexes(project_id, commit=False)
         self._connection.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
         self._commit()
 
@@ -512,6 +515,61 @@ class AnalysisRepository:
         count = self._connection.execute(query, params).rowcount
         self._commit()
         return count
+
+    # --- 外部のコード索引（SCIP。解析結果とは別に管理する） ---
+
+    def replace_external_index(self, project_id: str, meta: dict, files: dict[str, str], occurrences: Iterable[tuple], symbols: Iterable[tuple]) -> None:
+        """同じ索引（内容のハッシュが同じ）の取り込み済みデータを、置き換える。"""
+
+        self.delete_external_indexes(project_id, source_sha256=meta["source_sha256"], commit=False)
+        index_id = meta["index_id"]
+        self._connection.execute(
+            "INSERT INTO external_indexes (index_id, project_id, tool, tool_version, project_root, source_name, source_sha256, imported_at, "
+            "documents, occurrences) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (index_id, project_id, meta["tool"], meta["tool_version"], meta["project_root"], meta["source_name"], meta["source_sha256"],
+             meta["imported_at"], meta["documents"], meta["occurrences"]),
+        )
+        self._connection.executemany("INSERT INTO external_index_files (index_id, path, content_hash) VALUES (?, ?, ?)", [(index_id, p, h) for p, h in files.items()])
+        self._connection.executemany(
+            "INSERT INTO external_index_occurrences (index_id, path, start_line, start_char, end_line, end_char, symbol, roles) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ((index_id, *row) for row in occurrences),
+        )
+        self._connection.executemany(
+            "INSERT INTO external_index_symbols (index_id, symbol, display_name, kind, documentation) VALUES (?, ?, ?, ?, ?)",
+            ((index_id, *row) for row in symbols),
+        )
+        self._commit()
+
+    def list_external_indexes(self, project_id: str) -> list[sqlite3.Row]:
+        return self._connection.execute("SELECT * FROM external_indexes WHERE project_id = ? ORDER BY imported_at", (project_id,)).fetchall()
+
+    def external_index_files(self, index_id: str) -> dict[str, str]:
+        return {row["path"]: row["content_hash"] for row in self._connection.execute("SELECT path, content_hash FROM external_index_files WHERE index_id = ?", (index_id,))}
+
+    def external_index_occurrences(self, index_id: str) -> list[sqlite3.Row]:
+        return self._connection.execute(
+            "SELECT path, start_line, start_char, end_line, end_char, symbol, roles FROM external_index_occurrences WHERE index_id = ?", (index_id,)
+        ).fetchall()
+
+    def external_index_symbols(self, index_id: str) -> dict[str, tuple[str, int, str]]:
+        return {row["symbol"]: (row["display_name"], row["kind"], row["documentation"]) for row in self._connection.execute(
+            "SELECT symbol, display_name, kind, documentation FROM external_index_symbols WHERE index_id = ?", (index_id,))}
+
+    def delete_external_indexes(self, project_id: str, tool: str | None = None, source_sha256: str | None = None, commit: bool = True) -> int:
+        query, params = "SELECT index_id FROM external_indexes WHERE project_id = ?", [project_id]
+        if tool is not None:
+            query += " AND tool = ?"
+            params.append(tool)
+        if source_sha256 is not None:
+            query += " AND source_sha256 = ?"
+            params.append(source_sha256)
+        ids = [row["index_id"] for row in self._connection.execute(query, params)]
+        for index_id in ids:
+            for table in ("external_index_occurrences", "external_index_symbols", "external_index_files", "external_indexes"):
+                self._connection.execute(f"DELETE FROM {table} WHERE index_id = ?", (index_id,))
+        if commit:
+            self._commit()
+        return len(ids)
 
     # --- AnalysisResult ---
 

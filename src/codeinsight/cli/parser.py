@@ -31,6 +31,7 @@ from codeinsight.cli.explore import (
     reference_command,
 )
 from codeinsight.cli.graph import cmd_graph
+from codeinsight.cli.index_commands import cmd_compare_scip, cmd_import_scip
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
 from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
 from codeinsight.domain import SymbolKind
@@ -179,6 +180,14 @@ def build_parser() -> argparse.ArgumentParser:
     import_sarif.add_argument("file", nargs="?", help="SARIFファイル（--clear の場合は不要）")
     import_sarif.add_argument("--clear", action="store_true", help="取り込み済みの外部ツールの指摘を削除する（--tool で絞り込める）")
     import_sarif.add_argument("--tool", help="--clear の対象を、ツール名で絞り込む")
+
+    import_scip = add("import-scip", "外部ツールが生成したSCIPの索引（index.scip）を読み込み、別の区分で保存する（ツールは実行しない）", cmd_import_scip, exclude=False)
+    import_scip.add_argument("file", nargs="?", help="SCIPの索引ファイル（--clear の場合は不要）")
+    import_scip.add_argument("--clear", action="store_true", help="取り込み済みの索引を削除する（--tool で絞り込める）")
+    import_scip.add_argument("--tool", help="--clear の対象を、ツール名で絞り込む")
+
+    compare_scip = add("compare-scip", "取り込んだSCIPの索引と、CodeInsight自身の参照解決を比較する（一致・食い違い・自身が解決できないもの）", cmd_compare_scip)
+    compare_scip.add_argument("--limit", type=int, default=15, help="種類ごとの表示件数")
 
     externals = add("externals", "外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を分類して表示する", cmd_externals)
     externals.add_argument("--category", action="append", choices=list(CATEGORY_LABELS), help="カテゴリで絞り込む")

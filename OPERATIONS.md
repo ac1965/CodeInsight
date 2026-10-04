@@ -432,6 +432,18 @@ uv run codeinsight import-sarif --clear --project <プロジェクト>
 
 外部ツールの指摘は、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると「古い」と表示されます。CodeQLの結果は対象にしていません。
 
+### 10.1c 外部のコード索引（SCIP）を取り込む
+
+`scip-python`（Python）や `scip-clang`（C/C++）などが出力する `index.scip` を読み込み、CodeInsight自身の参照解決と比較できます。**索引の生成は利用者が行います**（CodeInsightは実行しません）。Pythonでは仮想環境、Cでは `compile_commands.json` など、各ツールの前提を整えてから実行してください。
+
+```bash
+uv run codeinsight import-scip index.scip --project <プロジェクト>
+uv run codeinsight compare-scip --project <プロジェクト>      # 一致・食い違い・索引だけが定義を示すもの
+uv run codeinsight import-scip --clear --project <プロジェクト>
+```
+
+索引は外部ツールの結果で、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると、そのファイルは比較から除かれます。索引の版や出力が異なる場合の互換性は、実際の索引での確認が済んでいません。
+
 ### 10.2 「0件」「なし」の意味
 
 言語によって対応範囲が異なる機能は、結果に**対象外の言語と件数を注記**します。注記が付いているときの `0件` は、「問題なし」ではなく「検査していない」です。
