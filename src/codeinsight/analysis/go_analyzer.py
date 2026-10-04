@@ -20,6 +20,7 @@ import base64
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -78,7 +79,9 @@ class _Helper:
             raise GoToolchainError("Goのツールチェーン（go）が見つからないため、Goのファイルを解析できません（go をインストールしてください）")
         digest = hashlib.sha256(HELPER_SOURCE.read_bytes()).hexdigest()[:12]
         directory = default_data_dir() / "tools"
-        binary = directory / f"goparse-{digest}"
+        # OS・CPUごとに別のファイルにする（ホストとコンテナで ~/.codeinsight を共有しても、互いの実行ファイルを使わない）
+        platform_tag = f"{platform.system()}-{platform.machine()}".lower()
+        binary = directory / f"goparse-{digest}-{platform_tag}"
         if binary.is_file():
             return binary
         directory.mkdir(parents=True, exist_ok=True)

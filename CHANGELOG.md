@@ -2,7 +2,10 @@
 
 ## Docker 対応（未リリース）
 
-* `Dockerfile`・`.dockerignore`・`make docker-build / docker-analyze / docker-serve / docker-run` を追加。解析・ビューアー・AI解説をコンテナで動かせる。対象は読み取り専用で割り当て、解析結果は名前付きボリュームに保存する。
+* `Dockerfile`・`.dockerignore`・`compose.yaml`・`.env.example`・`make docker-build / docker-analyze / docker-serve / docker-reading / docker-up / docker-run` を追加。`docker compose up` で、解析→ビューアーが動く（`--profile reading run --rm reading` で資料一式）。
+* 必要な個別ソフトウェア（git・Go 1.23・build-essential・graphviz・Chromium・make）をイメージに含めた。コンテナの中で、Goアダプター、図、資料のPDFまで動くことを確認した。
+* データの共有: 解析結果のDB（ホストの `~/.codeinsight`）をコンテナに割り当て、対象はホストと同じパスに読み取り専用で割り当てる。ホストとコンテナで、同じプロジェクトとして同じDBを読めることを確認した。存在しない場所を Docker が root の所有で作らないよう、`create_host_path: false`。
+* 修正: Goの補助プログラムの実行ファイルを、OS・CPUごとの名前にした（DBの場所を共有するホスト（macOS）とコンテナ（Linux）で、互いの実行ファイルを使ってしまうため）。
 * Ollama はコンテナに含めず、ホスト（macOS）のものを使う（`host.docker.internal:11434`）。実機（Docker Desktop）で、解析・`ai-status`・qwen3-coder による `explain` を確認した。
 * コンテナの中（`CODEINSIGHT_IN_CONTAINER=1`）に限り、ビューアーが `0.0.0.0` にバインドでき、AIの送信先 `host.docker.internal` を、この計算機として扱う。ホスト側の公開は `127.0.0.1` のみ（LAN側から届かないこと、トークンなし・不正なHostが拒否されることを確認）。
 

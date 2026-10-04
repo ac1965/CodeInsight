@@ -1,0 +1,63 @@
+# docker compose up で、対象を解析して、ビューアーを起動する（AIは、ホストの Ollama を使う）。
+#
+#   mkdir -p ~/.codeinsight reading/out                         # 初回のみ（Docker に root の所有で作らせないため）
+#   TARGET=/絶対パス/my-repo docker compose up --build        # → http://127.0.0.1:8765/ （表示されたトークン付きURLを開く）
+#   TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDFを含む）を OUT に作る
+#
+# 設定は、環境変数か、このファイルと同じ場所の .env（.env.example を参照）で渡す。
+#   TARGET   解析対象のディレクトリの絶対パス（必須）。ホストと同じパスに、読み取り専用で割り当てる（変更しない）
+#   PORT     ビューアーのポート（既定 8765。ホスト側とコンテナ側で同じ値にする。Hostの検査のため）
+#   OUT      資料の出力先（既定 ./reading/out）。ビューアーの「資料」で読める
+#   CODEINSIGHT_DATA   解析結果のDBの場所（既定 ~/.codeinsight）。ホストの uv run codeinsight と共有する（同時に書き込まない）
+#   CODEINSIGHT_UID / CODEINSIGHT_GID   コンテナの実行ユーザー（既定 1000:1000。Linux では id -u / id -g を指定）
+#   MODEL / AI_SEND   AI解説のモデルと、ソース送信の許可（AI_SEND=1。既定は送信しない）
+
+x-common: &common
+  build: .
+  image: codeinsight:local
+  user: "${CODEINSIGHT_UID:-1000}:${CODEINSIGHT_GID:-1000}"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"  # ホストの Ollama（既定のまま 127.0.0.1 で待ち受けていれば届く）
+  environment:
+    CODEINSIGHT_AI_BASE_URL: "${DOCKER_AI_URL:-http://host.docker.internal:11434/v1}"
+    CODEINSIGHT_AI_MODEL: "${MODEL:-}"
+    CODEINSIGHT_AI_ALLOW_SEND: "${AI_SEND:-}"
+    TARGET: "${TARGET:?TARGET に、解析対象のディレクトリの絶対パスを指定してください}"
+    PORT: "${PORT:-8765}"
+  volumes:
+    # 存在しない場所を、Docker が root の所有で作ってしまわないよう、作らせない（先に mkdir -p するか、make docker-up を使う）
+    - type: bind
+      source: "${CODEINSIGHT_DATA:-${HOME}/.codeinsight}"
+      target: /data
+      bind: {create_host_path: false}
+    - type: bind
+      source: "${TARGET}"
+      target: "${TARGET}"
+      read_only: true
+      bind: {create_host_path: false}
+    - type: bind
+      source: "${OUT:-./reading/out}"
+      target: /out
+      bind: {create_host_path: false}
+
+services:
+  codeinsight:
+    <<: *common
+    # 解析（変更のないファイルは再解析しない）→ビューアー。コンテナの中は 0.0.0.0、ホスト側は 127.0.0.1 にだけ公開する
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        codeinsight analyze "$$TARGET" &&
+        exec codeinsight serve --project "$$TARGET" --host 0.0.0.0 --port "$$PORT" --reading-dir /out
+    ports:
+      - "127.0.0.1:${PORT:-8765}:${PORT:-8765}"
+
+  reading:
+    <<: *common
+    profiles: ["reading"]  # docker compose up では起動しない。docker compose run --rm reading で実行する
+    working_dir: /opt/codeinsight
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        make reading TARGET="$$TARGET" OUT=/out SERVE=0 UV=ci-uv CODEINSIGHT=codeinsight
+        $${CODEINSIGHT_AI_ALLOW_SEND:+AI_SEND=1} $${CODEINSIGHT_AI_MODEL:+MODEL=$$CODEINSIGHT_AI_MODEL}

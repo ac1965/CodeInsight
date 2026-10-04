@@ -53,7 +53,7 @@ override BUILD := $(call expand_path,$(BUILD))
 COMPILE_DB  ?= $(if $(wildcard $(BUILD)/compile_commands.json),$(BUILD),)
 override COMPILE_DB := $(call expand_path,$(COMPILE_DB))
 
-.PHONY: docker-build docker-analyze docker-serve docker-run help setup test test-v test-fast check compile clean \
+.PHONY: docker-build docker-analyze docker-serve docker-reading docker-up docker-run help setup test test-v test-fast check compile clean \
         analyze status overview architecture unresolved \
         understand explain-dry explain ai-status ai-eval lint \
         reading reading-serve reading-serve-run reading-pdf reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
@@ -320,29 +320,50 @@ reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] �
 
 PORT ?= 8765
 
-# --- Docker（解析・ビューアー・AI解説をコンテナで動かす。AIは、ホストの Ollama を使う） ---
-# 対象は読み取り専用で /work/target に割り当てる（変更しない）。解析結果は、名前付きボリューム codeinsight-data に保存する。
-# ビューアーは、ホストの 127.0.0.1 にだけ公開する（コンテナの中は 0.0.0.0。トークンとHostの検査は有効）。
+# --- Docker（解析・ビューアー・AI解説・資料生成をコンテナで動かす。AIは、ホストの Ollama を使う） ---
+# * 必要な個別ソフトウェア（git・Go・build-essential・graphviz・Chromium・make）は、イメージに入れてある（Dockerfile）。
+# * 対象は、ホストと同じパスに読み取り専用で割り当てる（変更しない）。解析結果のDBは、ホストの ~/.codeinsight（CODEINSIGHT_DATA_DIR があればそこ）
+#   を割り当てて、ホストの uv run codeinsight とコンテナで共有する（同じパスなので、同じプロジェクトとして扱われる）。
+#   ※ 同時に書き込まないこと（解析は、ホストとコンテナのどちらか一方で行う）。
+# * ビューアーは、ホストの 127.0.0.1 にだけ公開する（コンテナの中は 0.0.0.0。トークンとHostの検査は有効）。
 DOCKER_IMAGE ?= codeinsight:local
-DOCKER_VOLUME ?= codeinsight-data
+DOCKER_DATA ?= $(if $(CODEINSIGHT_DATA_DIR),$(call expand_path,$(CODEINSIGHT_DATA_DIR)),$(HOME)/.codeinsight)
 DOCKER_AI_URL ?= http://host.docker.internal:11434/v1
-DOCKER_RUN = docker run --rm --add-host host.docker.internal:host-gateway \
-	-v $(DOCKER_VOLUME):/data -e CODEINSIGHT_AI_BASE_URL=$(DOCKER_AI_URL) \
+DOCKER_TARGET_ABS = $(shell cd "$(TARGET)" 2>/dev/null && pwd -P)
+DOCKER_OUT_ABS = $(abspath $(call expand_path,$(OUT)))
+DOCKER_CHECK = $(if $(TARGET),,$(error TARGET を指定してください。例: make docker-analyze TARGET=../my-repo))$(if $(DOCKER_TARGET_ABS),,$(error TARGET がディレクトリではありません: $(TARGET)))
+DOCKER_RUN = mkdir -p "$(DOCKER_DATA)" && docker run --rm --user "$$(id -u):$$(id -g)" --add-host host.docker.internal:host-gateway \
+	-v "$(DOCKER_DATA)":/data -v "$(DOCKER_TARGET_ABS)":"$(DOCKER_TARGET_ABS)":ro -e CODEINSIGHT_AI_BASE_URL=$(DOCKER_AI_URL) \
 	$(if $(MODEL),-e CODEINSIGHT_AI_MODEL=$(MODEL)) $(if $(AI_SEND),-e CODEINSIGHT_AI_ALLOW_SEND=1)
-DOCKER_TARGET = $(if $(TARGET),,$(error TARGET を指定してください。例: make docker-analyze TARGET=../my-repo)) -v "$$(cd $(TARGET) && pwd -P)":/work/target:ro
 
-docker-build: ## [Docker] イメージを作る（codeinsight:local）
+docker-build: ## [Docker] イメージを作る（codeinsight:local。必要なソフトウェアを含む）
 	docker build -t $(DOCKER_IMAGE) .
 
-docker-analyze: ## [Docker] 対象を解析して、ボリュームのDBに保存する（TARGET 必須）
-	$(DOCKER_RUN) $(DOCKER_TARGET) $(DOCKER_IMAGE) analyze /work/target
+docker-analyze: ## [Docker] 対象を解析して、ホストと共有のDBに保存する（TARGET 必須）
+	$(DOCKER_CHECK)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) analyze "$(DOCKER_TARGET_ABS)"
 
-docker-serve: ## [Docker] ビューアーを起動する（TARGET 必須。PORT=。http://127.0.0.1:PORT/ だけに公開。Ctrl-C で終了）
-	$(DOCKER_RUN) $(DOCKER_TARGET) -p 127.0.0.1:$(PORT):$(PORT) $(DOCKER_IMAGE) serve --project /work/target --host 0.0.0.0 --port $(PORT)
+docker-serve: ## [Docker] ビューアーを起動する（TARGET 必須。PORT=。OUT に資料があれば「資料」で読める。127.0.0.1 だけに公開。Ctrl-C で終了）
+	$(DOCKER_CHECK)
+	$(DOCKER_RUN) $(if $(wildcard $(DOCKER_OUT_ABS)/README.md),-v "$(DOCKER_OUT_ABS)":"$(DOCKER_OUT_ABS)":ro) -p 127.0.0.1:$(PORT):$(PORT) $(DOCKER_IMAGE) \
+	  serve --project "$(DOCKER_TARGET_ABS)" --host 0.0.0.0 --port $(PORT) $(if $(wildcard $(DOCKER_OUT_ABS)/README.md),--reading-dir "$(DOCKER_OUT_ABS)")
+
+docker-reading: ## [Docker] コンテナの中で make reading（資料一式。図・PDFも作る。ビューアーは起動しない。TARGET 必須。AI_SEND=1 MODEL= でAI解説）
+	$(DOCKER_CHECK)
+	@mkdir -p "$(DOCKER_OUT_ABS)"
+	$(DOCKER_RUN) -v "$(DOCKER_OUT_ABS)":"$(DOCKER_OUT_ABS)" -w /opt/codeinsight --entrypoint make $(DOCKER_IMAGE) reading \
+	  TARGET="$(DOCKER_TARGET_ABS)" OUT="$(DOCKER_OUT_ABS)" TOP=$(TOP) SERVE=0 UV=ci-uv CODEINSIGHT=codeinsight $(if $(AI_SEND),AI_SEND=1) $(if $(MODEL),MODEL=$(MODEL)) $(if $(PDF),PDF=$(PDF))
+
+docker-up: ## [Docker] docker compose up（TARGET 必須。解析→ビューアー。PORT=）。必要な場所を作り、実行ユーザーを合わせる
+	$(DOCKER_CHECK)
+	@mkdir -p "$(DOCKER_DATA)" "$(DOCKER_OUT_ABS)"
+	TARGET="$(DOCKER_TARGET_ABS)" OUT="$(DOCKER_OUT_ABS)" CODEINSIGHT_DATA="$(DOCKER_DATA)" PORT=$(PORT) CODEINSIGHT_UID=$$(id -u) CODEINSIGHT_GID=$$(id -g) \
+	  $(if $(MODEL),MODEL=$(MODEL)) $(if $(AI_SEND),AI_SEND=1) docker compose up --build
 
 docker-run: ## [Docker] 任意のサブコマンドを実行する（TARGET・ARGS 必須。例: ARGS="explain main --ai-model qwen3-coder:latest" AI_SEND=1）
+	$(DOCKER_CHECK)
 	$(if $(ARGS),,$(error ARGS を指定してください。例: make docker-run TARGET=../my-repo ARGS="overview"))
-	$(DOCKER_RUN) $(DOCKER_TARGET) $(DOCKER_IMAGE) $(ARGS) --project /work/target
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(ARGS) --project "$(DOCKER_TARGET_ABS)"
 
 reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビューアーを起動する（TARGET 必須。PORT=、OPEN=1。127.0.0.1 のみ・読み取り専用。Ctrl-C で終了）
 	@$(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN)

@@ -172,3 +172,28 @@ def test_make_analyze_and_make_reading_run_the_same_analysis(tmp_path: Path) -> 
     result = _make("reading", f"TARGET={target}", f"OUT={out}", f"DB={db}", "TOP=2")
     assert result.returncode == 0, result.stdout + result.stderr
     assert db.is_file() and (out / "overview.txt").read_text(encoding="utf-8").strip()
+
+
+def test_docker_targets_share_data_mount_the_target_read_only_and_publish_only_to_loopback(tmp_path: Path) -> None:
+    target = tmp_path / "t"
+    target.mkdir()
+    real = str(target.resolve())
+    data = tmp_path / "data"
+    analyze = _make("-n", "docker-analyze", f"TARGET={target}", f"DOCKER_DATA={data}").stdout
+    assert f'-v "{data}":/data' in analyze and f'-v "{real}":"{real}":ro' in analyze  # DBはホストと共有、対象は同じパスに読み取り専用
+    assert '--user "$(id -u):$(id -g)"' in analyze and f'analyze "{real}"' in analyze
+    serve = _make("-n", "docker-serve", f"TARGET={target}", "PORT=9123").stdout
+    assert "-p 127.0.0.1:9123:9123" in serve and "--host 0.0.0.0" in serve  # ホスト側は 127.0.0.1 にだけ公開
+    reading = _make("-n", "docker-reading", f"TARGET={target}", f"OUT={tmp_path / 'out'}", f"DOCKER_DATA={data}").stdout
+    assert "SERVE=0" in reading and "UV=ci-uv" in reading and "AI_SEND" not in reading  # 既定ではAIへ送信しない
+    assert _make("docker-analyze").returncode != 0  # TARGET 必須
+    assert "AI_SEND=1" in _make("-n", "docker-reading", f"TARGET={target}", f"OUT={tmp_path / 'o'}", "AI_SEND=1").stdout
+
+
+def test_compose_file_publishes_loopback_only_mounts_read_only_and_never_creates_host_paths() -> None:
+    text = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:${PORT:-8765}:${PORT:-8765}"' in text and "0.0.0.0:" not in text  # ホスト側は 127.0.0.1 のみ
+    assert "read_only: true" in text and text.count("create_host_path: false") == 3  # 対象は読み取り専用。存在しない場所を root の所有で作らせない
+    assert "${TARGET:?" in text  # TARGET は必須
+    assert "CODEINSIGHT_AI_ALLOW_SEND" in text and "AI_SEND:-" in text  # 送信の許可は、指定したときだけ
+    assert "image: ollama" not in text  # Ollama のコンテナは含めない（ホストのものを使う）

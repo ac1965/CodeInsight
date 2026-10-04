@@ -460,23 +460,36 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 * 入力は、種類・長さ・範囲を検査します（`depth` は 1〜3 など）。誤りは、ツールのエラー（`isError`）として返し、サーバーは止まりません。内部のエラーの詳細は返しません。標準出力にはプロトコルのメッセージだけを書きます（ログは標準エラー）。
 * **確認**: Claude Code（`claude -p` に `--mcp-config` で登録）から、検索 → 定義 → 呼び出し元 → 影響範囲 → 切り出しを呼び出し、結果を正しく読み取れることを確かめました（解決状態と推定の区別、`children_not_expanded` の意味、解析後に変更されたファイルの検出）。
 
-### 10.1c2 Docker で動かす（AIは、ホストの Ollama）
+### 10.1c2 Docker で動かす（`docker compose up`。AIは、ホストの Ollama）
 
-解析・ビューアー・AI解説を、コンテナで動かせます（`Dockerfile`、`make docker-*`）。**Ollama はコンテナに含めず、ホスト（macOS など）で動いているものを使います**（コンテナから `http://host.docker.internal:11434/v1` で接続。Ollama の既定の設定（127.0.0.1 で待ち受け）のままで届くことを、macOS の Docker Desktop で確認済み）。
+解析・ビューアー・AI解説・資料生成を、コンテナで動かせます（`Dockerfile`・`compose.yaml`・`make docker-*`）。
+
+* **必要な個別ソフトウェアは、すべてイメージに入れてあります**: git（変更履歴）、Go（Goアダプターの補助プログラムを作る）、build-essential（Cの標準ヘッダー）、graphviz（図）、Chromium（資料のPDF。コンテナ用に `--no-sandbox` の包み）、make（`make reading`）。ホストに入れる必要はありません。
+* **Ollama はコンテナに含めず、ホスト（macOS など）で動いているものを使います**（コンテナから `http://host.docker.internal:11434/v1`。Ollama の既定の設定（127.0.0.1 で待ち受け）のままで届くことを、macOS の Docker Desktop で確認済み）。
+* **データはホストと共有します**: 解析結果のDBは、ホストの `~/.codeinsight`（`CODEINSIGHT_DATA` / `DOCKER_DATA=` で変更可）をコンテナの `/data` に割り当てます。**対象は、ホストと同じパスに読み取り専用で割り当てる**ので、ホストの `uv run codeinsight` とコンテナは、同じプロジェクトとして同じ結果を読み書きできます（Go の補助プログラムは OS・CPU ごとに別のファイルなので、取り違えません）。同時に書き込まないでください（解析は、どちらか一方で）。出力（資料）も、ホストの `OUT` に出ます。
 
 ```bash
-make docker-build                                          # イメージを作る（codeinsight:local）
-make docker-analyze TARGET=../my-repo                      # 解析して、名前付きボリューム codeinsight-data のDBに保存する
-make docker-serve TARGET=../my-repo PORT=8765              # ビューアー。ホストの http://127.0.0.1:8765/ だけに公開する（表示されたURLを開く）
-make docker-run TARGET=../my-repo ARGS="overview"          # 任意のサブコマンド（--project は自動で付く）
+# compose（推奨）
+mkdir -p ~/.codeinsight reading/out                          # 初回のみ（Docker に root の所有で作らせないため）
+TARGET=/絶対パス/my-repo docker compose up --build           # 解析→ビューアー。表示されたトークン付きURL（http://127.0.0.1:8765/…）を開く
+TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDF）を OUT（既定 ./reading/out）に作る。ビューアーの「資料」で読める
+make docker-up TARGET=../my-repo                             # 上の up を、必要な場所の作成と実行ユーザーの指定つきで実行する
+
+# make
+make docker-build                                            # イメージを作る（codeinsight:local）
+make docker-analyze TARGET=../my-repo                        # 解析して、共有のDBに保存する
+make docker-serve TARGET=../my-repo PORT=8765                # ビューアー（OUT に資料があれば「資料」で読める）
+make docker-reading TARGET=../my-repo                        # 資料一式（make reading をコンテナの中で。ビューアーは起動しない）
+make docker-run TARGET=../my-repo ARGS="overview"            # 任意のサブコマンド（--project は自動で付く）
 make docker-run TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1 ARGS="explain main"   # AI解説（ホストの Ollama。送信の許可 AI_SEND=1 が必要）
 ```
 
-* 対象は、**読み取り専用**で `/work/target` に割り当てる（変更しない）。解析結果は、ボリュームに保存される。プロジェクトのルートは、ホストのパスではなく `/work/target` として記録される。
-* ビューアーは、コンテナの中では `0.0.0.0` で待ち受けるが（`CODEINSIGHT_IN_CONTAINER=1`。Dockerfile が設定。この環境変数がある場合に限り許可）、**ホスト側では `127.0.0.1` にだけ公開**する（LAN側のアドレスからは届かないことを確認済み）。トークンとHostの検査は、通常どおり有効。ホスト側とコンテナ側のポートは、同じ値にすること（Hostの検査のため）。
-* AIの送信先 `host.docker.internal` は、コンテナの中（`CODEINSIGHT_IN_CONTAINER=1`）に限り、この計算機として扱う（ホストとコンテナは同じ計算機のため）。それ以外の名前は、これまでどおり外部（`--allow-remote` が必要）。ソースの送信は、これまでどおり、`AI_SEND=1`（`--allow-send`）の明示的な許可が必要。
-* コンテナには、Goのツールチェーンを含めないため、Goのファイルは解析失敗として記録される。`make reading` のコンテナ版は、まだない。
-* 動的解析（`dynamic-run`）は、コンテナの中からは動かない（Docker を入れ子にしないため）。ホストで実行する。
+設定は環境変数か `.env`（`.env.example` を参照）で渡します: `TARGET`（必須・絶対パス）、`PORT`、`OUT`、`CODEINSIGHT_DATA`、`CODEINSIGHT_UID` / `CODEINSIGHT_GID`（Linux では `id -u` / `id -g`）、`MODEL`、`AI_SEND`。
+
+* ビューアーは、コンテナの中では `0.0.0.0` で待ち受けますが（`CODEINSIGHT_IN_CONTAINER=1`。Dockerfile が設定。この環境変数がある場合に限り許可）、**ホスト側では `127.0.0.1` にだけ公開**します（LAN側のアドレスからは届かないことを確認済み）。トークンとHostの検査は有効です。ホスト側とコンテナ側のポートは、同じ値にしてください（Hostの検査のため）。
+* AIの送信先 `host.docker.internal` は、コンテナの中に限り、この計算機として扱います（ホストとコンテナは同じ計算機のため）。それ以外の名前は、これまでどおり外部（`--allow-remote` が必要）。ソースの送信は、これまでどおり `AI_SEND=1`（`--allow-send`）の明示的な許可が必要で、既定では送信しません。
+* 変更履歴（`history` など）は、`.git` を含むディレクトリ（リポジトリのルート）を `TARGET` にした場合に使えます。サブディレクトリを指定すると、履歴は得られません。
+* 動的解析（`dynamic-run`）は、コンテナの中からは動きません（Docker を入れ子にしないため）。ホストで実行してください。
 
 ### 10.1d Webビューアー（`serve`）
 
