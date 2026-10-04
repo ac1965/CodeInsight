@@ -57,6 +57,7 @@ button:hover { background:var(--panel); }
 .neighbors { margin:4px 0 0; padding-left:16px; font-size:12px; }
 [hidden] { display:none !important; }
 .viewtabs button { padding:3px 12px; }
+.x-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:4px; }
 .viewtabs button.active { background:var(--hit); }
 #docs-view { flex:1 1 auto; min-height:160px; display:flex; overflow:hidden; }
 body.view-docs .toolbar, body.view-docs main { display:none; }

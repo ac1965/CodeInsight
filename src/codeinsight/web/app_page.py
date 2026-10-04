@@ -46,10 +46,12 @@ _READER = """<div id="splitter" role="separator" aria-orientation="horizontal" t
   </div>
   <div id="pane-source"><pre id="source" aria-label="選択したノードのソース"></pre></div>
   <div id="pane-extract" hidden>
+    <div class="x-controls">
     <label>範囲 <select id="x-direction"><option value="callees">呼び出し先</option><option value="callers">呼び出し元</option><option value="both">両方</option></select></label>
     <label>深さ <input id="x-depth" type="number" min="0" max="6" value="1" style="width:4em"></label>
     <button id="x-run" type="button">選択中の関数を起点に切り出す</button>
     <button id="x-save" type="button" disabled>Markdownを保存</button>
+    </div>
     <pre id="x-out" aria-label="切り出し結果"></pre>
   </div>
 </section>"""
@@ -58,6 +60,11 @@ _BOOT = r"""
 (function () {
   "use strict";
   var TOKEN = __TOKEN__;
+  // URLの # 以降（#view=reading&doc=README.md&kind=call&root=…&select=…&tab=extract）で、表示する内容を指定できる（操作説明の画像の生成にも使う）
+  var HASH = {};
+  location.hash.replace(/^#/, "").split("&").forEach(function (part) {
+    var i = part.indexOf("="); if (i > 0) { try { HASH[decodeURIComponent(part.slice(0, i))] = decodeURIComponent(part.slice(i + 1)); } catch (e) { /* 不正な指定は無視する */ } }
+  });
   history.replaceState(null, "", location.pathname);
   document.body.classList.add("app");
 
@@ -144,7 +151,7 @@ _BOOT = r"""
     // 古いリクエストの応答が、新しい描画を上書きしないようにする
     var ticket = ++drawCount;
     say("読み込み中…");
-    api("/api/graph", params).then(function (data) {
+    return api("/api/graph", params).then(function (data) {
       if (ticket !== drawCount) return;
       say(data.nodes.length + " ノード / " + data.edges.length + " 辺");
       window.renderGraph(data, { onNode: onNode });
@@ -300,13 +307,13 @@ _BOOT = r"""
     $("docs-view").hidden = name === "graph";
     $("graph-controls").hidden = name !== "graph";
     if (name === "reading") {
-      api("/api/reading", {}).then(function (data) {
+      return api("/api/reading", {}).then(function (data) {
         docs.files = data.files; buildNav(data.files);
         if (!data.available || !data.files.length) { $("docs-body").textContent = data.message || "資料がありません。make reading で作成してください。"; return; }
-        openDoc(docs.current || data.files[0].name);
+        openDoc(docs.current || HASH.doc || data.files[0].name);
       }).catch(function (e) { $("docs-body").textContent = e.message; });
     } else if (name === "help") {
-      api("/api/guide", {}).then(function (data) {
+      return api("/api/guide", {}).then(function (data) {
         var nav = $("docs-nav"); nav.textContent = "";
         if (!data.available) { $("docs-body").textContent = "使い方の資料がありません。"; return; }
         docs.guideImages = data.images;
@@ -361,12 +368,51 @@ _BOOT = r"""
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   };
 
+  // 操作説明用: 要素に番号の印を付ける（#annotate=controls|panel）
+  var GUIDE = {   // 集合 -> [番号の印の基準にする容器, 印を付ける要素...]
+    controls: ["controls", "view-graph", "q", "kind", "direction", "depth", "draw"],
+    panel: ["reader", "tab-source", "tab-extract", "reader-title", "splitter", "source"],
+    docs: ["docs-view", "docs-nav", "docs-body"]
+  };
+  function annotate(set) {
+    [].forEach.call(document.querySelectorAll(".guide-badge"), function (b) { b.remove(); });  // 配置が変わったあとにも、付け直せるようにする
+    var ids = GUIDE[set] || [], container = ids.length ? $(ids[0]) : null;
+    if (!container) return;
+    container.style.position = "relative";   // 印は、容器の中の位置で置く（画面の大きさが変わっても、要素からずれない）
+    var base = container.getBoundingClientRect(), number = 0;
+    ids.slice(1).forEach(function (id) {
+      var target = $(id); if (!target || target.offsetParent === null) return;
+      var box = target.getBoundingClientRect(), badge = document.createElement("span");
+      badge.textContent = String(++number); badge.className = "guide-badge";
+      badge.setAttribute("style", "position:absolute;z-index:50;left:" + Math.max(0, box.left - base.left - 6) + "px;top:" + (box.top - base.top - 8) + "px;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#dc2626;color:#fff;font:700 12px system-ui;box-shadow:0 0 0 2px #fff");
+      container.appendChild(badge);
+    });
+  }
+  function settle(fn) { setTimeout(fn, 1200); setTimeout(fn, 3500); }
+
   api("/api/project", {}).then(function (info) {
     $("project-name").textContent = info.name;
     $("project-stats").textContent = "  ファイル " + info.files + " / シンボル " + info.symbols + (info.stale_count ? " / 解析後に変更されたファイル " + info.stale_count + "件" : "");
-    $("kind").value = "arch"; draw();
-    // 資料（make reading の成果物）があれば、最初に資料の目次を開く。グラフ・ソース・切り出しは、そこから開ける
-    api("/api/reading", {}).then(function (data) { if (data.available && data.files.length) showView("reading"); }).catch(function () {});
+    ["kind", "direction", "depth"].forEach(function (k) { if (HASH[k]) $(k).value = HASH[k]; });
+    if (HASH.root) $("q").value = HASH.root;
+    if (!HASH.kind && !HASH.root) $("kind").value = "arch";
+    var drawn = draw();
+    if (HASH.view === "reading" || HASH.view === "help") {
+      Promise.resolve(drawn).then(function () { return showView(HASH.view); }).then(function () { settle(function () { if (HASH.annotate) annotate(HASH.annotate); }); });
+      return;
+    }
+    Promise.resolve(drawn).then(function () {
+      if (HASH.select) {
+        var node = [].filter.call(document.querySelectorAll(".node"), function (n) { return n.textContent.indexOf(HASH.select) >= 0; })[0];
+        if (node) node.dispatchEvent(new Event("click"));
+      }
+      if (HASH.tab === "extract") { tab("extract"); $("x-run").click(); }
+      settle(function () { if (HASH.annotate) annotate(HASH.annotate); });
+    });
+    if (HASH.view === undefined && !HASH.kind && !HASH.root) {
+      // 資料（make reading の成果物）があれば、最初に資料の目次を開く。グラフ・ソース・切り出しは、そこから開ける
+      api("/api/reading", {}).then(function (data) { if (data.available && data.files.length) showView("reading"); }).catch(function () {});
+    }
   }).catch(function (e) { say(e.message); });
 })();
 """

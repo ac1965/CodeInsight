@@ -206,3 +206,16 @@ def test_reading_is_unavailable_without_a_reading_dir_and_guide_images_are_white
     assert _api(httpd, "/api/reading/file?name=README.md")[0] == 404
     for name in ("../../server.py", "..%2f..%2fserver.py", "a/b.png", "x.py", "nothing.png"):
         assert _api(httpd, f"/api/guide/image?name={name}")[0] == 404, name
+
+
+def test_guide_is_bundled_and_every_image_it_references_exists(server) -> None:
+    import re
+
+    httpd, _ = server
+    status, guide = _api(httpd, "/api/guide")
+    assert status == 200 and guide["available"] and "# ビューアーの使い方" in guide["text"]
+    referenced = re.findall(r"!\[[^\]]*\]\(images/([^)]+)\)", guide["text"])
+    assert referenced and set(referenced) <= set(guide["images"])  # 説明が参照する画像が、すべて同梱されている
+    status, headers, body = _request(httpd, f"/api/guide/image?name={referenced[0]}", headers={TOKEN_HEADER: httpd.token})
+    assert status == 200 and headers["Content-Type"] == "image/png" and body.startswith(b"\x89PNG")
+    assert _request(httpd, f"/api/guide/image?name={referenced[0]}")[0] == 401  # 画像も、トークンが必要

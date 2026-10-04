@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## ビューアーの使い方（未リリース）
+
+* 画像つきの操作説明（`src/codeinsight/web/guide/VIEWER.md`）を、ビューアーの「使い方」で読めるようにし、OPERATIONS.md からも参照する。画像は、実際のビューアーから `scripts/make_guide_images.py`（ヘッドレスのChrome系ブラウザ）で生成する。番号の印は、ビューアーの URL の `#annotate=` で付け、手作業の加工は不要。URLの `#` 以降（`view`・`kind`・`root`・`select`・`tab`・`doc`）で、表示する内容を指定できる。
+
 ## ビューアーの「資料」画面（未リリース）
 
 * ビューアーに「資料」画面を追加。`make reading` の成果物（目次・全体像・アーキテクチャ・読解カード・AI解説など）を、一覧から選んで読める。Markdownは整形して表示し（HTMLは解釈しない。外部のURLはリンクにしない）、本文中の `ファイル:行` は、ソース表示へのリンクになる。出力先の外・ログ・PDF・シンボリックリンクは読めない（一覧にあるものだけを読む）。資料があれば、最初に資料を開く。`serve --reading-dir` を追加し、`make reading` が渡す。
