@@ -12,6 +12,7 @@ class Language(enum.Enum):
     CPP = "cpp"
     PYTHON = "python"
     ELISP = "elisp"
+    GO = "go"
     UNKNOWN = "unknown"
 
 

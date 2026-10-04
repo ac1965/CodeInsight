@@ -27,6 +27,7 @@ class SymbolKind(enum.Enum):
     LOCAL_VARIABLE = "local_variable"  # C
     CLASS_VARIABLE = "class_variable"  # Python
     NAMESPACE = "namespace"  # C++
+    INTERFACE = "interface"  # Go
 
 
 @dataclass

@@ -1,5 +1,6 @@
 from codeinsight.analysis.c_analyzer import CAnalyzer, CppAnalyzer
 from codeinsight.analysis.elisp_analyzer import ElispAnalyzer
+from codeinsight.analysis.go_analyzer import GoAnalyzer
 from codeinsight.analysis.language import detect_language
 from codeinsight.analysis.language_adapter import FileAnalysis, LanguageAdapter
 from codeinsight.analysis.python_analyzer import PythonAnalyzer
@@ -9,6 +10,7 @@ __all__ = [
     "CAnalyzer",
     "CppAnalyzer",
     "ElispAnalyzer",
+    "GoAnalyzer",
     "PythonAnalyzer",
     "FileAnalysis",
     "LanguageAdapter",

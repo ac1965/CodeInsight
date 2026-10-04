@@ -15,6 +15,7 @@ class ProjectConfiguration:
         ".venv",
         "venv",
         "node_modules",
+        "vendor",
         "__pycache__",
         ".mypy_cache",
         ".pytest_cache",

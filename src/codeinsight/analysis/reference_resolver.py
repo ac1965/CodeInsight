@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from codeinsight.analysis.go_analyzer import KEY_GO, KEY_GO_IMPORT, KEY_GO_METHOD
 from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL
 from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
@@ -95,6 +96,20 @@ class ReferenceResolver:
                 self._el_by_name[symbol.name].append(symbol)
                 if symbol.kind == SymbolKind.STRUCT:
                     self._el_structs[symbol.name].append(symbol)
+        # Go: 修飾名（import パス.名前 / import パス.型.メソッド）、メソッド名、パッケージごとのファイル
+        self._go_by_qname: dict[str, list[Symbol]] = defaultdict(list)
+        self._go_methods: dict[str, list[Symbol]] = defaultdict(list)
+        self._go_package_files: dict[str, dict[str, Symbol]] = defaultdict(dict)
+        for symbol in symbols:
+            if self._language_of(symbol.file_id) != Language.GO:
+                continue
+            if symbol.kind == SymbolKind.MODULE:
+                package, _, file_name = symbol.qualified_name.rpartition("/")
+                self._go_package_files[package][file_name] = symbol
+            else:
+                self._go_by_qname[symbol.qualified_name].append(symbol)
+                if symbol.kind == SymbolKind.METHOD:
+                    self._go_methods[symbol.name].append(symbol)
         self._py_suffix_index: dict[str, list[Symbol]] | None = None
         self._py_modules = {
             qn: [s for s in group if s.kind == SymbolKind.MODULE]
@@ -182,6 +197,25 @@ class ReferenceResolver:
             self._resolve_python_dependency(dependency)
         elif language == Language.ELISP:
             self._resolve_elisp_dependency(dependency)
+        elif language == Language.GO:
+            self._resolve_go_dependency(dependency)
+
+    def _resolve_go_dependency(self, dependency: Dependency) -> None:
+        """プロジェクト内のパッケージ（ディレクトリ）への import を、パッケージのファイルに結び付ける。
+
+        パッケージは複数のファイルからなるため、パッケージ名のファイル（無ければ、名前順で先頭のファイル）を代表にし、推定とする。
+        """
+
+        path = (dependency.target_key or "").removeprefix(KEY_GO_IMPORT)
+        files = self._go_package_files.get(path)
+        if not files:
+            self._set(dependency, ResolutionStatus.UNRESOLVED, "解析対象のパッケージに、そのimportパスのファイルが見つからない（除外・未解析・別のモジュール）")
+            return
+        short = path.rsplit("/", 1)[-1] + ".go"
+        representative = files.get(short) or files[sorted(files)[0]]
+        dependency.target_file_id = representative.file_id
+        note = "" if len(files) == 1 else f"パッケージは{len(files)}個のファイルからなる。代表として {sorted(files)[0] if short not in files else short} に結び付けた"
+        self._set(dependency, ResolutionStatus.RESOLVED, note, Confidence.CONFIRMED if len(files) == 1 else Confidence.INFERRED)
 
     def _resolve_elisp_dependency(self, dependency: Dependency) -> None:
         """`(require 'feature)` を、featureと同じ名前のファイルに結び付ける（`(provide)` の内容は確認していない）。"""
@@ -246,7 +280,9 @@ class ReferenceResolver:
                 reference.resolution_status = ResolutionStatus.UNRESOLVED
             return
         language = self._language_of(source.file_id)
-        if language in (Language.C, Language.CPP):
+        if language == Language.GO:
+            self._resolve_go(reference)
+        elif language in (Language.C, Language.CPP):
             self._resolve_c(reference)
         elif language == Language.PYTHON:
             self._resolve_python(reference)
@@ -276,6 +312,53 @@ class ReferenceResolver:
             self._set(reference, ResolutionStatus.AMBIGUOUS, "同名の定義が複数ある（再定義・複数の cl-defmethod・条件付きの定義）")
         else:
             self._set(reference, ResolutionStatus.EXTERNAL, "プロジェクト内に定義がない（Emacs本体・他のパッケージ、または動的に定義）")
+
+    def _resolve_go(self, reference: Reference) -> None:
+        key = reference.target_key or ""
+        if key.startswith(KEY_GO_METHOD):
+            self._go_method_by_name(reference, key[len(KEY_GO_METHOD):], "レシーバーの型を静的に確定できないため、同名のメソッドの一致による解決")
+            return
+        qualified = key.removeprefix(KEY_GO)
+        matches = self._go_by_qname.get(qualified, [])
+        kind = reference.reference_kind
+        if kind == ReferenceKind.INHERITANCE:
+            types = [s for s in matches if s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF)]
+            if len(types) == 1:
+                self._resolved(reference, types[0], "埋め込まれた型")
+            else:
+                self._set(reference, ResolutionStatus.UNRESOLVED, "埋め込まれた型を、解析対象の中に見つけられない")
+            return
+        callable_matches = [s for s in matches if s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)]
+        if len(callable_matches) == 1:
+            self._resolved(reference, callable_matches[0])
+            return
+        if len(callable_matches) > 1:
+            self._set(reference, ResolutionStatus.AMBIGUOUS, "同じ修飾名の定義が複数ある（ビルドタグによる切り替えなど）")
+            return
+        type_matches = [s for s in matches if s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF)]
+        if type_matches:
+            self._resolved(reference, type_matches[0], "型変換（関数の呼び出しではない）", Confidence.INFERRED)
+            return
+        # メソッドの呼び出しで、型にメソッドが見つからない: 埋め込みで引き継いだメソッド・インターフェース経由・外部の型の可能性
+        owner, _, method = qualified.rpartition(".")
+        if owner and owner in self._go_by_qname and any(s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF) for s in self._go_by_qname[owner]):
+            owner_kind = next(s.kind for s in self._go_by_qname[owner] if s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF))
+            reason = "インターフェース経由の呼び出し。実装は複数ありうる" if owner_kind == SymbolKind.INTERFACE else "型自身にメソッドが無い（埋め込みで引き継いだメソッドの可能性）。同名のメソッドの一致による解決"
+            self._go_method_by_name(reference, method, reason, same_package=owner.rpartition(".")[0])
+            return
+        self._set(reference, ResolutionStatus.UNRESOLVED, "解析対象の中に、同じパッケージの関数が見つからない（関数型の変数・外部の定義・ビルドタグの可能性）")
+
+    def _go_method_by_name(self, reference: Reference, name: str, reason: str, same_package: str | None = None) -> None:
+        candidates = self._go_methods.get(name, [])
+        if same_package:
+            local = [s for s in candidates if s.qualified_name.startswith(same_package + ".")]
+            candidates = local or candidates
+        if len(candidates) == 1:
+            self._resolved(reference, candidates[0], reason, Confidence.INFERRED)
+        elif len(candidates) > 1:
+            self._set(reference, ResolutionStatus.AMBIGUOUS, f"同名のメソッドが{len(candidates)}個ある。{reason}")
+        else:
+            self._set(reference, ResolutionStatus.EXTERNAL, "プロジェクト内に同名のメソッドが無い（標準・外部ライブラリの型のメソッド）")
 
     def _resolve_c(self, reference: Reference) -> None:
         key = reference.target_key or ""
