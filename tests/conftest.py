@@ -79,3 +79,11 @@ def layered_dir() -> Path:
 @pytest.fixture
 def python_boundary_dir() -> Path:
     return FIXTURES_DIR / "python_boundary"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_environment(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """テストが、利用者の解析結果DB（~/.codeinsight）に書き込んだり、`make reading` でビューアーを起動して待ち続けたりしない。"""
+
+    monkeypatch.setenv("CODEINSIGHT_DATA_DIR", str(tmp_path_factory.mktemp("data")))
+    monkeypatch.setenv("SERVE", "0")

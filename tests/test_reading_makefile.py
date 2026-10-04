@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,13 +13,6 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 pytestmark = pytest.mark.skipif(shutil.which("make") is None or shutil.which("uv") is None, reason="make / uv が必要")
-
-
-@pytest.fixture(autouse=True)
-def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """解析結果のDBは、make analyze と共有する既定のDBになるため、テストでは利用者のDBを使わない。"""
-
-    monkeypatch.setenv("CODEINSIGHT_DATA_DIR", str(tmp_path / "data"))
 
 
 def _make(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
@@ -139,11 +133,11 @@ def test_paths_with_spaces_are_refused_clearly(tmp_path: Path) -> None:
     assert result.returncode == 2 and "空白は使えません" in result.stdout + result.stderr
 
 
-def test_make_reading_shares_the_analyze_db_and_serves_by_default(tmp_path: Path) -> None:
+def test_make_reading_shares_the_analyze_db_and_serves_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target"
     shutil.copytree(FIXTURES / "layered", target)
     out = tmp_path / "out"
-    data = tmp_path / "data"  # autouse の CODEINSIGHT_DATA_DIR
+    data = Path(os.environ["CODEINSIGHT_DATA_DIR"])  # conftest の autouse が、テストごとに隔離したDBの場所
     # 解析結果が無ければ、ビューアーを起動せずに案内して終了する
     missing = _make("reading-serve-run", f"TARGET={target}", f"OUT={out}")
     assert missing.returncode == 2 and "make analyze" in missing.stdout + missing.stderr
@@ -157,6 +151,7 @@ def test_make_reading_shares_the_analyze_db_and_serves_by_default(tmp_path: Path
     dry = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "PORT=9123", "OPEN=1")
     assert "serve" in dry.stdout and "--port 9123" in dry.stdout and "--open" in dry.stdout and f"--project {target}" in dry.stdout
     # 既定（SERVE の指定なし）では、ビューアーを起動する。SERVE=0 なら、資料を作って終わる
+    monkeypatch.delenv("SERVE")  # conftest が、他のテストで起動しないよう設定しているもの
     default = _make("-n", "reading", f"TARGET={target}", f"OUT={out}")
     assert 'if [ "1" != "0" ]' in default.stdout and "reading-serve-run" in default.stdout
     off = _make("-n", "reading", f"TARGET={target}", f"OUT={out}", "SERVE=0")
