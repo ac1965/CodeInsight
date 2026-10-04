@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeinsight.analysis import CAnalyzer, ElispAnalyzer, PythonAnalyzer, SymbolExtractor
+from codeinsight.analysis import CAnalyzer, CppAnalyzer, ElispAnalyzer, PythonAnalyzer, SymbolExtractor
 from codeinsight.domain import Language
 
 
@@ -15,6 +15,7 @@ def build_symbol_extractor(compile_commands_dir: Path | None = None) -> SymbolEx
     return SymbolExtractor(
         {
             Language.C: CAnalyzer(compile_commands_dir=compile_commands_dir),
+            Language.CPP: CppAnalyzer(compile_commands_dir=compile_commands_dir),
             Language.PYTHON: PythonAnalyzer(),
             Language.ELISP: ElispAnalyzer(),
         }

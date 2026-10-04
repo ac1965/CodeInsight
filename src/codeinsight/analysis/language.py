@@ -6,7 +6,14 @@ from codeinsight.domain import Language
 
 _EXTENSION_TO_LANGUAGE: dict[str, Language] = {
     ".c": Language.C,
-    ".h": Language.C,
+    ".h": Language.C,  # C++のヘッダーも `.h` の場合があるが、拡張子だけでは区別できない（C++の解析は、`.hpp`・`.hh`・`.hxx` と、`.cc`・`.cpp`・`.cxx`）
+    ".cc": Language.CPP,
+    ".cpp": Language.CPP,
+    ".cxx": Language.CPP,
+    ".c++": Language.CPP,
+    ".hpp": Language.CPP,
+    ".hh": Language.CPP,
+    ".hxx": Language.CPP,
     ".py": Language.PYTHON,
     ".pyi": Language.PYTHON,
     ".el": Language.ELISP,

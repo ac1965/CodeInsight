@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from codeinsight.analysis.ids import KEY_SYSTEM_HEADER
+from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL
 from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
     KEY_EXPORT,
@@ -79,7 +79,7 @@ class ReferenceResolver:
         self._py_by_qname: dict[str, list[Symbol]] = defaultdict(list)
         for symbol in symbols:
             language = self._language_of(symbol.file_id)
-            if language == Language.C and symbol.usr:
+            if language in (Language.C, Language.CPP) and symbol.usr:
                 self._by_usr[symbol.usr].append(symbol)
             elif language == Language.PYTHON:
                 self._py_by_qname[symbol.qualified_name].append(symbol)
@@ -167,7 +167,7 @@ class ReferenceResolver:
                 return
             dependency.resolution_status = ResolutionStatus.UNRESOLVED
             return
-        if language == Language.C:
+        if language in (Language.C, Language.CPP):
             target = self._files_by_path.get(dependency.target_key)
             if target is None:
                 self._set(
@@ -246,7 +246,7 @@ class ReferenceResolver:
                 reference.resolution_status = ResolutionStatus.UNRESOLVED
             return
         language = self._language_of(source.file_id)
-        if language == Language.C:
+        if language in (Language.C, Language.CPP):
             self._resolve_c(reference)
         elif language == Language.PYTHON:
             self._resolve_python(reference)
@@ -279,11 +279,25 @@ class ReferenceResolver:
 
     def _resolve_c(self, reference: Reference) -> None:
         key = reference.target_key or ""
+        if key.startswith(KEY_TEMPLATE):
+            name = key[len(KEY_TEMPLATE):]
+            matches = [s for s in self._symbols_by_id.values() if s.qualified_name == name and s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)
+                       and self._language_of(s.file_id) == Language.CPP]
+            if len(matches) == 1:
+                self._resolved(reference, matches[0], "関数テンプレートの特殊化。修飾名の一致による解決（特殊化ごとの定義は区別しない）", Confidence.INFERRED)
+            elif len(matches) > 1:
+                self._set(reference, ResolutionStatus.AMBIGUOUS, "同じ修飾名の定義が複数ある（オーバーロード・特殊化）")
+            else:
+                self._external(reference)
+            return
+        virtual = key.endswith(KEY_VIRTUAL)
+        if virtual:
+            key = key[: -len(KEY_VIRTUAL)]
         system_header = key.endswith(KEY_SYSTEM_HEADER)
         candidates = self._by_usr.get(key[: -len(KEY_SYSTEM_HEADER)] if system_header else key, [])
         kind = reference.reference_kind
         if kind in (ReferenceKind.CALL, ReferenceKind.FUNCTION_REF):
-            definitions = [s for s in candidates if s.kind == SymbolKind.FUNCTION]
+            definitions = [s for s in candidates if s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)]
             declarations = [s for s in candidates if s.kind == SymbolKind.FUNCTION_DECLARATION]
             if system_header:
                 # システムヘッダーで宣言された関数（標準ライブラリなど）。プロジェクトの `.c` 内のプロトタイプ宣言は、解決先にしない。
@@ -300,13 +314,23 @@ class ReferenceResolver:
                         "システムヘッダーで宣言された関数（定義はプロジェクトの外）",
                     )
                 return
-            if len(definitions) == 1:
+            if len(definitions) == 1 and virtual:
+                self._resolved(
+                    reference, definitions[0],
+                    "仮想関数の呼び出し。実際の呼び出し先は、派生クラスのオーバーライドになりうる", Confidence.INFERRED,
+                )
+            elif len(definitions) == 1:
                 self._resolved(reference, definitions[0])
             elif len(definitions) > 1:
                 self._set(
                     reference,
                     ResolutionStatus.AMBIGUOUS,
                     "同一シンボルの定義が複数のファイルにある",
+                )
+            elif declarations and virtual:
+                self._resolved(
+                    reference, declarations[0],
+                    "仮想関数の呼び出し（宣言のみ確認できた）。実際の呼び出し先は、派生クラスのオーバーライドになりうる", Confidence.INFERRED,
                 )
             elif declarations:
                 self._resolved(
@@ -326,7 +350,7 @@ class ReferenceResolver:
                 s
                 for s in candidates
                 if s.kind
-                in (SymbolKind.STRUCT, SymbolKind.UNION, SymbolKind.ENUM, SymbolKind.TYPEDEF)
+                in (SymbolKind.STRUCT, SymbolKind.UNION, SymbolKind.ENUM, SymbolKind.TYPEDEF, SymbolKind.CLASS)
             ]
         if len(matches) == 1:
             self._resolved(reference, matches[0])

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import clang.cindex as cindex
 
-from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, IdAllocator, build_symbol
+from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL, IdAllocator, build_symbol
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
 from codeinsight.domain import (
     Dependency,
@@ -158,8 +158,57 @@ _TYPE_DECL_KINDS = frozenset(
         cindex.CursorKind.UNION_DECL,
         cindex.CursorKind.ENUM_DECL,
         cindex.CursorKind.TYPEDEF_DECL,
+        cindex.CursorKind.CLASS_DECL,
+        cindex.CursorKind.CLASS_TEMPLATE,
+        cindex.CursorKind.TYPE_ALIAS_DECL,
     }
 )
+
+_CLASS_KINDS = frozenset({cindex.CursorKind.CLASS_DECL, cindex.CursorKind.CLASS_TEMPLATE})
+_METHOD_KINDS = frozenset({cindex.CursorKind.CXX_METHOD, cindex.CursorKind.CONSTRUCTOR, cindex.CursorKind.DESTRUCTOR, cindex.CursorKind.CONVERSION_FUNCTION})
+_CALLABLE_KINDS = frozenset({cindex.CursorKind.FUNCTION_DECL, cindex.CursorKind.FUNCTION_TEMPLATE, *_METHOD_KINDS})
+_CPP_DEFAULT_ARGS = ["-x", "c++", "-std=c++17"]
+
+
+def _cpp_qualified_name(cursor: cindex.Cursor) -> str:
+    """C++の修飾名（意味上の親の名前空間・クラスで修飾。無名の名前空間は含めない）。"""
+
+    parts = [cursor.spelling or "<anonymous>"]
+    semantic = cursor.semantic_parent
+    while semantic is not None and semantic.kind != cindex.CursorKind.TRANSLATION_UNIT:
+        if semantic.spelling:
+            parts.append(semantic.spelling)
+        semantic = semantic.semantic_parent
+    return "::".join(reversed(parts))
+
+
+def _cxx_include_args() -> list[str]:
+    """コンパイラが使うC++標準ライブラリのヘッダーの場所（`<vector>` など）。コンパイラの設定値の問い合わせだけで、対象のコードは扱わない。
+
+    pipで入るlibclangはC++標準ライブラリの場所を知らないため、`clang++`/`g++` に空の入力を前処理させて検索パスを得る（読み取り専用）。
+    """
+
+    for compiler in ("clang++", "g++", "c++"):
+        try:
+            completed = subprocess.run([compiler, "-E", "-x", "c++", "-v", "-"], input="", capture_output=True, text=True, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        paths: list[str] = []
+        active = False
+        for line in completed.stderr.splitlines():
+            if line.startswith("#include <...> search starts here"):
+                active = True
+            elif line.startswith("End of search list"):
+                break
+            elif active and line.startswith(" "):
+                path = line.strip().replace(" (framework directory)", "")
+                if "(framework directory)" not in line and Path(path).is_dir():
+                    paths += ["-isystem", path]
+        if paths:
+            return paths
+    return []
 
 _TAG_KINDS = {
     cindex.CursorKind.STRUCT_DECL: SymbolKind.STRUCT,
@@ -210,6 +259,7 @@ class CAnalyzer:
     """
 
     language = Language.C
+    _is_cpp = False
 
     def __init__(self, compile_commands_dir: Path | None = None) -> None:
         self._compilation_database: cindex.CompilationDatabase | None = None
@@ -224,7 +274,11 @@ class CAnalyzer:
         self._listed: set[str] | None = None
         self._includers: dict[str, list[tuple[Path, str]]] | None = None
         self._system_args = _system_include_args()
-        self._default_args = [*self._system_args, *_DEFAULT_ARGS]
+        if self._is_cpp:
+            self._system_args = [*self._system_args, *_cxx_include_args()]
+            self._default_args = [*self._system_args, *_CPP_DEFAULT_ARGS]
+        else:
+            self._default_args = [*self._system_args, *_DEFAULT_ARGS]
 
     def parse(self, unit: SourceUnit, result: FileAnalysis) -> cindex.TranslationUnit | None:
         """ファイルを構文解析する（解析時にも、関数単位の問い合わせ時にも同じ設定で使う）。
@@ -261,9 +315,21 @@ class CAnalyzer:
             result.errors.append(f"構文解析に失敗しました: {exc}")
             return None
 
-        def own_diagnostic(diag: cindex.Diagnostic) -> bool:
-            """取り込む側の文脈で解析した場合、ヘッダー自身の診断だけを、このファイルの成否に関わるものとして扱う。"""
+        def in_system_header(diag: cindex.Diagnostic) -> bool:
+            try:
+                return bool(diag.location.is_in_system_header)
+            except (AttributeError, ValueError):
+                return False
 
+        def own_diagnostic(diag: cindex.Diagnostic) -> bool:
+            """取り込む側の文脈で解析した場合、ヘッダー自身の診断だけを、このファイルの成否に関わるものとして扱う。
+
+            システムヘッダーの中のエラー（libclangの版と、新しい標準ライブラリ・SDKの食い違いなど）は、対象のファイル自身の失敗とは
+            しない。件数を警告に記録し、標準ライブラリの型・関数の解決が不完全になりうることを示す。
+            """
+
+            if in_system_header(diag):
+                return False
             if parse_path == absolute_path:
                 return True
             location_file = diag.location.file
@@ -280,11 +346,19 @@ class CAnalyzer:
             return None
 
         outside = 0
+        system_errors = 0
         for diag in translation_unit.diagnostics:
-            if not own_diagnostic(diag):
+            if in_system_header(diag):
+                system_errors += diag.severity >= cindex.Diagnostic.Error
+            elif not own_diagnostic(diag):
                 outside += diag.severity >= cindex.Diagnostic.Error
             elif diag.severity == cindex.Diagnostic.Warning:
                 result.warnings.append(f"{diag.location}: {diag.spelling}")
+        if system_errors:
+            result.warnings.append(
+                f"システムヘッダーの中にエラーが{system_errors}件ありました（libclangの版と、標準ライブラリ・SDKの版の食い違いなど）。"
+                "このファイルの解析は続けましたが、標準ライブラリの型・関数の解決が不完全な可能性があります。"
+            )
         if outside:
             result.warnings.append(f"取り込む側の{parse_path.name}の解析で、ヘッダー以外の場所に{outside}件のエラーがありました（このヘッダーの結果には含めていません）。")
         return translation_unit
@@ -302,6 +376,7 @@ class CAnalyzer:
         seen_locations: set[tuple[SymbolKind, str, int, int]] = set()
         callee_locations: set[tuple[int, int]] = set()
         symbols_by_id: dict[str, Symbol] = {}
+        symbols_by_usr: dict[str, Symbol] = {}  # C++: クラスの外で定義されたメソッドの親（クラス・名前空間）を探すため
 
         def in_target_file(cursor: cindex.Cursor) -> bool:
             location_file = cursor.location.file
@@ -351,6 +426,13 @@ class CAnalyzer:
                 self._collect_call(cursor, source, callee_locations, add_reference)
             elif kind == cindex.CursorKind.DECL_REF_EXPR:
                 self._collect_decl_ref(cursor, source, callee_locations, add_reference)
+            elif kind == cindex.CursorKind.CXX_BASE_SPECIFIER:
+                base = cursor.referenced
+                usr = base.get_usr() if base is not None else ""
+                if usr:
+                    add_reference(ReferenceKind.INHERITANCE, cursor, source, base.spelling, usr, ResolutionStatus.UNRESOLVED)
+                else:
+                    add_reference(ReferenceKind.INHERITANCE, cursor, source, cursor.spelling, None, ResolutionStatus.UNRESOLVED, "基底クラスを静的に確定できない（テンプレートの引数など）")
             elif kind == cindex.CursorKind.TYPE_REF:
                 referenced = cursor.referenced
                 if referenced is not None and referenced.kind in _TYPE_DECL_KINDS:
@@ -369,7 +451,7 @@ class CAnalyzer:
             for child in cursor.get_children():
                 if not in_target_file(child):
                     continue
-                symbol = self._build_symbol(ids, unit.file_id, child, parent_symbol)
+                symbol = self._build_symbol(ids, unit.file_id, child, parent_symbol, symbols_by_usr)
                 if symbol is None:
                     collect_reference(child, parent_symbol)
                     visit(child, parent_symbol)
@@ -383,6 +465,8 @@ class CAnalyzer:
                 seen_locations.add(location_key)
                 result.symbols.append(symbol)
                 symbols_by_id[symbol.symbol_id] = symbol
+                if symbol.usr:
+                    symbols_by_usr.setdefault(symbol.usr, symbol)
                 visit(child, symbol)
 
         self._collect_includes(translation_unit, unit, project_root, in_target_file, ids, result)
@@ -473,6 +557,20 @@ class CAnalyzer:
         return usr
 
     def _collect_call(self, cursor, source, callee_locations, add_reference) -> None:
+        if self._is_cpp:
+            # C++: メンバ関数・コンストラクタ・演算子の呼び出しは、呼び出し式が参照する宣言から、呼び出し先を特定する。
+            referenced = cursor.referenced
+            if referenced is not None and referenced.kind in _CALLABLE_KINDS:
+                usr = self._function_key(referenced)
+                if usr and referenced.kind == cindex.CursorKind.FUNCTION_DECL and referenced.get_num_template_arguments() > 0 and not usr.endswith(KEY_SYSTEM_HEADER):
+                    usr = KEY_TEMPLATE + _cpp_qualified_name(referenced)  # 関数テンプレートの特殊化
+                if usr:
+                    if referenced.kind in _METHOD_KINDS and referenced.is_virtual_method():
+                        usr += KEY_VIRTUAL
+                    for node in cursor.get_children():
+                        callee_locations.add((node.extent.start.line, node.extent.start.column))
+                    add_reference(ReferenceKind.CALL, cursor, source, referenced.spelling, usr, ResolutionStatus.UNRESOLVED)
+                    return
         callee = self._callee_chain(cursor)
         if callee is None:
             return
@@ -608,6 +706,7 @@ class CAnalyzer:
         file_id: str,
         cursor: cindex.Cursor,
         parent_symbol: Symbol | None,
+        symbols_by_usr: dict[str, Symbol] | None = None,
     ) -> Symbol | None:
         kind = self._map_kind(cursor)
         if kind is None:
@@ -615,6 +714,14 @@ class CAnalyzer:
         name = cursor.spelling or "<anonymous>"
         parent_qualified = parent_symbol.qualified_name if parent_symbol else None
         qualified_name = f"{parent_qualified}::{name}" if parent_qualified else name
+        base_classes: tuple[str, ...] = ()
+        if self._is_cpp:
+            # クラスの外で定義されたメソッド（`void A::f() {}`）は、意味上の親（クラス・名前空間）の名前で修飾し、親のシンボルに結び付ける。
+            qualified_name = _cpp_qualified_name(cursor)
+            if parent_symbol is None and cursor.semantic_parent is not None and symbols_by_usr:
+                parent_symbol = symbols_by_usr.get(cursor.semantic_parent.get_usr() or "")
+            if cursor.kind in _CLASS_KINDS:
+                base_classes = tuple(c.spelling for c in cursor.get_children() if c.kind == cindex.CursorKind.CXX_BASE_SPECIFIER)
         extent = cursor.extent
         return build_symbol(
             ids,
@@ -627,6 +734,7 @@ class CAnalyzer:
             parent=parent_symbol,
             usr=cursor.get_usr() or None,
             summary=_first_line(cursor.brief_comment),
+            base_classes=base_classes,
         )
 
     def _map_kind(self, cursor: cindex.Cursor) -> SymbolKind | None:
@@ -639,18 +747,44 @@ class CAnalyzer:
             )
         if ck in _TAG_KINDS:
             return _TAG_KINDS[ck] if cursor.is_definition() else None
-        if ck == cindex.CursorKind.TYPEDEF_DECL:
+        if ck in (cindex.CursorKind.TYPEDEF_DECL, cindex.CursorKind.TYPE_ALIAS_DECL):
             return SymbolKind.TYPEDEF
+        if self._is_cpp:
+            if ck in _CLASS_KINDS:
+                return SymbolKind.CLASS if cursor.is_definition() else None
+            if ck == cindex.CursorKind.NAMESPACE:
+                return SymbolKind.NAMESPACE
+            if ck in _METHOD_KINDS or ck == cindex.CursorKind.FUNCTION_TEMPLATE:
+                in_class = cursor.semantic_parent is not None and cursor.semantic_parent.kind in _CLASS_KINDS | {cindex.CursorKind.STRUCT_DECL}
+                if not cursor.is_definition():
+                    return SymbolKind.FUNCTION_DECLARATION
+                return SymbolKind.METHOD if in_class or ck in _METHOD_KINDS else SymbolKind.FUNCTION
         if ck == cindex.CursorKind.MACRO_DEFINITION:
             return SymbolKind.MACRO
         if ck == cindex.CursorKind.VAR_DECL:
             semantic_parent = cursor.semantic_parent
             if (
                 semantic_parent is not None
-                and semantic_parent.kind == cindex.CursorKind.TRANSLATION_UNIT
+                and semantic_parent.kind in (cindex.CursorKind.TRANSLATION_UNIT, cindex.CursorKind.NAMESPACE)
             ):
                 if cursor.storage_class == cindex.StorageClass.STATIC:
                     return SymbolKind.STATIC_VARIABLE
                 return SymbolKind.GLOBAL_VARIABLE
             return SymbolKind.LOCAL_VARIABLE
         return None
+
+
+class CppAnalyzer(CAnalyzer):
+    """C++のシンボル抽出器（libclang）。Cと同じ仕組みで、クラス・名前空間・メソッド・継承・呼び出しを扱う。
+
+    既知の制約（Cの制約に加えて）：
+
+    * テンプレートは、定義そのもの（クラステンプレート・関数テンプレート）を抽出する。特殊化・インスタンス化ごとの
+      呼び出し先は区別しない。テンプレートの引数に依存する呼び出しは、呼び出し先を確定できないものとして記録する。
+    * 仮想関数の呼び出しは、宣言された関数に「推定」として解決する（実際の呼び出し先は、派生クラスのオーバーライドになりうる）。
+    * 拡張子 `.h` のヘッダーは、拡張子だけではCかC++か区別できないため、Cとして扱う。C++のヘッダーは `.hpp`・`.hh`・`.hxx` を使う。
+    * 関数単位の制御フロー・データフローは、Cのみに対応している。
+    """
+
+    language = Language.CPP
+    _is_cpp = True

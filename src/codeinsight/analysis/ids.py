@@ -72,3 +72,7 @@ def build_symbol(
 
 # Cの関数の照合キー（USR）の末尾に付ける印: コンパイラが、システムヘッダーに宣言を見つけた関数（プロジェクトの外で定義される）
 KEY_SYSTEM_HEADER = "|system-header"
+# C++の仮想関数の呼び出しの照合キー（USR）の末尾に付ける印: 実際の呼び出し先は、派生クラスのオーバーライドになりうる
+KEY_VIRTUAL = "|virtual"
+# C++の関数テンプレートの特殊化への呼び出しの照合キー: `cpptemplate:<修飾名>`。特殊化のUSRはテンプレート自身のUSRと異なるため、修飾名の一致で解決する（推定）
+KEY_TEMPLATE = "cpptemplate:"

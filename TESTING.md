@@ -39,6 +39,7 @@ pytest -v
 | `test_coordinator_robustness.py` | 12 | 決定的ID、失敗/削除ファイルの結果除去、読み込み不能・解析器例外での継続、進捗、リビジョン、解析器バージョン、再解析での書き込み削減、遅延読み込み | 結合 |
 | `test_analysis_coordinator_integration.py` | 4 | 登録→解析→保存→再読み込み、エラー混在、再解析スキップ | 結合 |
 | `test_navigation.py` | 11 | 検索、シンボルの特定、呼び出し元/先、階層（再帰・深さ・未解決）、経路、依存と循環、ソース表示と古さ | 結合 |
+| `test_cpp_analyzer.py` | 3 | C++（名前空間・クラス・クラス外のメソッド定義・テンプレート・継承・コンストラクタ・仮想関数・テンプレートの推定・標準関数は外部） | 結合 |
 | `test_cfg_c_lisp.py` | 3 | C・Emacs Lispの制御フロー図（ループ・switchの落ち込み・goto・終了呼び出し／シグナルのハンドラへの経路・unwind-protect・cond・docstringを除く） | 結合 |
 | `test_graph_and_views.py` | 11 | グラフ（確定/未解決/外部、部分グラフ）、Mermaid/DOT/JSON/HTMLの出力とエスケープ、構造ツリー、起点に焦点を当てた表示（距離・まとまり・起点の強調） | 結合 |
 | `test_reading_features.py` | 12 | docstring/コメントの要約、名前参照・型注釈、`describe`、`overview`、`show`（シンボル）、`tree`（パス） | 結合 |

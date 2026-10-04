@@ -9,6 +9,7 @@ class Language(enum.Enum):
     """解析対象言語。未対応言語は UNKNOWN として扱い、解析対象から除外する。"""
 
     C = "c"
+    CPP = "cpp"
     PYTHON = "python"
     ELISP = "elisp"
     UNKNOWN = "unknown"

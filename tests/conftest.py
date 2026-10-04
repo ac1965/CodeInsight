@@ -31,7 +31,7 @@ def python_pkg_dir() -> Path:
 def analyzed(tmp_path: Path):
     """プロジェクトを解析し、(repository, project, 結果) を返すファクトリ。"""
 
-    from codeinsight.analysis import CAnalyzer, ElispAnalyzer, PythonAnalyzer, SymbolExtractor
+    from codeinsight.analysis import CAnalyzer, CppAnalyzer, ElispAnalyzer, PythonAnalyzer, SymbolExtractor
     from codeinsight.application import AnalysisCoordinator, ProjectManager
     from codeinsight.domain import Language
     from codeinsight.infrastructure import AnalysisRepository
@@ -41,7 +41,7 @@ def analyzed(tmp_path: Path):
     def build(root: Path):
         repo = AnalysisRepository(tmp_path / f"db{len(repositories)}.sqlite")
         repositories.append(repo)
-        extractor = SymbolExtractor({Language.C: CAnalyzer(), Language.PYTHON: PythonAnalyzer(), Language.ELISP: ElispAnalyzer()})
+        extractor = SymbolExtractor({Language.C: CAnalyzer(), Language.CPP: CppAnalyzer(), Language.PYTHON: PythonAnalyzer(), Language.ELISP: ElispAnalyzer()})
         project = ProjectManager(repo).register(root)
         result = AnalysisCoordinator(repo, extractor).analyze_project(project)
         return repo, project, result

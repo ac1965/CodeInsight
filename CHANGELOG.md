@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## C++のシンボル抽出（未リリース）
+
+* C++（`.cc`・`.cpp`・`.cxx`・`.hpp`・`.hh`・`.hxx` など）の名前空間・クラス・メソッド（クラスの外の定義を含む）・テンプレート・継承・呼び出しを、libclangで抽出（`CppAnalyzer`）。仮想関数と関数テンプレートの特殊化への呼び出しは、推定として解決。`.h` はCのまま。
+* システムヘッダー内のエラー（libclangの版と標準ライブラリ・SDKの食い違い）を、対象ファイルの失敗とせず、件数を警告に記録するよう変更（CとC++）。`pyproject.toml` で mypy の `check_untyped_defs` を有効化。
+
 ## 可視化の改善（未リリース）
 
 * 制御フロー図（`graph flow`）を、C（Clang AST）とEmacs Lispに拡張。言語は自動で判別する。Cは `switch` の落ち込み・`goto`・`continue`/`break`・終了呼び出しを、Emacs Lispはシグナルのハンドラへの経路・`unwind-protect` の後始末・`cond` の節を表す。共通部分を `cfg_base.py` に分離。

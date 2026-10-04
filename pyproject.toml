@@ -46,3 +46,4 @@ ignore = ["E501", "B008"]
 python_version = "3.11"
 files = ["src/codeinsight"]
 ignore_missing_imports = true
+check_untyped_defs = true  # 型注釈のない関数の本体も検査する
