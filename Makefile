@@ -6,7 +6,7 @@
 #   make analyze TARGET=...  対象リポジトリを解析する（読み取りのみ。DBは対象の外に保存）
 #
 # 変数（コマンドラインで上書きできる）:
-#   TARGET   解析対象ディレクトリ（analyze で必須）
+#   TARGET   解析対象ディレクトリ（analyze で必須。status / overview / understand / explain では、PROJECT が無ければ対象のプロジェクトとして使う）
 #   NAME     シンボル名（understand / explain などで必須）
 #   DB       解析結果DBのパス（省略時は ~/.codeinsight/codeinsight.db）
 #   PROJECT  プロジェクトのID・名前・ルートパス（登録が複数のとき）
@@ -22,13 +22,18 @@
 #   make reading TARGET=... AI_SEND=1                          # AI解説を追記する（モデルは MODEL=、環境変数 CODEINSIGHT_AI_MODEL、設定ファイル。既定では送信しない）
 #   make reading TARGET=... SERVE=0                            # 資料一式だけを作り、ビューアーは起動しない（CI・自動化向け）。既定は SERVE=1（PORT=8765、OPEN=1 でブラウザを開く）
 #   make reading-serve TARGET=...                              # 解析して、Webビューアーだけを起動する（資料一式は作らない）
+#   make reading-pdf OUT=...                                   # 資料の成果物を、1ファイルのPDFにまとめ直す（PDF_NAME= でファイル名）
+#   make reading-clean TARGET=...                              # 成果物（OUT）を削除する（README.md のある場所だけ。対象には触れない）
+#
+# Docker は、このMakefileでは扱わない（docker compose を使う。OPERATIONS.md 10.1c2）。
 
 UV      ?= uv
 PYTEST  ?= $(UV) run pytest
 CODEINSIGHT ?= $(UV) run codeinsight
 
 # 読み取り系コマンドに付ける共通オプション（DB・PROJECT は指定されたときだけ）
-READ_OPTS = $(if $(DB),--db $(DB)) $(if $(PROJECT),--project $(PROJECT))
+# （PROJECT が無く TARGET があれば、TARGET を対象にする。DB は ~ を展開する）
+READ_OPTS = $(if $(DB),--db $(call expand_path,$(DB))) $(if $(PROJECT),--project $(PROJECT),$(if $(TARGET),--project $(TARGET)))
 AI_OPTS   = $(if $(MODEL),--ai-model $(MODEL))
 
 .DEFAULT_GOAL := help
@@ -38,8 +43,11 @@ AI_OPTS   = $(if $(MODEL),--ai-model $(MODEL))
 expand_path = $(if $(strip $(1)),$(abspath $(patsubst ~/%,$(HOME)/%,$(patsubst ~,$(HOME),$(strip $(1))))))
 override TARGET := $(call expand_path,$(TARGET))
 READING_NAME = $(notdir $(TARGET))
+# OUT が指定されたか（reading-pdf / reading-index が、指定なしに repo 直下の reading/ を対象にしないため）。OUT の既定値を決める前に記録する
+OUT_ORIGIN := $(origin OUT)
 OUT         ?= reading/$(READING_NAME)
 override OUT := $(call expand_path,$(OUT))
+need_out = $(if $(or $(TARGET),$(filter command% environment,$(OUT_ORIGIN))),,$(error TARGET か OUT を指定してください。例: make $(1) TARGET=../my-repo))
 TOP         ?= 8
 AI_WORKERS  ?= 2
 # 解析結果のDBは、make analyze と同じもの（DB= があればそれ、無ければ既定の ~/.codeinsight/codeinsight.db。環境変数 CODEINSIGHT_DATA_DIR で変更可）を使う。
@@ -48,18 +56,19 @@ RDB_OPT      = $(if $(DB),--db $(call expand_path,$(DB)))
 RCI          = $(CODEINSIGHT)
 RFLAGS       = $(RDB_OPT) --project $(TARGET)
 SERVE       ?= 1
+PORT        ?= 8765
 BUILD       ?= $(OUT)/build
 override BUILD := $(call expand_path,$(BUILD))
 COMPILE_DB  ?= $(if $(wildcard $(BUILD)/compile_commands.json),$(BUILD),)
 override COMPILE_DB := $(call expand_path,$(COMPILE_DB))
 
-.PHONY: docker-build docker-analyze docker-serve docker-reading docker-up docker-run help setup test test-v test-fast check compile clean \
-        analyze status overview architecture unresolved \
+.PHONY: help setup test test-fast check compile clean \
+        analyze status overview \
         understand explain-dry explain ai-status ai-eval lint \
         reading reading-serve reading-serve-run reading-pdf reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
 
 help: ## 使えるタスクの一覧を表示する
-	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # --- 開発 ---
 
@@ -68,9 +77,6 @@ setup: ## 依存をインストールする（開発用を含む）
 
 test: ## 全テストを実行する
 	$(PYTEST) -q tests
-
-test-v: ## 全テストを、詳細表示で実行する
-	$(PYTEST) -v tests
 
 test-fast: ## 最初に失敗したところで止めて実行する
 	$(PYTEST) -q -x tests
@@ -99,12 +105,6 @@ status: ## 解析状況と、解析後に変更されたファイルを表示す
 
 overview: ## リポジトリの全体像（主要モジュール・エントリポイント・中心となる関数）
 	$(CODEINSIGHT) overview $(READ_OPTS)
-
-architecture: ## コンポーネント構成・層構造・循環・外部連携
-	$(CODEINSIGHT) architecture $(READ_OPTS)
-
-unresolved: ## 静的に確定できなかった参照・依存関係（理由別）
-	$(CODEINSIGHT) unresolved $(READ_OPTS)
 
 understand: ## 関数の読解カード（NAME=関数名 が必須）
 	$(if $(NAME),,$(error NAME を指定してください。例: make understand NAME=main))
@@ -301,69 +301,24 @@ reading-ai: reading-functions ## [資料] AI解説を追記する（AI_SEND=1 �
 	  [ -s $(OUT)/logs/ai.log ] || rm -f $(OUT)/logs/ai.log; \
 	else echo "AI解説はスキップ（AI_SEND=1 を付けると、主要な関数のAI解説を追記します。ソースの一部をAIへ送信するため、既定では作りません。送信内容は make explain-dry で確認できます）"; fi
 
-reading-index: ## [資料] 目次（README.md）を作る
+reading-index: ## [資料] 目次（README.md）を作る（TARGET 必須）
+	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-index TARGET=../my-repo))
 	@mkdir -p $(OUT)/logs
 	@$(UV) run python -c "$$READING_INDEX" "$(OUT)" "$(TARGET)" "$(TOP)"
 
-reading-pdf: ## [資料] OUT の成果物を、1ファイルのPDFにまとめる（ブラウザが必要。NAME= でファイル名の基）
-	$(if $(OUT),,$(error OUT を指定してください))
-	@$(UV) run codeinsight reading-report --out "$(OUT)" --target "$(TARGET)" $(if $(READING_NAME_OPT),--name $(READING_NAME_OPT))
+reading-pdf: ## [資料] OUT の成果物を、1ファイルのPDFにまとめる（TARGET か OUT が必須。ブラウザが必要。PDF_NAME= でファイル名の基）
+	$(call need_out,reading-pdf)
+	@$(UV) run codeinsight reading-report --out "$(OUT)" $(if $(TARGET),--target "$(TARGET)") $(if $(PDF_NAME),--name $(PDF_NAME))
 
 reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] 対象のコードリーディング資料一式を OUT に作る（TARGET 必須。PDF=0 でPDFを作らない）
 	@$(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP)
 	@if [ "$(PDF)" != "0" ]; then \
-	  $(UV) run codeinsight reading-report --out "$(OUT)" --target "$(TARGET)" || echo "  ! PDFは作れませんでした。他の成果物は作成済みです（HTMLがあればブラウザで印刷→PDF保存もできます）"; \
+	  $(UV) run codeinsight reading-report --out "$(OUT)" --target "$(TARGET)" $(if $(PDF_NAME),--name $(PDF_NAME)) || echo "  ! PDFは作れませんでした。他の成果物は作成済みです（HTMLがあればブラウザで印刷→PDF保存もできます）"; \
 	  $(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP); \
 	fi
 	@echo "完了: $(OUT)/README.md から読み始められます"
 	@if [ "$(SERVE)" != "0" ]; then $(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN); fi
 
-PORT ?= 8765
-
-# --- Docker（解析・ビューアー・AI解説・資料生成をコンテナで動かす。AIは、ホストの Ollama を使う） ---
-# * 必要な個別ソフトウェア（git・Go・build-essential・graphviz・Chromium・make）は、イメージに入れてある（Dockerfile）。
-# * 対象は、ホストと同じパスに読み取り専用で割り当てる（変更しない）。解析結果のDBは、ホストの ~/.codeinsight（CODEINSIGHT_DATA_DIR があればそこ）
-#   を割り当てて、ホストの uv run codeinsight とコンテナで共有する（同じパスなので、同じプロジェクトとして扱われる）。
-#   ※ 同時に書き込まないこと（解析は、ホストとコンテナのどちらか一方で行う）。
-# * ビューアーは、ホストの 127.0.0.1 にだけ公開する（コンテナの中は 0.0.0.0。トークンとHostの検査は有効）。
-DOCKER_IMAGE ?= codeinsight:local
-DOCKER_DATA ?= $(if $(CODEINSIGHT_DATA_DIR),$(call expand_path,$(CODEINSIGHT_DATA_DIR)),$(HOME)/.codeinsight)
-DOCKER_AI_URL ?= http://host.docker.internal:11434/v1
-DOCKER_TARGET_ABS = $(shell cd "$(TARGET)" 2>/dev/null && pwd -P)
-DOCKER_OUT_ABS = $(abspath $(call expand_path,$(OUT)))
-DOCKER_CHECK = $(if $(TARGET),,$(error TARGET を指定してください。例: make docker-analyze TARGET=../my-repo))$(if $(DOCKER_TARGET_ABS),,$(error TARGET がディレクトリではありません: $(TARGET)))
-DOCKER_RUN = mkdir -p "$(DOCKER_DATA)" && docker run --rm --user "$$(id -u):$$(id -g)" --add-host host.docker.internal:host-gateway \
-	-v "$(DOCKER_DATA)":/data -v "$(DOCKER_TARGET_ABS)":"$(DOCKER_TARGET_ABS)":ro -e CODEINSIGHT_AI_BASE_URL=$(DOCKER_AI_URL) \
-	$(if $(MODEL),-e CODEINSIGHT_AI_MODEL=$(MODEL)) $(if $(AI_SEND),-e CODEINSIGHT_AI_ALLOW_SEND=1)
-
-docker-build: ## [Docker] イメージを作る（codeinsight:local。必要なソフトウェアを含む）
-	docker build -t $(DOCKER_IMAGE) .
-
-docker-analyze: ## [Docker] 対象を解析して、ホストと共有のDBに保存する（TARGET 必須）
-	$(DOCKER_CHECK)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) analyze "$(DOCKER_TARGET_ABS)"
-
-docker-serve: ## [Docker] ビューアーを起動する（TARGET 必須。PORT=。OUT に資料があれば「資料」で読める。127.0.0.1 だけに公開。Ctrl-C で終了）
-	$(DOCKER_CHECK)
-	$(DOCKER_RUN) $(if $(wildcard $(DOCKER_OUT_ABS)/README.md),-v "$(DOCKER_OUT_ABS)":"$(DOCKER_OUT_ABS)":ro) -p 127.0.0.1:$(PORT):$(PORT) $(DOCKER_IMAGE) \
-	  serve --project "$(DOCKER_TARGET_ABS)" --host 0.0.0.0 --port $(PORT) $(if $(wildcard $(DOCKER_OUT_ABS)/README.md),--reading-dir "$(DOCKER_OUT_ABS)")
-
-docker-reading: ## [Docker] コンテナの中で make reading（資料一式。図・PDFも作る。ビューアーは起動しない。TARGET 必須。AI_SEND=1 MODEL= でAI解説）
-	$(DOCKER_CHECK)
-	@mkdir -p "$(DOCKER_OUT_ABS)"
-	$(DOCKER_RUN) -v "$(DOCKER_OUT_ABS)":"$(DOCKER_OUT_ABS)" -w /opt/codeinsight --entrypoint make $(DOCKER_IMAGE) reading \
-	  TARGET="$(DOCKER_TARGET_ABS)" OUT="$(DOCKER_OUT_ABS)" TOP=$(TOP) SERVE=0 UV=ci-uv CODEINSIGHT=codeinsight $(if $(AI_SEND),AI_SEND=1) $(if $(MODEL),MODEL=$(MODEL)) $(if $(PDF),PDF=$(PDF))
-
-docker-up: ## [Docker] docker compose up（TARGET 必須。解析→ビューアー。PORT=）。必要な場所を作り、実行ユーザーを合わせる
-	$(DOCKER_CHECK)
-	@mkdir -p "$(DOCKER_DATA)" "$(DOCKER_OUT_ABS)"
-	TARGET="$(DOCKER_TARGET_ABS)" OUT="$(DOCKER_OUT_ABS)" CODEINSIGHT_DATA="$(DOCKER_DATA)" PORT=$(PORT) CODEINSIGHT_UID=$$(id -u) CODEINSIGHT_GID=$$(id -g) \
-	  $(if $(MODEL),MODEL=$(MODEL)) $(if $(AI_SEND),AI_SEND=1) docker compose up --build
-
-docker-run: ## [Docker] 任意のサブコマンドを実行する（TARGET・ARGS 必須。例: ARGS="explain main --ai-model qwen3-coder:latest" AI_SEND=1）
-	$(DOCKER_CHECK)
-	$(if $(ARGS),,$(error ARGS を指定してください。例: make docker-run TARGET=../my-repo ARGS="overview"))
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(ARGS) --project "$(DOCKER_TARGET_ABS)"
 
 reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビューアーを起動する（TARGET 必須。PORT=、OPEN=1。127.0.0.1 のみ・読み取り専用。Ctrl-C で終了）
 	@$(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN)
@@ -382,6 +337,8 @@ reading-c-build: reading-check ## [資料] autotools系のC: 別の場所で con
 	  rc=$$?; echo "configure+make: rc=$$rc ($(BUILD)/configure.log, make.log)"; \
 	  [ -f $(BUILD)/compile_commands.json ] && echo "compile_commands.json: $(BUILD)/compile_commands.json（make reading で自動的に使います）" || { echo "compile_commands.json を作れませんでした"; exit 1; }
 
-reading-clean: ## [資料] OUT（成果物）を削除する。対象には触れない
-	$(if $(TARGET),,$(error TARGET を指定してください))
-	rm -rf $(OUT)
+reading-clean: ## [資料] OUT（成果物）を削除する。対象には触れない（TARGET か OUT が必須。README.md が無い場所・ホーム・/ は削除しない）
+	$(call need_out,reading-clean)
+	@case "$(OUT)" in ""|"/"|"$(HOME)"|"$(abspath .)") echo "削除しません（OUT が不正です）: $(OUT)"; exit 2;; esac
+	@test -f "$(OUT)/README.md" || { echo "削除しません（$(OUT)/README.md がありません。make reading の成果物ではない可能性があります）"; exit 2; }
+	rm -rf "$(OUT)"

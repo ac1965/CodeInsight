@@ -6,12 +6,17 @@ CodeInsight のビューアーは、解析結果を、ブラウザで読むた�
 
 ## 起動する
 
-| やりたいこと | コマンド |
-| --- | --- |
-| 解析→資料一式→ビューアーを、まとめて（最も簡単） | `make reading TARGET=../my-repo`（`SERVE=0` で起動しない。事前の `make analyze` は不要） |
-| すでに解析・資料がある対象のビューアーだけ | `make reading-serve TARGET=../my-repo`、または `uv run codeinsight serve --project <プロジェクト>`（`--port`、`--reading-dir <資料の出力先>`） |
-| 解析だけ | `make analyze TARGET=../my-repo`（任意。`reading` も最初に同じ解析を同じDBへ行い、変更のないファイルは再解析しません） |
-| Docker（AIはホストの Ollama） | `TARGET=/絶対パス/my-repo docker compose up --build`、または `make docker-up TARGET=../my-repo` |
+ビューアーが読むのは、**解析（`analyze`）の結果**です。起動の方法によって、解析を自動で行うものと、行わないものがあります。
+
+| コマンド | 解析 | 資料一式 | ビューアー |
+| --- | --- | --- | --- |
+| `make reading TARGET=../my-repo` | 最初に自動で行う（変更のないファイルは再解析しない） | 作る | 起動する（`SERVE=0` で起動しない） |
+| `make reading-serve TARGET=../my-repo` | 最初に自動で行う（同上） | 作らない（作成済みの `OUT` があれば「資料」で読める） | 起動する |
+| `uv run codeinsight serve --project <プロジェクト>` | **行わない**（先に `uv run codeinsight analyze <対象>` か `make analyze TARGET=…` が必要。`--reading-dir <資料の出力先>`、`--port`） | 作らない | 起動する |
+| `TARGET=/絶対パス/my-repo docker compose up --build` | 最初に自動で行う（コンテナの中で） | 作らない（`--profile reading run --rm reading` で作る） | 起動する |
+| `make analyze TARGET=../my-repo` | 行う | 作らない | 起動しない |
+
+つまり、対象を初めて見るときは `make reading` か `make reading-serve` だけで足ります（事前の `make analyze` は不要）。`serve` を直接使うのは、すでに解析済みで、解析をやり直したくない場合です。
 
 表示されたURL（`http://127.0.0.1:…/?token=…`）をブラウザで開きます。URLには、**起動ごとのトークン**が含まれます。**共有しないでください**。
 

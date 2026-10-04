@@ -13,6 +13,15 @@
 * トークンが無い・違うときに開く画面（401）を、JSONではなく案内のページにした（トークンは起動のたびに変わること、再読み込み・履歴のURLにはトークンが無いこと、`docker compose logs` から最新のURLを開くこと、固定する方法）。入力されたトークンの値は、画面に出さない。
 * 環境変数 `CODEINSIGHT_VIEWER_TOKEN`（16文字以上の英数字と `-` `_`。短い・安全でない値は拒否）で、トークンを固定できる（`compose.yaml` では `VIEWER_TOKEN`）。既定は、起動ごとのランダム。
 
+## Makefile の整理（未リリース）
+
+* Docker 関係のターゲット（`docker-build` / `docker-analyze` / `docker-serve` / `docker-reading` / `docker-up` / `docker-run`）を削除した。Docker は `docker compose`（`compose.yaml`）に一本化する。任意のサブコマンドは `docker compose run --rm --entrypoint codeinsight codeinsight …`。
+* 単なる素通しの `architecture`・`unresolved`・`test-v` を削除（`uv run codeinsight architecture` などを使う）。
+* 修正: `reading-pdf` の `NAME=`（どこにも渡っていなかった）を `PDF_NAME=` にして、`reading` の PDF にも渡すようにした。`reading-pdf` と `reading-index` は、TARGET か OUT が無いとき、リポジトリ直下の `reading/` を対象にしていた不具合を直した（拒否する）。
+* 修正: `reading-clean` が、`make reading` の成果物でない場所（README.md が無い）・ホーム・`/` を削除しないようにした。
+* ビューアーの使い方の「起動する」を、起動方法ごとに「解析を自動で行うか・資料を作るか・ビューアーを起動するか」の表にした（`make reading` と `make reading-serve` は最初に解析する。`serve` は解析しないので、事前の解析が必要）。
+* `status`・`overview`・`understand`・`explain` 系は、PROJECT が無く TARGET があれば、TARGET を対象にする。DB の `~` を展開する。`help` の列幅を修正。
+
 ## ドキュメントの最新化（未リリース）
 
 * ARCHITECTURE.md: `web/`・`mcp/`・Go/C++/Emacs Lispの解析器・制御フロー図（C・Emacs Lisp）・外部ツールの取り込み・動的解析の実行部・Docker・スキーマv8・ワークフローを反映。

@@ -296,7 +296,7 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | 図 | graphviz（`dot`）があれば、ノードが 60 個以下の図をSVGで埋め込む。多い図（例: 全体の呼び出しグラフ）は省略し、理由と、対話的な `graphs/*.html` の場所を示す |
 | 打ち切り | 各項目は先頭 400 行まで。超えたら、その旨と元のファイルを載せ、付録にも記録する（`reading-report --max-lines` で変更） |
 | ブラウザ | 環境変数 `CODEINSIGHT_BROWSER`、macOSのChrome/Chromium/Edge/Brave、PATH の順に探す。無ければ、HTMLを残して理由を示す（`make reading` 自体は失敗にしない） |
-| 再生成 | `make reading-pdf OUT=…`、または `codeinsight reading-report --out OUT [--format html] [--output FILE]` |
+| 再生成 | `make reading-pdf OUT=…`（`PDF_NAME=` でファイル名）、または `codeinsight reading-report --out OUT [--format html] [--output FILE]` |
 
 ブラウザは、CodeInsight が生成したHTMLを描画するためだけに使います（対象のプログラムは実行しません）。一時的なプロファイルを使い、利用者のブラウザの設定・履歴には触れません。
 
@@ -486,23 +486,17 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 * **データはホストと共有します**: 解析結果のDBは、ホストの `~/.codeinsight`（`CODEINSIGHT_DATA` / `DOCKER_DATA=` で変更可）をコンテナの `/data` に割り当てます。**対象は、ホストと同じパスに読み取り専用で割り当てる**ので、ホストの `uv run codeinsight` とコンテナは、同じプロジェクトとして同じ結果を読み書きできます（Go の補助プログラムは OS・CPU ごとに別のファイルなので、取り違えません）。同時に書き込まないでください（解析は、どちらか一方で）。出力（資料）も、ホストの `OUT` に出ます。
 
 ```bash
-# compose（推奨）
 mkdir -p ~/.codeinsight                                      # 初回のみ（Docker に root の所有で作らせないため）
 mkdir -p reading/out                                         # 資料を作る場合のみ（up だけなら不要。無ければ「資料がありません」と表示）
 TARGET=/絶対パス/my-repo docker compose up --build           # 解析→ビューアー。表示されたトークン付きURL（http://127.0.0.1:8765/…）を開く
 TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDF）を OUT（既定 ./reading/out）に作る。ビューアーの「資料」で読める
-make docker-up TARGET=../my-repo                             # 上の up を、必要な場所の作成と実行ユーザーの指定つきで実行する
 
-# make
-make docker-build                                            # イメージを作る（codeinsight:local）
-make docker-analyze TARGET=../my-repo                        # 解析して、共有のDBに保存する
-make docker-serve TARGET=../my-repo PORT=8765                # ビューアー（OUT に資料があれば「資料」で読める）
-make docker-reading TARGET=../my-repo                        # 資料一式（make reading をコンテナの中で。ビューアーは起動しない）
-make docker-run TARGET=../my-repo ARGS="overview"            # 任意のサブコマンド（--project は自動で付く）
-make docker-run TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1 ARGS="explain main"   # AI解説（ホストの Ollama。送信の許可 AI_SEND=1 が必要）
+# 任意のサブコマンド（--project は自分で付ける）。AI解説は、送信の許可 AI_SEND=1 とモデル MODEL= が必要
+TARGET=/絶対パス/my-repo docker compose run --rm --entrypoint codeinsight codeinsight overview --project /絶対パス/my-repo
+TARGET=/絶対パス/my-repo MODEL=qwen3-coder:latest AI_SEND=1 docker compose run --rm --entrypoint codeinsight codeinsight explain main --project /絶対パス/my-repo
 ```
 
-設定は環境変数か `.env`（`.env.example` を参照）で渡します: `TARGET`（必須・絶対パス）、`PORT`、`VIEWER_TOKEN`（ビューアーのトークンの固定。16文字以上の英数字と `-` `_`）、`OUT`、`CODEINSIGHT_DATA`、`CODEINSIGHT_UID` / `CODEINSIGHT_GID`（Linux では `id -u` / `id -g`）、`MODEL`、`AI_SEND`。
+Linux では、`CODEINSIGHT_UID` / `CODEINSIGHT_GID` に自分の `id -u` / `id -g` を指定します（既定は 1000:1000。macOS の Docker Desktop は既定のままで動きます）。設定は環境変数か `.env`（`.env.example` を参照）で渡します: `TARGET`（必須・絶対パス）、`PORT`、`VIEWER_TOKEN`（ビューアーのトークンの固定。16文字以上の英数字と `-` `_`）、`OUT`、`CODEINSIGHT_DATA`、`CODEINSIGHT_UID` / `CODEINSIGHT_GID`（Linux では `id -u` / `id -g`）、`MODEL`、`AI_SEND`。
 
 * **「トークンが違う」「開けない（401）」のとき**: トークンは**サーバーを起動するたびに変わります**（`docker compose up` のやり直し・再起動・`--build` でも変わる）。ページを開いたあとの再読み込みや、履歴・ブックマークのURLにはトークンがありません。`docker compose logs codeinsight` に出た**最新のURL**を、途中で改行されていないか確認して開いてください（開けない場合の画面にも、同じ案内が出ます）。毎回同じURLで開きたい場合は、`.env` の `VIEWER_TOKEN`（`serve` では環境変数 `CODEINSIGHT_VIEWER_TOKEN`）で固定できます（ホストの `127.0.0.1` にだけ公開されますが、共有しないでください）。
 * ビューアーは、コンテナの中では `0.0.0.0` で待ち受けますが（`CODEINSIGHT_IN_CONTAINER=1`。Dockerfile が設定。この環境変数がある場合に限り許可）、**ホスト側では `127.0.0.1` にだけ公開**します（LAN側のアドレスからは届かないことを確認済み）。トークンとHostの検査は有効です。ホスト側とコンテナ側のポートは、同じ値にしてください（Hostの検査のため）。

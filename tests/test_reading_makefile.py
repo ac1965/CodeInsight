@@ -174,20 +174,32 @@ def test_make_analyze_and_make_reading_run_the_same_analysis(tmp_path: Path) -> 
     assert db.is_file() and (out / "overview.txt").read_text(encoding="utf-8").strip()
 
 
-def test_docker_targets_share_data_mount_the_target_read_only_and_publish_only_to_loopback(tmp_path: Path) -> None:
+def test_makefile_has_no_docker_targets_and_guards_destructive_or_ambiguous_targets(tmp_path: Path) -> None:
+    makefile = (Path(__file__).resolve().parent.parent / "Makefile").read_text(encoding="utf-8")
+    assert "docker run" not in makefile and "docker-" not in makefile  # Docker は docker compose に任せる
+    # OUT も TARGET も無い reading-pdf / reading-clean は、リポジトリ直下の reading/ を対象にせず、拒否する
+    for name in ("reading-pdf", "reading-clean"):
+        assert _make(name).returncode != 0
+    # reading-clean は、make reading の成果物（README.md がある場所）以外・ホーム・/ を削除しない
+    other = tmp_path / "keep"
+    other.mkdir()
+    (other / "file.txt").write_text("x", encoding="utf-8")
+    refused = _make("reading-clean", f"OUT={other}")
+    assert refused.returncode != 0 and (other / "file.txt").exists()
+    assert _make("reading-clean", "OUT=/").returncode != 0 and _make("reading-clean", f"OUT={os.environ['HOME']}").returncode != 0
+    produced = tmp_path / "out"
+    produced.mkdir()
+    (produced / "README.md").write_text("# r", encoding="utf-8")
+    assert _make("reading-clean", f"OUT={produced}").returncode == 0 and not produced.exists()
+
+
+def test_read_targets_use_target_as_the_project_when_project_is_not_given(tmp_path: Path) -> None:
     target = tmp_path / "t"
     target.mkdir()
-    real = str(target.resolve())
-    data = tmp_path / "data"
-    analyze = _make("-n", "docker-analyze", f"TARGET={target}", f"DOCKER_DATA={data}").stdout
-    assert f'-v "{data}":/data' in analyze and f'-v "{real}":"{real}":ro' in analyze  # DBはホストと共有、対象は同じパスに読み取り専用
-    assert '--user "$(id -u):$(id -g)"' in analyze and f'analyze "{real}"' in analyze
-    serve = _make("-n", "docker-serve", f"TARGET={target}", "PORT=9123").stdout
-    assert "-p 127.0.0.1:9123:9123" in serve and "--host 0.0.0.0" in serve  # ホスト側は 127.0.0.1 にだけ公開
-    reading = _make("-n", "docker-reading", f"TARGET={target}", f"OUT={tmp_path / 'out'}", f"DOCKER_DATA={data}").stdout
-    assert "SERVE=0" in reading and "UV=ci-uv" in reading and "AI_SEND" not in reading  # 既定ではAIへ送信しない
-    assert _make("docker-analyze").returncode != 0  # TARGET 必須
-    assert "AI_SEND=1" in _make("-n", "docker-reading", f"TARGET={target}", f"OUT={tmp_path / 'o'}", "AI_SEND=1").stdout
+    db = tmp_path / "x.db"
+    assert f"--db {db} --project {target.resolve()}" in _make("-n", "overview", f"TARGET={target}", f"DB={db}").stdout
+    assert "--project named" in _make("-n", "overview", f"TARGET={target}", "PROJECT=named").stdout  # PROJECT が優先
+    assert "--name abc" in _make("-n", "reading-pdf", f"TARGET={target}", "PDF_NAME=abc").stdout  # PDF_NAME が渡る
 
 
 def test_compose_file_publishes_loopback_only_mounts_read_only_and_never_creates_host_paths() -> None:

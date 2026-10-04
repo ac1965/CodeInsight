@@ -89,7 +89,7 @@ make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の
 mkdir -p ~/.codeinsight                                    # 初回のみ（資料を作る場合は reading/out も）
 TARGET=/絶対パス/my-repo docker compose up --build         # 解析→ビューアー(ホストの 127.0.0.1 だけに公開)
 TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式(図・PDFを含む)
-make docker-run TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1 ARGS="explain main"   # AI解説はホストの Ollama(host.docker.internal)
+TARGET=/絶対パス/my-repo MODEL=qwen3-coder:latest AI_SEND=1 docker compose run --rm --entrypoint codeinsight codeinsight explain main --project /絶対パス/my-repo   # AI解説はホストの Ollama(host.docker.internal)
 ```
 
 詳細は [OPERATIONS.md](OPERATIONS.md) の「Docker で動かす」。
