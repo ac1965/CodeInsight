@@ -240,7 +240,7 @@ endef
 export READING_INDEX
 
 reading-check:
-	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading TARGET=../my-repo))
+	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading TARGET=../my-repo（TARGET の直後は = です。TARGET-… や TARGET ~/… のように、= が抜けていないか確認してください）))
 	@case "$(TARGET)$(OUT)" in *" "*) echo "TARGET / OUT のパスに空白は使えません: $(TARGET) / $(OUT)"; exit 2;; esac
 	@command -v $(firstword $(UV)) >/dev/null 2>&1 || { echo "$(firstword $(UV)) が見つかりません（https://docs.astral.sh/uv/ からインストールするか、UV=... で指定してください）"; exit 2; }
 	@test -d "$(TARGET)" || { echo "TARGET がディレクトリではありません: $(TARGET)"; exit 2; }
@@ -326,7 +326,7 @@ reading-serve-run:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-serve TARGET=../my-repo))
 	@$(RCI) status $(RFLAGS) > /dev/null 2>&1 || { echo "解析結果がありません（make analyze TARGET=$(TARGET) を先に実行してください）"; exit 2; }
 	@echo "Webビューアーを起動します（Ctrl-C で終了）。表示されたURLをブラウザで開いてください。URLにはトークンが含まれます。共有しないでください。"
-	$(RCI) serve $(RFLAGS) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
+	$(RCI) serve $(RFLAGS) --reading-dir $(OUT) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
 
 reading-c-build: reading-check ## [資料] autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）
 	$(if $(filter 1,$(ALLOW_BUILD)),,$(error 対象の configure と make を実行します（対象のコードは変更しませんが、ビルドの手順を動かします）。許可する場合は ALLOW_BUILD=1 を付けてください))

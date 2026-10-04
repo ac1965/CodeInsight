@@ -18,7 +18,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from codeinsight.web.api import ApiError, ViewerApi
+from codeinsight.web.api import ApiError, BinaryResponse, ViewerApi
 from codeinsight.web.app_page import content_security_policy, render_app
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -123,9 +123,12 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001 - 内部の詳細（パス・スタックトレース）を、応答に出さない
             self._json(500, {"error": "内部エラーが発生しました"})
             return
-        self._json(200, payload)
+        if isinstance(payload, BinaryResponse):
+            self._send(200, payload.data, payload.content_type)
+        else:
+            self._json(200, payload)
 
-    def api_call(self, path: str, query: dict[str, list[str]]) -> dict:
+    def api_call(self, path: str, query: dict[str, list[str]]) -> dict | BinaryResponse:
         return self.server.api.handle(path, query)
 
     def _method_not_allowed(self) -> None:

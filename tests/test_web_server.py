@@ -152,3 +152,57 @@ def test_navigation_is_read_only_api_object(analyzed, tmp_path: Path) -> None:
     api = ViewerApi(repo, project)
     assert isinstance(api._navigation, NavigationService)
     assert not any(name.startswith(("save", "delete", "replace")) for name in api._routes)  # 書き込み系のルートは存在しない
+
+
+@pytest.fixture
+def reading_server(analyzed, tmp_path: Path) -> Iterator[tuple[ViewerServer, Path]]:
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURES / "c_callgraph", root)
+    _, project, _ = analyzed(root)
+    out = tmp_path / "out"
+    (out / "functions").mkdir(parents=True)
+    (out / "logs").mkdir()
+    (out / "README.md").write_text("# 資料\n\n* [全体像](overview.txt)\n", encoding="utf-8")
+    (out / "overview.txt").write_text("main.c:8-12 に main がある\n", encoding="utf-8")
+    (out / "functions" / "main.txt").write_text("main\n", encoding="utf-8")
+    (out / "logs" / "secret.txt").write_text("ログ", encoding="utf-8")
+    (out / "report.pdf").write_bytes(b"%PDF")
+    (tmp_path / "outside.txt").write_text("外", encoding="utf-8")
+    (out / "link.txt").symlink_to(tmp_path / "outside.txt")  # ルートの外を指すシンボリックリンク
+    repo = AnalysisRepository(tmp_path / "db0.sqlite", check_same_thread=False)
+    httpd = ViewerServer("127.0.0.1", 0, ViewerApi(repo, project, out))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd, out
+    httpd.shutdown()
+    httpd.server_close()
+    thread.join(timeout=5)
+
+
+def test_reading_api_lists_only_safe_materials_and_reads_them(reading_server) -> None:
+    httpd, out = reading_server
+    status, listing = _api(httpd, "/api/reading")
+    names = [f["name"] for f in listing["files"]]
+    assert status == 200 and listing["available"] and names[:2] == ["README.md", "overview.txt"]
+    assert "functions/main.txt" in names
+    assert not any(n.startswith("logs/") or n.endswith((".pdf", "link.txt")) for n in names)  # ログ・PDF・シンボリックリンクは出さない
+    status, doc = _api(httpd, "/api/reading/file?name=overview.txt")
+    assert status == 200 and doc["kind"] == "text" and "main.c:8-12" in doc["text"]
+    assert _api(httpd, "/api/reading/file?name=README.md")[1]["kind"] == "markdown"
+
+
+def test_reading_file_api_rejects_anything_not_listed(reading_server) -> None:
+    httpd, out = reading_server
+    for name in ("../outside.txt", "logs/secret.txt", "link.txt", "report.pdf", "/etc/passwd", "%2e%2e/outside.txt", "nothing.txt"):
+        status, body = _api(httpd, f"/api/reading/file?name={name}")
+        assert status == 404 and "外" not in json.dumps(body, ensure_ascii=False) and "ログ" not in json.dumps(body, ensure_ascii=False), name
+    assert _api(httpd, "/api/reading/file")[0] == 400
+
+
+def test_reading_is_unavailable_without_a_reading_dir_and_guide_images_are_whitelisted(server) -> None:
+    httpd, _ = server
+    status, listing = _api(httpd, "/api/reading")
+    assert status == 200 and listing["available"] is False and listing["files"] == []
+    assert _api(httpd, "/api/reading/file?name=README.md")[0] == 404
+    for name in ("../../server.py", "..%2f..%2fserver.py", "a/b.png", "x.py", "nothing.png"):
+        assert _api(httpd, f"/api/guide/image?name={name}")[0] == 404, name

@@ -115,7 +115,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if args.host not in LOOPBACK_HOSTS:
         raise CliError(f"--host は、ループバック（{', '.join(LOOPBACK_HOSTS)}）だけを指定できます。外部のホストへは公開しません。")
     repository, project = open_project_context(args)
-    api = ViewerApi(repository, project)
+    reading_dir = Path(args.reading_dir).expanduser() if args.reading_dir else None
+    if reading_dir is not None and not reading_dir.is_dir():
+        raise CliError(f"--reading-dir がディレクトリではありません: {reading_dir}")
+    api = ViewerApi(repository, project, reading_dir)
     try:
         server = ViewerServer(args.host, args.port, api)
     except OSError as exc:

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 from codeinsight.application import NavigationService
 from codeinsight.application.extract_service import DIRECTIONS, ExtractService
@@ -23,6 +25,24 @@ from codeinsight.presentation.graph_export import model_to_dict
 
 MAX_TEXT = 300
 MAX_LINES = 2000
+
+
+@dataclass(frozen=True)
+class BinaryResponse:
+    content_type: str
+    data: bytes
+
+
+GUIDE_DIR = Path(__file__).resolve().parent / "guide"
+READING_EXTENSIONS = {".md": "markdown", ".txt": "text", ".mmd": "text", ".dot": "text"}
+MAX_FILE_BYTES = 2 * 1024 * 1024
+_READING_TITLES = {
+    "README.md": ("目次", 0), "overview.txt": ("全体像", 1), "architecture.txt": ("アーキテクチャ（層・循環・外部連携）", 2), "boundaries.txt": ("入口と境界", 3),
+    "config.txt": ("設定値", 4), "externals.txt": ("外部連携", 5), "environment.txt": ("実行環境", 6), "risks.txt": ("リスクの手がかり", 7),
+    "tests-untested.txt": ("テストが届いていない関数", 8), "unused.txt": ("未使用のコード", 9), "history.txt": ("履歴", 10), "docs-check.txt": ("文書とコードの差分", 11),
+    "analysis/unresolved.txt": ("未解決の関係", 12), "analysis/status.txt": ("解析状況", 13),
+}
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
 
 
 class ApiError(Exception):
@@ -67,18 +87,23 @@ def _flag(params: Params, name: str, default: bool = False) -> bool:
 
 
 class ViewerApi:
-    def __init__(self, repository: AnalysisRepository, project: Project) -> None:
+    def __init__(self, repository: AnalysisRepository, project: Project, reading_dir: Path | None = None) -> None:
         self._repository = repository
         self._project = project
+        self._reading_dir = reading_dir.resolve() if reading_dir is not None else None
         self._navigation = NavigationService(repository)
         self.refresh()
-        self._routes: dict[str, Callable[[Params], dict]] = {
+        self._routes: dict[str, Callable[[Params], dict | BinaryResponse]] = {
             "/api/project": self._project_info,
             "/api/symbols": self._symbols,
             "/api/graph": self._graph,
             "/api/source": self._source,
             "/api/extract": self._extract,
             "/api/refresh": self._refresh,
+            "/api/reading": self._reading,
+            "/api/reading/file": self._reading_file,
+            "/api/guide": self._guide,
+            "/api/guide/image": self._guide_image,
         }
 
     def refresh(self) -> None:
@@ -88,7 +113,7 @@ class ViewerApi:
         states = FreshnessService().check_project(self._project, list(self._index.files.values()))
         self._stale = sorted(self._index.files[fid].relative_path for fid, state in states.items() if state in (FileFreshness.STALE, FileFreshness.MISSING))
 
-    def handle(self, path: str, params: Params) -> dict:
+    def handle(self, path: str, params: Params) -> dict | BinaryResponse:
         route = self._routes.get(path)
         if route is None:
             raise ApiError(404, "存在しないAPIです")
@@ -182,3 +207,66 @@ class ViewerApi:
             _int(params, "max_items", 30, 1, 100) or 30, _int(params, "max_lines", 200, 1, 1000) or 200,
         )
         return {"markdown": extract_export.to_markdown(result), "data": extract_export.to_dict(result)}
+
+    # --- 資料（make reading の成果物）・使い方 ---
+
+    def _reading_files(self) -> list[dict]:
+        assert self._reading_dir is not None
+        root = self._reading_dir
+        found: list[dict] = []
+        for path in sorted(root.rglob("*")):
+            try:
+                relative = path.relative_to(root).as_posix()
+                if not path.is_file() or path.is_symlink() or path.suffix.lower() not in READING_EXTENSIONS:
+                    continue
+                if relative.startswith(("logs/", ".")) or "/." in relative or path.stat().st_size > MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            title, order = _READING_TITLES.get(relative, (None, 100))
+            group = "資料"
+            if relative.startswith("functions/"):
+                group, title, order = "主要な関数の読解カード", path.stem, 200
+            elif relative.startswith("ai/"):
+                group, title, order = "AIによる解説（解析結果ではありません）", path.stem, 300
+            elif relative.startswith("graphs/"):
+                group, title, order = "図の元データ（Mermaid・DOT）", relative.removeprefix("graphs/"), 400
+            found.append({"name": relative, "title": title or relative, "group": group, "kind": READING_EXTENSIONS[path.suffix.lower()], "order": order})
+        return sorted(found, key=lambda f: (f["order"], f["name"]))
+
+    def _reading(self, params: Params) -> dict:
+        if self._reading_dir is None or not self._reading_dir.is_dir():
+            return {"available": False, "files": [], "message": "資料の出力先が指定されていません（make reading で起動するか、--reading-dir を指定してください）"}
+        return {"available": True, "files": self._reading_files()}
+
+    def _reading_file(self, params: Params) -> dict:
+        if self._reading_dir is None:
+            raise ApiError(404, "資料の出力先が指定されていません")
+        name = _text(params, "name", required=True) or ""
+        listed = {f["name"]: f for f in self._reading_files()}
+        entry = listed.get(name)  # 一覧にあるものだけを読む（パスの指定を、直接ファイルに使わない）
+        if entry is None:
+            raise ApiError(404, "資料が見つかりません")
+        path = (self._reading_dir / name).resolve()
+        if self._reading_dir not in path.parents:
+            raise ApiError(404, "資料が見つかりません")
+        try:
+            text = path.read_bytes().decode("utf-8", errors="replace")
+        except OSError as exc:
+            raise ApiError(404, "資料を読み込めません") from exc
+        return {"name": name, "title": entry["title"], "kind": entry["kind"], "text": text}
+
+    def _guide(self, params: Params) -> dict:
+        path = GUIDE_DIR / "VIEWER.md"
+        if not path.is_file():
+            return {"available": False, "text": "", "images": []}
+        images = sorted(p.name for p in (GUIDE_DIR / "images").glob("*") if p.suffix.lower() in _IMAGE_TYPES) if (GUIDE_DIR / "images").is_dir() else []
+        return {"available": True, "text": path.read_text(encoding="utf-8"), "images": images}
+
+    def _guide_image(self, params: Params) -> dict | BinaryResponse:
+        name = _text(params, "name", required=True) or ""
+        directory = GUIDE_DIR / "images"
+        path = directory / name
+        if "/" in name or "\\" in name or path.suffix.lower() not in _IMAGE_TYPES or not path.is_file() or path.is_symlink():
+            raise ApiError(404, "画像が見つかりません")
+        return BinaryResponse(_IMAGE_TYPES[path.suffix.lower()], path.read_bytes())

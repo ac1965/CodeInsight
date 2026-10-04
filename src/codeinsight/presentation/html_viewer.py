@@ -56,6 +56,23 @@ button:hover { background:var(--panel); }
 .group-line { stroke:var(--border); stroke-width:1; }
 .neighbors { margin:4px 0 0; padding-left:16px; font-size:12px; }
 [hidden] { display:none !important; }
+.viewtabs button { padding:3px 12px; }
+.viewtabs button.active { background:var(--hit); }
+#docs-view { flex:1 1 auto; min-height:160px; display:flex; overflow:hidden; }
+body.view-docs .toolbar, body.view-docs main { display:none; }
+#docs-nav { flex:0 0 260px; overflow:auto; border-right:1px solid var(--border); background:var(--panel); padding:8px; }
+#docs-nav h3 { font-size:12px; color:var(--muted); margin:10px 4px 4px; }
+#docs-nav button { display:block; width:100%; text-align:left; margin:1px 0; border-color:transparent; background:transparent; }
+#docs-nav button.active { background:var(--hit); }
+#docs-body { flex:1 1 auto; overflow:auto; padding:12px 20px; max-width:100ch; }
+#docs-body h1 { font-size:20px; } #docs-body h2 { font-size:17px; border-bottom:1px solid var(--border); padding-bottom:2px; } #docs-body h3 { font-size:15px; }
+.doc-code { background:var(--panel); border:1px solid var(--border); border-radius:4px; padding:8px; overflow:auto; font:12px/1.45 ui-monospace, monospace; white-space:pre; }
+.doc-table { border-collapse:collapse; margin:8px 0; font-size:13px; } .doc-table th, .doc-table td { border:1px solid var(--border); padding:3px 8px; text-align:left; }
+#docs-body blockquote { margin:8px 0; padding:2px 12px; border-left:3px solid var(--border); color:var(--muted); }
+#docs-body code { font:12px ui-monospace, monospace; background:var(--panel); padding:0 3px; border-radius:3px; }
+.doc-image { max-width:100%; border:1px solid var(--border); border-radius:4px; margin:6px 0; }
+a.srclink { color:var(--node-stroke); text-decoration:underline; cursor:pointer; }
+@media (max-width: 640px) { #docs-nav { flex-basis:140px; } }
 body.app { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 body.app main { flex:1 1 auto; height:auto; min-height:160px; }
 #splitter { flex:0 0 8px; height:8px; cursor:row-resize; background:var(--border); touch-action:none; }
