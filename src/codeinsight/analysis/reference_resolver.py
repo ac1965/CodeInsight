@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from codeinsight.analysis.go_analyzer import KEY_GO, KEY_GO_CHAIN, KEY_GO_IMPORT, KEY_GO_METHOD, TYPE_PREFIX
-from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL
+from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL, STANDARD_C_FUNCTIONS
 from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
     KEY_EXPORT,
@@ -477,6 +477,9 @@ class ReferenceResolver:
                     reference, declarations[0],
                     "仮想関数の呼び出し（宣言のみ確認できた）。実際の呼び出し先は、派生クラスのオーバーライドになりうる", Confidence.INFERRED,
                 )
+            elif declarations and reference.target_name in STANDARD_C_FUNCTIONS and self._language_of(declarations[0].file_id) == Language.C:
+                # システムヘッダーを含まず、自前でプロトタイプ宣言している標準ライブラリの関数（コンパイラの根拠は得られないため、名前で判定する）
+                self._set(reference, ResolutionStatus.EXTERNAL, "C標準ライブラリの関数名で、プロジェクト内には宣言（プロトタイプ）だけがある（名前による判定）")
             elif declarations:
                 self._resolved(
                     reference, declarations[0], "プロジェクト内に定義がなく、宣言のみ確認できた"

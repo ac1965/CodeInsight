@@ -50,3 +50,15 @@ def test_declaration_only_functions_without_system_evidence_still_resolve_to_the
     reference = call("wrapper", "mylib_call")
     assert reference.resolution_status == ResolutionStatus.RESOLVED
     assert symbols[reference.target_symbol_id].kind == SymbolKind.FUNCTION_DECLARATION and "宣言のみ" in reference.note
+
+
+def test_standard_library_prototypes_without_system_headers_are_external_by_name(analyzed, tmp_path: Path) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "noinc.c").write_text("extern void *malloc (unsigned long);\nextern int mylib_call (int);\n\nint use(void) {\n    malloc(8);\n    return mylib_call(1);\n}\n", encoding="utf-8")
+    repo, project, _ = analyzed(root)
+    symbols = {s.symbol_id: s for s in repo.list_symbols_for_project(project.project_id)}
+    refs = {r.target_name: r for r in repo.list_references_for_project(project.project_id) if r.reference_kind == ReferenceKind.CALL}
+    assert refs["malloc"].resolution_status == ResolutionStatus.EXTERNAL and "名前による判定" in refs["malloc"].note  # システムヘッダーが無くても、標準関数名なら外部
+    assert refs["mylib_call"].resolution_status == ResolutionStatus.RESOLVED  # 標準関数名でない宣言のみの関数は、従来どおり宣言に解決
+    assert symbols[refs["mylib_call"].target_symbol_id].kind == SymbolKind.FUNCTION_DECLARATION

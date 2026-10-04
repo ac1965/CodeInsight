@@ -72,6 +72,17 @@ def build_symbol(
 
 # Cの関数の照合キー（USR）の末尾に付ける印: コンパイラが、システムヘッダーに宣言を見つけた関数（プロジェクトの外で定義される）
 KEY_SYSTEM_HEADER = "|system-header"
+# C標準ライブラリ（ISO C）の主な関数名。システムヘッダーを含まない `.c` が、自前でプロトタイプ宣言している場合に、
+# コンパイラの根拠（システムヘッダーの宣言）が得られないため、名前で外部（定義がプロジェクトの外）と判定するのに使う。
+STANDARD_C_FUNCTIONS = frozenset(
+    """abort abs atexit atof atoi atol bsearch calloc exit free getenv labs ldiv malloc qsort rand realloc srand strtod strtol strtoul system
+    memchr memcmp memcpy memmove memset strcat strchr strcmp strcoll strcpy strcspn strerror strlen strncat strncmp strncpy strpbrk strrchr strspn strstr strtok
+    clearerr fclose feof ferror fflush fgetc fgets fopen fprintf fputc fputs fread freopen fscanf fseek ftell fwrite getc getchar gets perror printf putc putchar puts
+    remove rename rewind scanf setbuf setvbuf snprintf sprintf sscanf tmpfile tmpnam ungetc vfprintf vprintf vsnprintf vsprintf
+    isalnum isalpha iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit tolower toupper
+    acos asin atan atan2 ceil cos cosh exp fabs floor fmod frexp ldexp log log10 modf pow sin sinh sqrt tan tanh
+    asctime clock ctime difftime gmtime localtime mktime strftime time longjmp setjmp raise signal va_end""".split()
+)
 # C++の仮想関数の呼び出しの照合キー（USR）の末尾に付ける印: 実際の呼び出し先は、派生クラスのオーバーライドになりうる
 KEY_VIRTUAL = "|virtual"
 # C++の関数テンプレートの特殊化への呼び出しの照合キー: `cpptemplate:<修飾名>`。特殊化のUSRはテンプレート自身のUSRと異なるため、修飾名の一致で解決する（推定）

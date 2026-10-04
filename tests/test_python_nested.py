@@ -114,3 +114,48 @@ def test_return_annotations_type_the_result_of_self_method_calls(view) -> None:
     for run in runs:
         assert run.resolution_status == ResolutionStatus.RESOLVED and run.confidence == Confidence.INFERRED
         assert target(run) == "mod.Worker.run"  # 戻り値の型注釈（`X | None` を含む）から、型を推定
+
+
+TUPLE_SOURCE = '''\
+class Repo:
+    def close(self):
+        return None
+
+
+class Index:
+    def lookup(self):
+        return 1
+
+
+class Workspace:
+    def get(self, name: str) -> tuple[Repo, Index]:
+        return Repo(), Index()
+
+    def one(self) -> Repo:
+        return Repo()
+
+
+def use(workspace: Workspace):
+    repo, index = workspace.get("a")
+    single = workspace.one()
+    index.lookup()
+    repo.close()
+    single.close()
+'''
+
+
+def test_tuple_unpacking_and_typed_variable_method_returns(analyzed, tmp_path: Path) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "tuples.py").write_text(TUPLE_SOURCE, encoding="utf-8")
+    repo, project, _ = analyzed(root)
+    symbols = {s.symbol_id: s for s in repo.list_symbols_for_project(project.project_id)}
+    refs = [r for r in repo.list_references_for_project(project.project_id) if symbols[r.source_symbol_id].qualified_name == "tuples.use"]
+
+    def resolved(name: str):
+        (found,) = [r for r in refs if r.target_name == name]
+        return found, symbols[found.target_symbol_id].qualified_name if found.target_symbol_id else None
+
+    for name, expected in (("index.lookup", "tuples.Index.lookup"), ("repo.close", "tuples.Repo.close"), ("single.close", "tuples.Repo.close")):
+        reference, target = resolved(name)
+        assert reference.resolution_status == ResolutionStatus.RESOLVED and reference.confidence == Confidence.INFERRED and target == expected, name  # 戻り値の型注釈から。要素ごとの型

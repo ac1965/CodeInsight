@@ -173,7 +173,7 @@ class _Workspace:
         self._dir = tempfile.TemporaryDirectory(prefix="codeinsight-eval-")
         self._prepared: dict[str, tuple[AnalysisRepository, Project, ProjectIndex, NavigationService]] = {}
 
-    def get(self, project_dir: str):
+    def get(self, project_dir: str) -> tuple[AnalysisRepository, Project, ProjectIndex, NavigationService]:
         if project_dir not in self._prepared:
             root = Path(project_dir)
             if not root.is_dir():

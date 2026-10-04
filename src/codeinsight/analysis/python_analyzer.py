@@ -404,7 +404,7 @@ class _ReferenceCollector(ast.NodeVisitor):
         for function in ast.walk(tree):
             if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and function.returns is not None:
                 owner = node_symbols.get(id(function))
-                return_key = self._type_key(self._annotation_parts(function.returns)) if owner is not None else None
+                return_key = self._return_key(function.returns) if owner is not None else None
                 if owner is not None and return_key:
                     self._return_types[owner.qualified_name] = return_key
 
@@ -557,6 +557,7 @@ class _ReferenceCollector(ast.NodeVisitor):
 
         stores: Counter[str] = Counter()
         assigned: dict[str, ast.expr] = {}
+        unpacked: list[tuple[list[str], ast.expr]] = []  # `a, b = f()`（f の戻り値の型注釈が tuple[A, B] なら、要素ごとに型を決める）
         annotated: dict[str, str] = {}
         stack: list[ast.AST] = list(body)
         while stack:
@@ -576,6 +577,13 @@ class _ReferenceCollector(ast.NodeVisitor):
                 and isinstance(current.targets[0], ast.Name)
             ):
                 assigned[current.targets[0].id] = current.value
+            elif (
+                isinstance(current, ast.Assign)
+                and len(current.targets) == 1
+                and isinstance(current.targets[0], (ast.Tuple, ast.List))
+                and all(isinstance(e, ast.Name) for e in current.targets[0].elts)
+            ):
+                unpacked.append(([e.id for e in current.targets[0].elts if isinstance(e, ast.Name)], current.value))
             elif isinstance(current, ast.AnnAssign) and isinstance(current.target, ast.Name):
                 key = self._type_key(self._annotation_parts(current.annotation))
                 if key:
@@ -593,9 +601,16 @@ class _ReferenceCollector(ast.NodeVisitor):
             if stores[name] != 1:
                 continue
             value = assigned.get(name)
-            key = annotated.get(name) or (self._value_type(value) if value is not None else None)
+            key = annotated.get(name) or (self._value_type(value, types) if value is not None else None)
             if key:
                 types[name] = key
+        for names, value in unpacked:
+            if not isinstance(value, ast.Call) or any(stores[n] != 1 for n in names):
+                continue
+            result = self._call_result_type(value, types)
+            elements = result[len("tuple:"):].split("|") if result is not None and result.startswith("tuple:") else []
+            if len(elements) == len(names):
+                types.update({n: k for n, k in zip(names, elements, strict=True) if k})
         return types
 
     def _infer_class_attributes(self, node: ast.ClassDef) -> dict[str, str]:
@@ -677,11 +692,12 @@ class _ReferenceCollector(ast.NodeVisitor):
         elif isinstance(node, (ast.For, ast.AsyncFor)) and is_self_attribute(node.target):
             yield node.target.attr, None, None
 
-    def _value_type(self, value: ast.expr) -> str | None:
+    def _value_type(self, value: ast.expr, local: dict[str, str] | None = None) -> str | None:
         """代入される式から型の照合キーを推定する（クラスの生成・リテラル）。"""
 
         if isinstance(value, ast.Call):
-            return self._call_result_type(value)
+            key = self._call_result_type(value, local)
+            return "builtin:tuple" if key is not None and key.startswith("tuple:") else key
         if isinstance(value, (ast.List, ast.ListComp)):
             return "builtin:list"
         if isinstance(value, (ast.Dict, ast.DictComp)):
@@ -696,13 +712,27 @@ class _ReferenceCollector(ast.NodeVisitor):
             return "builtin:str"
         return None
 
-    def _call_result_type(self, call: ast.Call) -> str | None:
-        """呼び出しの結果の型の照合キー。クラスの生成、または同じファイルの関数・自クラスのメソッドの戻り値の型注釈から推定する。"""
+    def _return_key(self, returns: ast.expr) -> str | None:
+        """戻り値の型注釈の照合キー。`tuple[A, B]` は、要素の型を持つ `tuple:A|B`（展開代入で、要素ごとの型にするため）。"""
+
+        if (
+            isinstance(returns, ast.Subscript)
+            and self._dotted_parts(returns.value) in (["tuple"], ["Tuple"], ["typing", "Tuple"])
+            and isinstance(returns.slice, ast.Tuple)
+            and not any(isinstance(e, ast.Constant) and e.value is Ellipsis for e in returns.slice.elts)
+        ):
+            return "tuple:" + "|".join(self._type_key(self._annotation_parts(e)) or "" for e in returns.slice.elts)
+        return self._type_key(self._annotation_parts(returns))
+
+    def _call_result_type(self, call: ast.Call, local: dict[str, str] | None = None) -> str | None:
+        """呼び出しの結果の型の照合キー。クラスの生成、または同じファイルの関数・メソッド（自クラス、型が分かる変数のメソッド）の戻り値の型注釈から推定する。"""
 
         parts = self._dotted_parts(call.func)
         key = self._type_key(parts)
         if key is not None or parts is None:
             return key
+        if len(parts) == 2 and local is not None and parts[0] in local and local[parts[0]].startswith(KEY_DIRECT):
+            return self._return_types.get(f"{local[parts[0]][len(KEY_DIRECT):]}.{parts[1]}")  # 型が分かる変数のメソッド（同じファイルのクラス）
         self_name, enclosing_class = self._inferring or (self._self_names[-1], self._enclosing_class())
         if len(parts) == 2 and self_name is not None and parts[0] == self_name and enclosing_class is not None:
             return self._return_types.get(f"{enclosing_class.qualified_name}.{parts[1]}")
@@ -859,7 +889,10 @@ class _ReferenceCollector(ast.NodeVisitor):
                 return
             if isinstance(receiver, ast.Call):
                 # `クラス(...).メソッド()` は、生成されるクラスのメソッドとして解決する。
-                typed = self._typed(self._call_result_type(receiver), [func.attr])
+                result_key = self._call_result_type(receiver)
+                if result_key is not None and result_key.startswith("tuple:"):
+                    result_key = "builtin:tuple"
+                typed = self._typed(result_key, [func.attr])
                 if typed is not None:
                     key, status, note = typed
                     self._add_reference(
