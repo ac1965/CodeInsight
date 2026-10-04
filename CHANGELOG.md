@@ -5,6 +5,7 @@
 * `dynamic-run --allow-run -- <コマンド>` が、Pythonをコンテナ（ネットワーク遮断・対象は読み取り専用・非特権・capability削除・資源の上限・環境変数は許可リストのみ）で実行し、観測（実行された関数・呼び出し・行・例外の型と位置・終了コード。**値は記録しない**）を保存する。実行は `dynamic/executor.py` だけが行い、`PermittedRun`（許可の確認済み）が必須。イメージの取得は自動では行わない（`--image`）。
 * 実行の前後で対象のファイルのハッシュを比べ、変わっていれば `target_modified` として観測を保存しない。時間切れ・収集器の出力なしは、正常終了として扱わない。
 * 新しいコマンド: `observed <シンボル>`（実行回数・呼び出し元/先。静的にも確認できた呼び出しかを併記）、`dynamic-runs`（履歴。実行後にソースが変わったものは古い観測）。スキーマv8（`dynamic_runs`・`dynamic_observations`。静的解析の事実とは別のテーブル）。
+* ドキュメントと Makefile の整合: `make reading` は最初に自分で解析する（事前の `make analyze` は不要）ことを、OPERATIONS・README・ビューアーの使い方に明記。`make analyze` も `DB=` のパス展開と `COMPILE_DB=` に対応し、`reading` と同じ解析・同じDBになった。解析結果が無いときの案内を、`reading-serve` も示す内容にした。
 * ビューアー: 切り出し結果を、Markdown原文ではなくHTMLで表示（保存は従来どおりMarkdown）。
 
 ## MCPサーバー（未リリース）

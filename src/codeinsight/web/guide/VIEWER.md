@@ -7,8 +7,8 @@ CodeInsight のビューアーは、解析結果を、ブラウザで読むた�
 ## 起動する
 
 ```bash
-make analyze TARGET=../my-repo      # 対象を解析して保存する
-make reading TARGET=../my-repo      # 資料一式を作り、このビューアーを起動する（SERVE=0 で起動しない）
+make reading TARGET=../my-repo      # 対象を解析し、資料一式を作り、このビューアーを起動する（SERVE=0 で起動しない）
+make analyze TARGET=../my-repo      # 解析だけを行う場合（任意。reading も最初に同じ解析を同じDBへ行う）
 ```
 
 表示されたURL（`http://127.0.0.1:…/?token=…`）をブラウザで開きます。URLには、起動ごとのトークンが含まれます。**共有しないでください**。ビューアーだけを起動するには、`make reading-serve TARGET=…` か `uv run codeinsight serve --project …` を使います。

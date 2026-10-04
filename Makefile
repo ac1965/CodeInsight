@@ -90,9 +90,9 @@ clean: ## 生成物（キャッシュ・ビルド成果物）を削除する。�
 
 # --- 解析（対象リポジトリは変更しない） ---
 
-analyze: ## 対象を解析して保存する（TARGET=ディレクトリ が必須）
+analyze: ## 対象を解析して保存する（TARGET 必須。COMPILE_DB=。make reading / reading-serve も、最初に同じ解析を同じDBへ行う）
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make analyze TARGET=../my-repo))
-	$(CODEINSIGHT) analyze $(TARGET) $(if $(DB),--db $(DB))
+	$(CODEINSIGHT) analyze $(TARGET) $(RDB_OPT) $(if $(COMPILE_DB),--compile-commands $(COMPILE_DB))
 
 status: ## 解析状況と、解析後に変更されたファイルを表示する
 	$(CODEINSIGHT) status $(READ_OPTS)
@@ -325,7 +325,7 @@ reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビ�
 
 reading-serve-run:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-serve TARGET=../my-repo))
-	@$(RCI) status $(RFLAGS) > /dev/null 2>&1 || { echo "解析結果がありません（make analyze TARGET=$(TARGET) を先に実行してください）"; exit 2; }
+	@$(RCI) status $(RFLAGS) > /dev/null 2>&1 || { echo "解析結果がありません（make analyze TARGET=$(TARGET) か make reading-serve TARGET=$(TARGET) で解析してください）"; exit 2; }
 	@echo "Webビューアーを起動します（Ctrl-C で終了）。表示されたURLをブラウザで開いてください。URLにはトークンが含まれます。共有しないでください。"
 	$(RCI) serve $(RFLAGS) --reading-dir $(OUT) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
 

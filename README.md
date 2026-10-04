@@ -74,7 +74,7 @@ C言語解析にはlibclang(PyPIパッケージに同梱)を使用します。�
 ```bash
 make setup                              # 依存のインストール
 make check                              # 構文の確認とテスト
-make analyze TARGET=../my-repo          # 解析(対象は変更しない)
+make analyze TARGET=../my-repo          # 解析だけ(対象は変更しない。make reading も最初に同じ解析を行う)
 make overview                           # 全体像(DB=・PROJECT= で解析結果を指定)
 make understand NAME=main               # 関数の読解カード
 make explain-dry NAME=main MODEL=qwen3-coder:latest   # AIへ送る内容の確認(送信しない)
@@ -86,7 +86,7 @@ make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の
 対象のリポジトリから、読むための資料を出力ディレクトリにまとめて作ります。対象のソースは変更せず(出力先が対象の中だとエラー)、対象のプログラムは実行しません。
 
 ```bash
-make reading TARGET=../my-repo                         # reading/my-repo/ に資料一式と目次(README.md)
+make reading TARGET=../my-repo                         # 解析→資料一式と目次(reading/my-repo/README.md)→ビューアー起動。事前の make analyze は不要（SERVE=0 で起動しない）
 make reading TARGET=../my-repo OUT=/tmp/out TOP=12     # 出力先・主要な関数の数
 make reading TARGET=../c-proj COMPILE_DB=/tmp/build    # Cで compile_commands.json がある場合
 make reading TARGET=../my-repo AI_SEND=1 AI_WORKERS=4   # 並列数を指定。保存済みは再利用し、中断しても同じコマンドで再開できる

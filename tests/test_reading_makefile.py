@@ -156,3 +156,19 @@ def test_make_reading_shares_the_analyze_db_and_serves_by_default(tmp_path: Path
     assert 'if [ "1" != "0" ]' in default.stdout and "reading-serve-run" in default.stdout
     off = _make("-n", "reading", f"TARGET={target}", f"OUT={out}", "SERVE=0")
     assert 'if [ "0" != "0" ]' in off.stdout
+
+
+def test_make_analyze_and_make_reading_run_the_same_analysis(tmp_path: Path) -> None:
+    """`make reading` は最初に、`make analyze` と同じ解析（同じDB・同じ COMPILE_DB）を行う。事前の `make analyze` は不要。"""
+
+    target, out, db = tmp_path / "t", tmp_path / "out", tmp_path / "x.db"
+    shutil.copytree(FIXTURES / "layered", target)
+    args = (f"TARGET={target}", f"OUT={out}", f"DB={db}", "COMPILE_DB=/tmp/cdb")
+    analyze = _make("-n", "analyze", *args).stdout
+    reading = _make("-n", "reading-analyze", *args).stdout
+    wanted = f"analyze {target} --db {db} --compile-commands /tmp/cdb"
+    assert wanted in analyze and wanted in reading
+    # 事前の make analyze なしでも、reading だけで解析結果ができ、DB を共有する
+    result = _make("reading", f"TARGET={target}", f"OUT={out}", f"DB={db}", "TOP=2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert db.is_file() and (out / "overview.txt").read_text(encoding="utf-8").strip()
