@@ -230,3 +230,29 @@ def test_binding_to_all_interfaces_is_allowed_only_inside_the_container(monkeypa
     monkeypatch.setenv("CODEINSIGHT_IN_CONTAINER", "1")
     assert bindable("0.0.0.0") and bindable("127.0.0.1")
     assert not bindable("192.168.1.5") and not bindable("example.com")  # コンテナの中でも、任意のアドレスは不可
+
+
+def test_missing_or_wrong_token_shows_a_helpful_page_without_echoing_the_input(server) -> None:
+    httpd, _ = server
+    status, headers, body = _request(httpd, "/")
+    text = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+    assert status == 401 and "text/html" in headers.get("Content-Type", "")
+    assert "起動するたびに変わります" in text and "docker compose logs" in text and "CODEINSIGHT_VIEWER_TOKEN" in text
+    status, _, body = _request(httpd, "/?token=%3Cscript%3Ealert(1)%3C/script%3E")
+    text = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+    assert status == 401 and "違います" in text and "<script>alert" not in text  # 入力された値は、そのまま出さない
+
+
+def test_viewer_token_can_be_fixed_by_environment_but_short_or_unsafe_values_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    from codeinsight.web.server import configured_token
+
+    monkeypatch.delenv("CODEINSIGHT_VIEWER_TOKEN", raising=False)
+    assert configured_token() is None
+    monkeypatch.setenv("CODEINSIGHT_VIEWER_TOKEN", "")
+    assert configured_token() is None  # 空は、指定なし（compose が空を渡すため）
+    monkeypatch.setenv("CODEINSIGHT_VIEWER_TOKEN", "a-long-enough_token-123")
+    assert configured_token() == "a-long-enough_token-123"
+    for bad in ("short", "has space in it 1234567", "x" * 20 + "?", "日本語のトークンは使えません１２３４５６７８９"):
+        monkeypatch.setenv("CODEINSIGHT_VIEWER_TOKEN", bad)
+        with pytest.raises(ValueError):
+            configured_token()

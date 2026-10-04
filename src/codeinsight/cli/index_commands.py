@@ -110,7 +110,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import webbrowser
 
     from codeinsight.web.api import ViewerApi
-    from codeinsight.web.server import LOOPBACK_HOSTS, ViewerServer, bindable
+    from codeinsight.web.server import LOOPBACK_HOSTS, ViewerServer, bindable, configured_token
 
     if not bindable(args.host):
         raise CliError(f"--host は、ループバック（{', '.join(LOOPBACK_HOSTS)}）だけを指定できます。外部のホストへは公開しません。")
@@ -120,12 +120,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         raise CliError(f"--reading-dir がディレクトリではありません: {reading_dir}")
     api = ViewerApi(repository, project, reading_dir)
     try:
-        server = ViewerServer(args.host, args.port, api)
+        server = ViewerServer(args.host, args.port, api, configured_token())
     except OSError as exc:
         raise CliError(f"サーバーを起動できません（ポート {args.port}）: {exc}") from exc
+    except ValueError as exc:
+        raise CliError(str(exc)) from exc
     print(f"CodeInsight ビューアー: {project.name}", file=sys.stderr)
     print(f"  {server.url}", file=sys.stderr)
-    print("  ※ このURLにはトークンが含まれます。共有しないでください。読み取り専用で、ローカルからのみ接続できます。Ctrl-C で終了します。", file=sys.stderr)
+    print("  ※ このURLにはトークンが含まれます。共有しないでください。トークンは起動のたびに変わります（固定するには CODEINSIGHT_VIEWER_TOKEN）。読み取り専用で、ローカルからのみ接続できます。Ctrl-C で終了します。", file=sys.stderr)
     if args.open:
         webbrowser.open(server.url)
     try:

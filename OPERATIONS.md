@@ -500,8 +500,9 @@ make docker-run TARGET=../my-repo ARGS="overview"            # 任意のサブ�
 make docker-run TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1 ARGS="explain main"   # AI解説（ホストの Ollama。送信の許可 AI_SEND=1 が必要）
 ```
 
-設定は環境変数か `.env`（`.env.example` を参照）で渡します: `TARGET`（必須・絶対パス）、`PORT`、`OUT`、`CODEINSIGHT_DATA`、`CODEINSIGHT_UID` / `CODEINSIGHT_GID`（Linux では `id -u` / `id -g`）、`MODEL`、`AI_SEND`。
+設定は環境変数か `.env`（`.env.example` を参照）で渡します: `TARGET`（必須・絶対パス）、`PORT`、`VIEWER_TOKEN`（ビューアーのトークンの固定。16文字以上の英数字と `-` `_`）、`OUT`、`CODEINSIGHT_DATA`、`CODEINSIGHT_UID` / `CODEINSIGHT_GID`（Linux では `id -u` / `id -g`）、`MODEL`、`AI_SEND`。
 
+* **「トークンが違う」「開けない（401）」のとき**: トークンは**サーバーを起動するたびに変わります**（`docker compose up` のやり直し・再起動・`--build` でも変わる）。ページを開いたあとの再読み込みや、履歴・ブックマークのURLにはトークンがありません。`docker compose logs codeinsight` に出た**最新のURL**を、途中で改行されていないか確認して開いてください（開けない場合の画面にも、同じ案内が出ます）。毎回同じURLで開きたい場合は、`.env` の `VIEWER_TOKEN`（`serve` では環境変数 `CODEINSIGHT_VIEWER_TOKEN`）で固定できます（ホストの `127.0.0.1` にだけ公開されますが、共有しないでください）。
 * ビューアーは、コンテナの中では `0.0.0.0` で待ち受けますが（`CODEINSIGHT_IN_CONTAINER=1`。Dockerfile が設定。この環境変数がある場合に限り許可）、**ホスト側では `127.0.0.1` にだけ公開**します（LAN側のアドレスからは届かないことを確認済み）。トークンとHostの検査は有効です。ホスト側とコンテナ側のポートは、同じ値にしてください（Hostの検査のため）。
 * AIの送信先 `host.docker.internal` は、コンテナの中に限り、この計算機として扱います（ホストとコンテナは同じ計算機のため）。それ以外の名前は、これまでどおり外部（`--allow-remote` が必要）。ソースの送信は、これまでどおり `AI_SEND=1`（`--allow-send`）の明示的な許可が必要で、既定では送信しません。
 * 変更履歴（`history` など）は、`.git` を含むディレクトリ（リポジトリのルート）を `TARGET` にした場合に使えます。サブディレクトリを指定すると、履歴は得られません。

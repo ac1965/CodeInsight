@@ -24,6 +24,19 @@ from codeinsight.web.app_page import content_security_policy, render_app
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 ENV_IN_CONTAINER = "CODEINSIGHT_IN_CONTAINER"
+ENV_VIEWER_TOKEN = "CODEINSIGHT_VIEWER_TOKEN"
+MIN_TOKEN_LENGTH = 16
+
+
+def configured_token() -> str | None:
+    """環境変数で固定したトークン（毎回同じURLで開きたい場合）。無ければ None（起動ごとにランダム）。短すぎる値は、安全でないので拒否する。"""
+
+    value = os.environ.get(ENV_VIEWER_TOKEN, "")
+    if not value:
+        return None
+    if len(value) < MIN_TOKEN_LENGTH or not value.isascii() or not value.isprintable() or any(c in value for c in " &?#%\"'<>\\"):
+        raise ValueError(f"{ENV_VIEWER_TOKEN} は、{MIN_TOKEN_LENGTH}文字以上の英数字と - _ だけにしてください")
+    return value
 
 
 def bindable(host: str) -> bool:
@@ -77,6 +90,23 @@ class _Handler(BaseHTTPRequestHandler):
     def _json(self, status: int, payload: dict) -> None:
         self._send(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
+    def _token_help(self, supplied: bool) -> None:
+        """ページを開くときのトークンが無い・違う場合の案内（固定の文だけ。入力された値は出さない）。"""
+
+        reason = "URLのトークンが、このサーバーのものと違います。" if supplied else "URLにトークンがありません。"
+        body = (
+            "<!doctype html><meta charset=\"utf-8\"><title>CodeInsight</title>"
+            "<body style=\"font:15px/1.7 system-ui,sans-serif;max-width:46em;margin:2em auto;padding:0 1em\">"
+            f"<h1>開けません（401）</h1><p>{reason}</p>"
+            "<ul><li>トークンは、<b>サーバーを起動するたびに変わります</b>（再起動・<code>docker compose up</code> のやり直しなど）。"
+            "<b>最新のURL</b>を、起動したターミナルの出力から開いてください。</li>"
+            "<li>ページを開いたあとの再読み込みや、ブックマーク・履歴からのURLには、トークンがありません。</li>"
+            "<li>Docker の場合は、<code>docker compose logs codeinsight</code> の <code>token=</code> を含むURLを、そのまま（途中で改行されていないか確認して）開いてください。</li>"
+            "<li>毎回同じURLで開きたい場合は、環境変数 <code>CODEINSIGHT_VIEWER_TOKEN</code>（16文字以上）を設定して起動します"
+            "（Docker では <code>.env</code> の <code>VIEWER_TOKEN</code>）。</li></ul></body>"
+        )
+        self._send(401, body.encode("utf-8"), "text/html; charset=utf-8", {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+
     def log_message(self, format: str, *args: object) -> None:
         """アクセスログ。クエリ（トークン・検索語）は出さず、メソッドとパスだけを記録する。"""
 
@@ -112,7 +142,7 @@ class _Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             tokens = query.get("token")
             if not self._token_ok(tokens[0] if tokens else None):
-                self._json(401, {"error": "トークンが必要です（serve が表示したURLを開いてください）"})
+                self._token_help(bool(tokens))
                 return
             nonce = secrets.token_urlsafe(16)
             page = render_app(self.server.token, nonce)

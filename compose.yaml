@@ -10,6 +10,7 @@
 #   OUT      資料の出力先（既定 ./reading/out）。ビューアーの「資料」で読める
 #   CODEINSIGHT_DATA   解析結果のDBの場所（既定 ~/.codeinsight）。ホストの uv run codeinsight と共有する（同時に書き込まない）
 #   CODEINSIGHT_UID / CODEINSIGHT_GID   コンテナの実行ユーザー（既定 1000:1000。Linux では id -u / id -g を指定）
+#   VIEWER_TOKEN   ビューアーのトークンを固定する（既定は、起動のたびにランダム。再起動で変わるため、前のURLは開けなくなる）
 #   MODEL / AI_SEND   AI解説のモデルと、ソース送信の許可（AI_SEND=1。既定は送信しない）
 
 x-common: &common
@@ -22,6 +23,7 @@ x-common: &common
     CODEINSIGHT_AI_BASE_URL: "${DOCKER_AI_URL:-http://host.docker.internal:11434/v1}"
     CODEINSIGHT_AI_MODEL: "${MODEL:-}"
     CODEINSIGHT_AI_ALLOW_SEND: "${AI_SEND:-}"
+    CODEINSIGHT_VIEWER_TOKEN: "${VIEWER_TOKEN:-}"  # 毎回同じURLで開きたい場合に設定（16文字以上の英数字と - _。ホストの 127.0.0.1 にだけ公開されるが、共有しないこと）
     TARGET: "${TARGET:?TARGET に、解析対象のディレクトリの絶対パスを指定してください}"
     PORT: "${PORT:-8765}"
 
