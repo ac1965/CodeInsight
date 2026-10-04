@@ -19,6 +19,8 @@
 #   make reading-c-build TARGET=../c-proj BUILD=/tmp/build ALLOW_BUILD=1   # autotools系: 別の場所で configure+ビルド記録
 #   make reading TARGET=... AI_SEND=1 AI_WORKERS=4             # AI解説を並列に追記する（保存済みは再利用。中断しても同じコマンドで再開）
 #   make reading TARGET=... AI_SEND=1                          # AI解説を追記する（モデルは MODEL=、環境変数 CODEINSIGHT_AI_MODEL、設定ファイル。既定では送信しない）
+#   make reading TARGET=... SERVE=1                            # 資料一式を作ったあと、ローカルのWebビューアーを起動する（PORT=8765、OPEN=1 でブラウザを開く）
+#   make reading-serve TARGET=...                              # 解析して、Webビューアーだけを起動する（資料一式は作らない）
 
 UV      ?= uv
 PYTEST  ?= $(UV) run pytest
@@ -50,7 +52,7 @@ override COMPILE_DB := $(call expand_path,$(COMPILE_DB))
 .PHONY: help setup test test-v test-fast check compile clean \
         analyze status overview architecture unresolved \
         understand explain-dry explain ai-status ai-eval lint \
-        reading reading-pdf reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
+        reading reading-serve reading-serve-run reading-pdf reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
 
 help: ## 使えるタスクの一覧を表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -309,6 +311,18 @@ reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] �
 	  $(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP); \
 	fi
 	@echo "完了: $(OUT)/README.md から読み始められます"
+	@if [ "$(SERVE)" = "1" ]; then $(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN); fi
+
+PORT ?= 8765
+
+reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビューアーを起動する（TARGET 必須。PORT=、OPEN=1。127.0.0.1 のみ・読み取り専用。Ctrl-C で終了）
+	@$(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN)
+
+reading-serve-run:
+	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-serve TARGET=../my-repo))
+	@test -f "$(RDB)" || { echo "解析結果がありません: $(RDB)（make reading-analyze TARGET=... を先に実行してください）"; exit 2; }
+	@echo "Webビューアーを起動します（Ctrl-C で終了）。表示されたURLをブラウザで開いてください。URLにはトークンが含まれます。共有しないでください。"
+	$(RCI) serve --db $(RDB) --project $(TARGET) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
 
 reading-c-build: reading-check ## [資料] autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）
 	$(if $(filter 1,$(ALLOW_BUILD)),,$(error 対象の configure と make を実行します（対象のコードは変更しませんが、ビルドの手順を動かします）。許可する場合は ALLOW_BUILD=1 を付けてください))

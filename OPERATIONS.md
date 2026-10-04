@@ -426,7 +426,12 @@ timeout = 600
 ```bash
 uv run codeinsight serve --project <プロジェクト>            # 表示されたURLをブラウザで開く
 uv run codeinsight serve --project <プロジェクト> --port 9000 --open
+
+make reading TARGET=../my-repo SERVE=1                       # 資料一式を作ったあと、そのままビューアーを起動する（PORT=、OPEN=1）
+make reading-serve TARGET=../my-repo                         # 解析して、ビューアーだけを起動する（資料一式は作らない）
 ```
+
+`make reading ... SERVE=1` / `make reading-serve` は、資料の出力先（`OUT/analysis/codeinsight.db`）の解析結果を使います。上部の種類・方向・深さを変えると、すぐに描き直します。グラフで関数を選ぶと上部の入力にも反映されるので、種類を「制御フロー」に切り替えると、その関数の制御フロー図になります。
 
 * **読み取り専用**で、標準ライブラリだけで動きます（追加の依存なし）。解析の実行・ソースの変更・AIへの送信・外部通信を行うAPIはありません。
 * **ローカルからのみ**: `127.0.0.1`（`localhost`・`::1`）にだけバインドします。外部のホストへ公開する指定は、拒否します。

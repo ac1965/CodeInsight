@@ -84,7 +84,7 @@ _BOOT = r"""
     try { localStorage.removeItem(KEY); } catch (e) { /* 記憶は任意 */ }
   };
   var $ = function (id) { return document.getElementById(id); };
-  var selected = null, lastMarkdown = "";
+  var selected = null, lastMarkdown = "", drawCount = 0;
 
   function api(path, params) {
     var query = Object.keys(params || {}).filter(function (k) { return params[k] !== "" && params[k] !== null && params[k] !== undefined; })
@@ -120,6 +120,8 @@ _BOOT = r"""
 
   function onNode(node) {
     selected = node;
+    // 関数・クラスを選んだら、上部の入力にも反映する（種類を「制御フロー」などに切り替えると、その関数が起点になる）
+    if (["function", "method", "class"].indexOf(node.kind) >= 0) $("q").value = node.label;
     $("reader-title").textContent = node.label;
     showSource(node);
   }
@@ -128,18 +130,29 @@ _BOOT = r"""
     var kind = $("kind").value, root = $("q").value.trim();
     var params = { kind: kind, direction: $("direction").value, depth: $("depth").value };
     if (root) params.root = root;
+    // 古いリクエストの応答が、新しい描画を上書きしないようにする
+    var ticket = ++drawCount;
     say("読み込み中…");
     api("/api/graph", params).then(function (data) {
+      if (ticket !== drawCount) return;
       say(data.nodes.length + " ノード / " + data.edges.length + " 辺");
       window.renderGraph(data, { onNode: onNode });
     }).catch(function (e) {
+      if (ticket !== drawCount) return;
       var detail = e.body && e.body.candidates ? "（候補: " + e.body.candidates.slice(0, 5).map(function (c) { return c.qualified_name; }).join(", ") + "）" : "";
       say(e.message + detail);
     });
   }
 
+  // 上部の設定（種類・方向・深さ・シンボル）を変えたら、すぐに描き直す。「描画」ボタンは、同じ設定での再描画に使う。
   $("draw").onclick = draw;
   $("q").onkeydown = function (ev) { if (ev.key === "Enter") draw(); };
+  $("q").onchange = draw;  // 候補（datalist）の選択・入力の確定
+  $("kind").onchange = draw;
+  $("direction").onchange = draw;
+  $("depth").onchange = draw;
+  var drawTimer = null;
+  $("depth").oninput = function () { clearTimeout(drawTimer); drawTimer = setTimeout(draw, 400); };  // 数値の連続入力は、まとめて1回
   var timer = null;
   $("q").oninput = function () {
     clearTimeout(timer);

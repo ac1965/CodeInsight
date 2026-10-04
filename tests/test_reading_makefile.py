@@ -128,3 +128,20 @@ def test_tilde_in_paths_is_expanded_even_when_the_shell_does_not_expand_it(tmp_p
 def test_paths_with_spaces_are_refused_clearly(tmp_path: Path) -> None:
     result = _make("reading", f"TARGET={FIXTURES / 'layered'}", f"OUT={tmp_path / 'a b'}")
     assert result.returncode == 2 and "空白は使えません" in result.stdout + result.stderr
+
+
+def test_make_reading_serve_targets_start_the_local_viewer_without_executing_it_here(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    shutil.copytree(FIXTURES / "layered", target)
+    out = tmp_path / "out"
+    # 起動コマンドの内容だけを確認する（-n: 実行しない）
+    dry = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "PORT=9123", "OPEN=1")
+    # 解析結果が無ければ、起動せずに案内して終了する
+    missing = _make("reading-serve-run", f"TARGET={target}", f"OUT={out}")
+    assert missing.returncode == 2 and "解析結果がありません" in missing.stdout + missing.stderr
+    assert "serve --db" in dry.stdout and "--port 9123" in dry.stdout and "--open" in dry.stdout and "127.0.0.1" not in dry.stdout
+    # SERVE=1 が無ければ、make reading は起動しない（資料を作って終わる）
+    plain = _make("-n", "reading", f"TARGET={target}", f"OUT={out}")
+    assert 'if [ "" = "1" ]' in plain.stdout
+    with_serve = _make("-n", "reading", f"TARGET={target}", f"OUT={out}", "SERVE=1")
+    assert 'if [ "1" = "1" ]' in with_serve.stdout and "reading-serve-run" in with_serve.stdout
