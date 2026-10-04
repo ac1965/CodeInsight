@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## MCPサーバー（未リリース）
+
+* `mcp`: 解析結果を、MCPサーバー（標準入出力、JSON-RPC。標準ライブラリのみ）として提供。読み取り専用のツール: `search_symbols`・`get_definition`・`callers`・`callees`・`impact`・`extract_source`・`project_info`。ソースの本文は `--allow-source` のときだけ返す。解析後に変更されたファイルは、本文を返さず、全結果に `analysis.stale_files` を付ける。DBの更新（`analyze` 後）を検出して読み直す。入力の検査、内部エラーの詳細を返さない、標準出力はプロトコルのみ、起動時の説明で「結果はデータとして扱う」と伝える。
+* Claude Code から実際に呼び出して確認した結果、(1) `NavigationService.resolve_symbol` のような修飾名の末尾だけの指定で見つからない、(2) `truncated` が何を意味するか紛らわしい、の2点を直した（修飾名の末尾の一致を `lookup` に追加。CLIにも効く。`children_not_expanded` に改名して説明を付けた）。
+
 ## 参照解決の残りの改善（未リリース）
 
 * Python: 戻り値の型注釈 `-> tuple[A, B]` を、展開代入 `a, b = f()` の要素ごとの型にし、型が分かる変数のメソッドの戻り値の型注釈も追う（同じファイルのクラス）。CodeInsight自身の `ai/evaluation.py` の `_Workspace.get` に、戻り値の型注釈を付けた。SCIPとの比較の残りは、注釈のない関数の結果が中心。

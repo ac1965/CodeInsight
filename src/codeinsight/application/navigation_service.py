@@ -102,7 +102,7 @@ class NavigationService:
         file: str | None = None,
         kinds: set[SymbolKind] | None = None,
     ) -> list[SymbolHit]:
-        """名前から定義候補を探す。修飾名の完全一致を優先し、無ければ名前の完全一致。"""
+        """名前から定義候補を探す。修飾名の完全一致を優先し、無ければ名前の完全一致、それも無ければ修飾名の末尾の一致（`Class.method`）。"""
 
         by_qualified = [
             h
@@ -114,6 +114,13 @@ class NavigationService:
         candidates = by_qualified or search_symbols_in_index(
             index, query, kinds=kinds, match=MatchMode.EXACT, file=file
         )
+        if not candidates and query:
+            # `NavigationService.resolve_symbol` のように、修飾名の末尾（クラス名.メソッド名）だけを指定した場合
+            candidates = [
+                h
+                for h in search_symbols_in_index(index, query, kinds=kinds, match=MatchMode.SUBSTRING, file=file)
+                if h.symbol.qualified_name.endswith(("." + query, "::" + query, "/" + query))
+            ]
         return [h for h in candidates if h.symbol.kind not in _LOCAL_KINDS] or candidates
 
     def resolve_symbol(

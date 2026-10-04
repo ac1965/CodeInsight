@@ -135,3 +135,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
     finally:
         server.server_close()
     return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """解析結果を、MCPサーバー（標準入出力）として提供する（読み取り専用。ネットワークには出ない）。"""
+
+    from codeinsight import __version__ as version  # noqa: PLC0415
+    from codeinsight.cli.common import resolve_db_path
+    from codeinsight.mcp.server import McpServer
+    from codeinsight.mcp.tools import CodeInsightTools
+
+    repository, project = open_project_context(args)
+    db_path = resolve_db_path(args)
+
+    def db_mtime() -> float:
+        try:
+            return db_path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    tools = CodeInsightTools(repository, project, allow_source=args.allow_source, db_mtime=db_mtime)
+    print(f"CodeInsight MCP サーバー: {project.name}（ソースの本文: {'返す' if args.allow_source else '返さない（--allow-source で許可）'}）", file=sys.stderr)
+    McpServer(tools, version).serve(sys.stdin, sys.stdout)
+    return 0

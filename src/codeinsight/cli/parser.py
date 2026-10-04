@@ -31,7 +31,7 @@ from codeinsight.cli.explore import (
     reference_command,
 )
 from codeinsight.cli.graph import cmd_graph
-from codeinsight.cli.index_commands import cmd_compare_scip, cmd_extract, cmd_import_scip, cmd_serve
+from codeinsight.cli.index_commands import cmd_compare_scip, cmd_extract, cmd_import_scip, cmd_mcp, cmd_serve
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
 from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
 from codeinsight.domain import SymbolKind
@@ -205,6 +205,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8765, help="ポート（既定: 8765。0 で空きポートを自動選択）")
     serve.add_argument("--open", action="store_true", help="起動後にブラウザで開く（既定はオフ）")
     serve.add_argument("--reading-dir", help="make reading の出力先。指定すると、ビューアーの「資料」で、その中のテキスト・Markdownを読める（読み取りのみ）")
+
+    mcp = add("mcp", "解析結果を、MCPサーバー（標準入出力）として提供する。AIエージェント（Claude Code など）が、検索・定義・呼び出し元/先・影響範囲・切り出しを問い合わせられる（読み取り専用）", cmd_mcp, ("text",), exclude=False)
+    mcp.add_argument("--allow-source", action="store_true", help="ソースの本文を、ツールの結果（AIエージェント）に含めることを許可する（既定では、位置・名前・解決状態だけを返す）")
 
     externals = add("externals", "外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を分類して表示する", cmd_externals)
     externals.add_argument("--category", action="append", choices=list(CATEGORY_LABELS), help="カテゴリで絞り込む")
