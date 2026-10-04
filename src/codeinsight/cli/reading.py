@@ -5,18 +5,21 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter, defaultdict
+from pathlib import Path
 
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.application import FlowAnalysisError, FlowService, NavigationService, RiskService
 from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.elisp_flow_service import ElispFlowService
+from codeinsight.application.external_findings_service import ExternalFindingsService
 from codeinsight.application.external_service import CATEGORY_LABELS
 from codeinsight.application.understand_service import UnderstandService
 from codeinsight.cli import reading_c, reading_el
-from codeinsight.cli.common import CliError, coverage_note, emit_json, not_covered, prepare_read, resolve_symbol_arg, safe, warn_if_stale
+from codeinsight.cli.common import CliError, coverage_note, emit_json, not_covered, open_project_context, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.cli.project import OPERATION_LABELS, group_uses, lines_text
 from codeinsight.domain import Language, SymbolKind
+from codeinsight.infrastructure.sarif import SarifError
 
 
 def _flow_service(args: argparse.Namespace):
@@ -260,6 +263,34 @@ def cmd_exceptions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import_sarif(args: argparse.Namespace) -> int:
+    repository, project = open_project_context(args)
+    service = ExternalFindingsService(repository)
+    if args.clear:
+        count = service.clear(project, args.tool)
+        print(f"外部ツールの指摘を {count}件 削除しました" + (f"（{safe(args.tool)}）" if args.tool else ""))
+        return 0
+    if not args.file:
+        raise CliError("SARIFファイルを指定してください（または --clear）。")
+    try:
+        report = service.import_sarif(project, Path(args.file).expanduser())
+    except SarifError as exc:
+        raise CliError(f"SARIFを取り込めません: {exc}") from exc
+    if args.format == "json":
+        emit_json({"imported": report.imported, "tools": report.tools, "without_location": report.without_location,
+                   "outside_project": report.outside_project, "missing_files": report.missing_files, "by_level": report.by_level})
+        return 0
+    print(f"外部ツールの指摘を {report.imported}件 取り込みました（ツール: {safe(', '.join(report.tools) or '不明')}）")
+    for level, count in sorted(report.by_level.items()):
+        print(f"  {safe(level)}: {count}件")
+    skipped = [(report.without_location, "位置（ファイル・行）を持たない"), (report.outside_project, "プロジェクトのルートの外、または解釈できない場所"), (report.missing_files, "ルートの中に存在しないファイル")]
+    for count, reason in skipped:
+        if count:
+            print(f"  取り込まなかった指摘: {count}件（{reason}）")
+    print("※ 外部ツールの指摘は、CodeInsight自身の解析結果ではありません。risks・understand では別の区分で示します。ツールは実行していません。", file=sys.stderr)
+    return 0
+
+
 def cmd_risks(args: argparse.Namespace) -> int:
     repository, project, index, stale = prepare_read(args)
     rules = set(args.rule) if args.rule else None
@@ -270,10 +301,14 @@ def cmd_risks(args: argparse.Namespace) -> int:
     skipped = [*skipped, *c_skipped, *el_skipped]
     order = ("low", "medium", "high")
     findings = [f for f in findings if order.index(f.severity) >= order.index(args.min_severity)]
+    external = [(f, old) for f, old in ExternalFindingsService(repository).with_staleness(project) if args.tool is None or f.tool == args.tool]
     covered = (Language.PYTHON, Language.C, Language.ELISP)
     note = coverage_note(index, "リスクの検出", covered=covered)
     if args.format == "json":
-        emit_json({"skipped": skipped, "not_covered_languages": not_covered(index, covered), "findings": [{**vars(f), "message": f.message} for f in findings]})
+        emit_json({
+            "skipped": skipped, "not_covered_languages": not_covered(index, covered), "findings": [{**vars(f), "message": f.message} for f in findings],
+            "external_findings": [external_dict(f, old) for f, old in external],
+        })
         return 0
     counts = Counter(f.rule for f in findings)
     print(f"潜在的な問題の手がかり {len(findings)}件（バグの断定ではありません。意図的な実装の場合があります）")
@@ -290,9 +325,37 @@ def cmd_risks(args: argparse.Namespace) -> int:
             print(f"  … ほか {len(items) - args.limit}件（--limit / --all）")
     if note:
         print(f"\n{note}")
+    print_external_findings(external, args.limit)
     if skipped:
         print(f"\n解析後に変更された等で対象外にしたファイル: {', '.join(safe(p) for p in skipped[:5])}", file=sys.stderr)
     return 0
+
+
+def external_dict(finding, stale: bool) -> dict:
+    return {
+        "tool": finding.tool, "tool_version": finding.tool_version, "rule": finding.rule_id, "level": finding.level, "message": finding.message,
+        "path": finding.path, "start_line": finding.start_line, "end_line": finding.end_line, "stale": stale,
+        "imported_at": finding.imported_at.isoformat(), "source": finding.source_name, "origin": "external",
+    }
+
+
+def print_external_findings(external: list, limit: int) -> None:
+    """外部ツールの指摘。CodeInsight自身の解析結果ではないため、別の区分で示す。"""
+
+    if not external:
+        return
+    print("\n━━ 外部ツールの指摘（取り込んだSARIF。CodeInsight自身の解析結果ではなく、確定した事実でもありません）")
+    by_tool: dict[tuple[str, str], list] = defaultdict(list)
+    for finding, old in external:
+        by_tool[(finding.tool, finding.tool_version)].append((finding, old))
+    for (tool, version), items in sorted(by_tool.items()):
+        stale_count = sum(1 for _, old in items if old)
+        print(f"■ {safe(tool)} {safe(version)}（{len(items)}件" + (f"、うち古い {stale_count}件" if stale_count else "") + "）")
+        for finding, old in items[:limit]:
+            marker = "  [古い: 取り込み後にファイルが変更されています。行番号がずれている可能性]" if old else ""
+            print(f"  {safe(finding.path)}:{finding.start_line}  [{safe(finding.level)}] {safe(finding.rule_id)}  {safe(finding.message)}{marker}")
+        if len(items) > limit:
+            print(f"  … ほか {len(items) - limit}件（--limit）")
 
 
 def _print_section(title: str) -> None:
@@ -460,6 +523,17 @@ def cmd_understand(args: argparse.Namespace) -> int:
         print(f"  {labels[hint.kind]}の手がかり: L{hint.line} {safe(hint.detail)}")
     for finding in u.risks:
         print(f"  リスクの手がかり: L{finding.line} [{finding.severity}] {finding.rule} — {safe(finding.message)}")
+
+    external_here = [
+        (f, old) for f, old in ExternalFindingsService(repository).with_staleness(project)
+        if f.path == u.path and symbol.start_line <= f.start_line <= symbol.end_line
+    ]
+    for ext, old in external_here:
+        if old:
+            continue  # ファイルが変わっており、行がこの関数に属するか判定できない
+        print(f"  外部ツールの指摘（{safe(ext.tool)}。CodeInsightの解析結果ではない）: L{ext.start_line} [{safe(ext.level)}] {safe(ext.rule_id)} — {safe(ext.message)}")
+    if any(old for _, old in external_here):
+        print("  ※ 取り込み後にファイルが変更された外部ツールの指摘は、位置を対応づけられないため示していません（risks で確認できます）")
 
     _print_section("8. なぜ現在の実装になっているのか（履歴の手がかり）")
     if u.history and u.history.available:

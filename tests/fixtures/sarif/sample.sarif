@@ -1,0 +1,19 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {"driver": {"name": "demo-linter", "version": "1.2.3"}},
+      "results": [
+        {"ruleId": "DL001", "level": "error", "message": {"text": "shell を介したコマンド実行 \u001b[31m(制御文字を含む)\u001b[0m"},
+         "locations": [{"physicalLocation": {"artifactLocation": {"uri": "core.el"}, "region": {"startLine": 84, "endLine": 84}}}]},
+        {"ruleId": "DL002", "message": {"text": "水準の指定が無い指摘"},
+         "locations": [{"physicalLocation": {"artifactLocation": {"uri": "util.el"}, "region": {"startLine": 3}}}]},
+        {"ruleId": "DL003", "level": "note", "message": {"text": "位置を持たない指摘"}},
+        {"ruleId": "DL004", "level": "warning", "message": {"text": "プロジェクトの外のファイル"},
+         "locations": [{"physicalLocation": {"artifactLocation": {"uri": "../../etc/passwd"}, "region": {"startLine": 1}}}]},
+        {"ruleId": "DL005", "level": "warning", "message": {"text": "存在しないファイル"},
+         "locations": [{"physicalLocation": {"artifactLocation": {"uri": "nothing.el"}, "region": {"startLine": 1}}}]}
+      ]
+    }
+  ]
+}

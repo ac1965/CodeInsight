@@ -32,7 +32,7 @@ from codeinsight.cli.explore import (
 )
 from codeinsight.cli.graph import cmd_graph
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
-from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_risks, cmd_state, cmd_understand
+from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
 from codeinsight.domain import SymbolKind
 
 # --- パーサー ---
@@ -173,6 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
     risks.add_argument("--rule", action="append", choices=sorted(RISK_RULES), help="規則で絞り込む")
     risks.add_argument("--min-severity", choices=("low", "medium", "high"), default="low")
     risks.add_argument("--limit", type=int, default=10, help="規則ごとの表示件数")
+    risks.add_argument("--tool", help="外部ツールの指摘を、ツール名で絞り込む（import-sarif で取り込んだもの）")
+
+    import_sarif = add("import-sarif", "外部ツールのSARIFを読み込み、指摘を出どころ付きで保存する（ツールは実行しない。risks・understand で別の区分に表示）", cmd_import_sarif, exclude=False)
+    import_sarif.add_argument("file", nargs="?", help="SARIFファイル（--clear の場合は不要）")
+    import_sarif.add_argument("--clear", action="store_true", help="取り込み済みの外部ツールの指摘を削除する（--tool で絞り込める）")
+    import_sarif.add_argument("--tool", help="--clear の対象を、ツール名で絞り込む")
 
     externals = add("externals", "外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を分類して表示する", cmd_externals)
     externals.add_argument("--category", action="append", choices=list(CATEGORY_LABELS), help="カテゴリで絞り込む")

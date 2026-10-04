@@ -419,6 +419,19 @@ timeout = 600
 
 静的な呼び出しグラフは、実行順序や実際に通る経路を示しません。グラフ・表示には、この旨が併記されます。
 
+### 10.1b 外部ツールのSARIFを取り込む
+
+SARIFを出力する外部ツール（例: `ruff --output-format sarif`、GCC 13以降の `-fdiagnostics-format=sarif-file` など）の結果を、読み込んで表示できます。**ツールの実行は利用者が行います**（CodeInsightは実行しません。対象のビルドを伴うものは、`ALLOW_BUILD=1` と同じ考え方で、明示的に許可した場合だけ行ってください）。
+
+```bash
+uv run codeinsight import-sarif result.sarif --project <プロジェクト>
+uv run codeinsight risks --project <プロジェクト>          # 「外部ツールの指摘」が別の区分で出る
+uv run codeinsight risks --tool ruff --project <プロジェクト>
+uv run codeinsight import-sarif --clear --project <プロジェクト>
+```
+
+外部ツールの指摘は、CodeInsight自身の解析結果ではありません。取り込み後にファイルを変更すると「古い」と表示されます。CodeQLの結果は対象にしていません。
+
 ### 10.2 「0件」「なし」の意味
 
 言語によって対応範囲が異なる機能は、結果に**対象外の言語と件数を注記**します。注記が付いているときの `0件` は、「問題なし」ではなく「検査していない」です。

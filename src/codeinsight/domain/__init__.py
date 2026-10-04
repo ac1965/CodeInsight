@@ -1,6 +1,7 @@
 from codeinsight.domain.analysis_result import AnalysisResult, AnalysisStatus
 from codeinsight.domain.dependency import Dependency, DependencyKind
 from codeinsight.domain.explanation import Explanation, ExplanationStatus
+from codeinsight.domain.external_finding import ExternalFinding
 from codeinsight.domain.location import Confidence, SourceLocation
 from codeinsight.domain.project import Project, ProjectConfiguration
 from codeinsight.domain.reference import Reference, ReferenceKind, ResolutionStatus
@@ -20,6 +21,7 @@ __all__ = [
     "DependencyKind",
     "Explanation",
     "ExplanationStatus",
+    "ExternalFinding",
     "Project",
     "ProjectConfiguration",
     "Reference",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -102,6 +102,28 @@ CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name ON symbols(qualified_name)
 
 # バージョン4: AI解説。解析結果（事実）のテーブルとは分離し、モデル・入力のハッシュ・根拠ファイルの
 # ハッシュ・検証結果を保持する（AGENTS.md §1.2-2, §10.3）。
+# バージョン6: 外部ツール（SARIF）の指摘。解析結果（事実）のテーブルとは分離し、ツール名・版・取り込み時の
+# ファイルのハッシュを保持する。再解析しても消えず、ソースが変わった場合は古い指摘として判定する。
+V6_TABLES = """
+CREATE TABLE IF NOT EXISTS external_findings (
+    finding_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(project_id),
+    tool TEXT NOT NULL,
+    tool_version TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    level TEXT NOT NULL,
+    message TEXT NOT NULL,
+    path TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_external_findings_project ON external_findings(project_id, path, start_line);
+"""
+
 V4_TABLES = """
 CREATE TABLE IF NOT EXISTS explanations (
     explanation_id TEXT PRIMARY KEY,

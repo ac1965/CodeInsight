@@ -16,6 +16,7 @@ from codeinsight.domain import (
     DependencyKind,
     Explanation,
     ExplanationStatus,
+    ExternalFinding,
     Language,
     Project,
     ProjectConfiguration,
@@ -33,6 +34,7 @@ from codeinsight.infrastructure.schema import (
     V2_COLUMNS,
     V2_TABLES,
     V4_TABLES,
+    V6_TABLES,
 )
 
 _PROJECT_COLUMNS = (
@@ -112,6 +114,7 @@ class AnalysisRepository:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         connection.executescript(V2_TABLES)
         connection.executescript(V4_TABLES)
+        connection.executescript(V6_TABLES)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
 
@@ -184,6 +187,7 @@ class AnalysisRepository:
         self._delete_files(file_ids)
         self._connection.execute("DELETE FROM analysis_results WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM explanations WHERE project_id = ?", (project_id,))
+        self._connection.execute("DELETE FROM external_findings WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
         self._commit()
 
@@ -469,6 +473,45 @@ class AnalysisRepository:
             (project_id, id_prefix.replace("%", "") + "%"),
         ).fetchall()
         return _explanation_from_row(rows[0]) if len(rows) == 1 else None
+
+    # --- ExternalFinding（外部ツールの指摘。解析結果とは別に管理する） ---
+
+    def replace_external_findings(self, project_id: str, source_sha256: str, findings: list[ExternalFinding]) -> None:
+        """同じSARIF（内容のハッシュが同じ）から取り込み済みの指摘を、置き換える。"""
+
+        self._connection.execute("DELETE FROM external_findings WHERE project_id = ? AND source_sha256 = ?", (project_id, source_sha256))
+        self._connection.executemany(
+            "INSERT INTO external_findings (finding_id, project_id, tool, tool_version, rule_id, level, message, path, start_line, "
+            "end_line, content_hash, imported_at, source_name, source_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (f.finding_id, f.project_id, f.tool, f.tool_version, f.rule_id, f.level, f.message, f.path, f.start_line, f.end_line,
+                 f.content_hash, f.imported_at.isoformat(), f.source_name, f.source_sha256)
+                for f in findings
+            ],
+        )
+        self._commit()
+
+    def list_external_findings(self, project_id: str) -> list[ExternalFinding]:
+        rows = self._connection.execute(
+            "SELECT * FROM external_findings WHERE project_id = ? ORDER BY path, start_line, rule_id", (project_id,)
+        ).fetchall()
+        return [
+            ExternalFinding(
+                row["finding_id"], row["project_id"], row["tool"], row["tool_version"], row["rule_id"], row["level"], row["message"],
+                row["path"], row["start_line"], row["end_line"], row["content_hash"], datetime.fromisoformat(row["imported_at"]),
+                row["source_name"], row["source_sha256"],
+            )
+            for row in rows
+        ]
+
+    def delete_external_findings(self, project_id: str, tool: str | None = None) -> int:
+        query, params = "DELETE FROM external_findings WHERE project_id = ?", [project_id]
+        if tool is not None:
+            query += " AND tool = ?"
+            params.append(tool)
+        count = self._connection.execute(query, params).rowcount
+        self._commit()
+        return count
 
     # --- AnalysisResult ---
 
