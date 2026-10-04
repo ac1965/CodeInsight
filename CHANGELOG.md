@@ -1,10 +1,16 @@
 # CHANGELOG
 
+## ドキュメントの最新化（未リリース）
+
+* ARCHITECTURE.md: `web/`・`mcp/`・Go/C++/Emacs Lispの解析器・制御フロー図（C・Emacs Lisp）・外部ツールの取り込み・動的解析の実行部・Docker・スキーマv8・ワークフローを反映。
+* REQUIREMENTS.md: 3.2.3〜3.2.5（Emacs Lisp・C++・Go）、3.12（外部ツールの取り込み）、3.13（MCP）、動的解析の段階1を反映。解消した課題（mypy・CIの固定）と、MCP・Go・Emacs Lispの「未着手」を更新。
+* OPERATIONS.md: 対応言語・全体像・スキーマv8・DBに入るもの・言語別の手順（Emacs Lisp・C++・Go）を更新。README.md: 開発状況・外部ツールの取り込みと動的解析のコマンドを追記。ANALYSIS.md: 動的解析の節を実装に合わせた。TESTING.md: テスト数・CIの扱い。
+
 ## Docker 対応（未リリース）
 
 * `Dockerfile`・`.dockerignore`・`compose.yaml`・`.env.example`・`make docker-build / docker-analyze / docker-serve / docker-reading / docker-up / docker-run` を追加。`docker compose up` で、解析→ビューアーが動く（`--profile reading run --rm reading` で資料一式）。
 * 必要な個別ソフトウェア（git・Go 1.23・build-essential・graphviz・Chromium・make）をイメージに含めた。コンテナの中で、Goアダプター、図、資料のPDFまで動くことを確認した。
-* データの共有: 解析結果のDB（ホストの `~/.codeinsight`）をコンテナに割り当て、対象はホストと同じパスに読み取り専用で割り当てる。ホストとコンテナで、同じプロジェクトとして同じDBを読めることを確認した。存在しない場所を Docker が root の所有で作らないよう、`create_host_path: false`。
+* データの共有: 解析結果のDB（ホストの `~/.codeinsight`）をコンテナに割り当て、対象はホストと同じパスに読み取り専用で割り当てる。ホストとコンテナで、同じプロジェクトとして同じDBを読めることを確認した。書き込む場所（DB・資料の出力先）が無ければ、Docker が root の所有で作らず、`create_host_path: false` で失敗させる。ただし、ビューアーが読むだけの資料の出力先は、無くても `docker compose up` が起動する（初回の `up` が資料の出力先で失敗した不具合の修正）。
 * 修正: Goの補助プログラムの実行ファイルを、OS・CPUごとの名前にした（DBの場所を共有するホスト（macOS）とコンテナ（Linux）で、互いの実行ファイルを使ってしまうため）。
 * Ollama はコンテナに含めず、ホスト（macOS）のものを使う（`host.docker.internal:11434`）。実機（Docker Desktop）で、解析・`ai-status`・qwen3-coder による `explain` を確認した。
 * コンテナの中（`CODEINSIGHT_IN_CONTAINER=1`）に限り、ビューアーが `0.0.0.0` にバインドでき、AIの送信先 `host.docker.internal` を、この計算機として扱う。ホスト側の公開は `127.0.0.1` のみ（LAN側から届かないこと、トークンなし・不正なHostが拒否されることを確認）。

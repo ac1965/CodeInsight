@@ -1,8 +1,8 @@
 # docker compose up で、対象を解析して、ビューアーを起動する（AIは、ホストの Ollama を使う）。
 #
-#   mkdir -p ~/.codeinsight reading/out                         # 初回のみ（Docker に root の所有で作らせないため）
+#   mkdir -p ~/.codeinsight                                     # 初回のみ（Docker に root の所有で作らせないため）
 #   TARGET=/絶対パス/my-repo docker compose up --build        # → http://127.0.0.1:8765/ （表示されたトークン付きURLを開く）
-#   TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDFを含む）を OUT に作る
+#   TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDFを含む）を OUT に作る（先に mkdir -p reading/out）
 #
 # 設定は、環境変数か、このファイルと同じ場所の .env（.env.example を参照）で渡す。
 #   TARGET   解析対象のディレクトリの絶対パス（必須）。ホストと同じパスに、読み取り専用で割り当てる（変更しない）
@@ -24,21 +24,6 @@ x-common: &common
     CODEINSIGHT_AI_ALLOW_SEND: "${AI_SEND:-}"
     TARGET: "${TARGET:?TARGET に、解析対象のディレクトリの絶対パスを指定してください}"
     PORT: "${PORT:-8765}"
-  volumes:
-    # 存在しない場所を、Docker が root の所有で作ってしまわないよう、作らせない（先に mkdir -p するか、make docker-up を使う）
-    - type: bind
-      source: "${CODEINSIGHT_DATA:-${HOME}/.codeinsight}"
-      target: /data
-      bind: {create_host_path: false}
-    - type: bind
-      source: "${TARGET}"
-      target: "${TARGET}"
-      read_only: true
-      bind: {create_host_path: false}
-    - type: bind
-      source: "${OUT:-./reading/out}"
-      target: /out
-      bind: {create_host_path: false}
 
 services:
   codeinsight:
@@ -51,6 +36,22 @@ services:
         exec codeinsight serve --project "$$TARGET" --host 0.0.0.0 --port "$$PORT" --reading-dir /out
     ports:
       - "127.0.0.1:${PORT:-8765}:${PORT:-8765}"
+    volumes:
+      # 存在しない場所を、Docker が root の所有で作ってしまわないよう、作らせない（先に mkdir -p するか、make docker-up を使う）
+      - type: bind
+        source: "${CODEINSIGHT_DATA:-${HOME}/.codeinsight}"
+        target: /data
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${TARGET}"
+        target: "${TARGET}"
+        read_only: true
+        bind: {create_host_path: false}
+      # 資料の出力先。ビューアーは読むだけ（読み取り専用）なので、無ければ作られてよい（資料が無ければ「資料がありません」と表示）
+      - type: bind
+        source: "${OUT:-./reading/out}"
+        target: /out
+        read_only: true
 
   reading:
     <<: *common
@@ -61,3 +62,19 @@ services:
       - >-
         make reading TARGET="$$TARGET" OUT=/out SERVE=0 UV=ci-uv CODEINSIGHT=codeinsight
         $${CODEINSIGHT_AI_ALLOW_SEND:+AI_SEND=1} $${CODEINSIGHT_AI_MODEL:+MODEL=$$CODEINSIGHT_AI_MODEL}
+    volumes:
+      # 存在しない場所を、Docker が root の所有で作ってしまわないよう、作らせない（先に mkdir -p するか、make docker-up を使う）
+      - type: bind
+        source: "${CODEINSIGHT_DATA:-${HOME}/.codeinsight}"
+        target: /data
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${TARGET}"
+        target: "${TARGET}"
+        read_only: true
+        bind: {create_host_path: false}
+      # 資料の出力先（書き込む）。先に mkdir -p しておく（make docker-up / docker-reading は作る）
+      - type: bind
+        source: "${OUT:-./reading/out}"
+        target: /out
+        bind: {create_host_path: false}

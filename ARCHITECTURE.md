@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-CodeInsightのシステム構成と依存関係を示す。論理的な責務分割は [AGENTS.md §5](AGENTS.md#5-システムアーキテクチャ) に定義されており、本書は現在の実装（Phase 1〜3）がそれをどう具体化したかを記述する。
+CodeInsightのシステム構成と依存関係を示す。論理的な責務分割は [AGENTS.md §5](AGENTS.md#5-システムアーキテクチャ) に定義されており、本書は現在の実装（Phase 1〜4と、関数単位の解析・Webビューアー・MCP・動的解析の段階1・Docker）がそれをどう具体化したかを記述する。
 
 ## モジュール構成
 
@@ -19,7 +19,11 @@ src/codeinsight/
 │   ├── language.py          拡張子ベースの言語識別
 │   ├── language_adapter.py  LanguageAdapter Protocol, SourceUnit, FileAnalysis
 │   ├── ids.py               決定的なシンボル/参照/依存関係IDの払い出し
-│   ├── c_analyzer.py        CAnalyzer（libclang）: シンボル・呼び出し・参照・include
+│   ├── c_analyzer.py        CAnalyzer / CppAnalyzer（libclang）: シンボル・呼び出し・参照・include（C++は名前空間・クラス・継承・テンプレートまで）
+│   ├── elisp_analyzer.py    ElispAnalyzer（自前のS式リーダー。.el と .org の emacs-lisp ブロック）: 関数・マクロ・変数・呼び出し・require
+│   ├── elisp_forms.py       Emacs Lispの特殊形式・制御構造の名前の一覧（解析器・フロー・データフロー・制御フロー図で共有）
+│   ├── elisp_flow_analysis.py / elisp_dataflow_analysis.py  Emacs Lispの関数単位の制御フロー・シグナル・状態・データフロー（流れ非依存の近似）
+│   ├── go_analyzer.py       GoAnalyzer: go/parser を使う補助プログラム（go_helper/goparse.go。常駐プロセス、JSON行。対象はコンパイル・実行しない）
 │   ├── python_analyzer.py   PythonAnalyzer（標準ast）: シンボル・呼び出し・継承・import・型推定
 │   ├── symbol_extractor.py  言語ごとのアダプターを呼び分ける調整役
 │   ├── reference_resolver.py プロジェクト横断の参照・依存関係の解決
@@ -57,14 +61,17 @@ src/codeinsight/
 │   ├── understand_service.py    読解カード（8つの問いに沿って上記を集約）
 │   ├── source_scan.py           ソース走査の共通部品（解析後の変更を検出して対象外にする）
 │   ├── paths.py                 テストパスの判定
-│   ├── cfg_builder.py           関数の制御フロー図の組み立て
+│   ├── cfg_base.py / cfg_builder.py / cfg_builder_c.py / cfg_builder_lisp.py  関数の制御フロー図（共通部分 / Python / C / Emacs Lisp）
+│   ├── elisp_flow_service.py    Emacs Lispの関数単位の制御フロー・シグナル・状態（ソースの鮮度を確認して実行）
 │   └── graph_builder.py         グラフモデル（呼び出し/ファイル依存/継承/アーキテクチャ）の組み立て
 │
 ├── infrastructure/    ファイル・Git・永続化との接続
 │   ├── file_scanner.py        走査、.gitignore尊重、既定除外、symlink安全化
 │   ├── git_repository.py      Gitリポジトリ識別・リビジョン・行範囲/ファイルの履歴（読み取り専用）
 │   ├── analysis_repository.py SQLiteへの永続化（トランザクション、スキーマ移行）
-│   ├── schema.py              スキーマ定義とバージョン
+│   ├── schema.py              スキーマ定義とバージョン（v8）
+│   ├── sarif.py               SARIF 2.1.0 の読み取り（外部ツールの指摘。プロジェクト外のパスは取り込まない）
+│   ├── scip.py                SCIP（protobuf）の読み取り（手書きのデコーダー）
 │   └── config.py              データ保存先の解決
 │
 ├── presentation/      表示・出力形式
@@ -72,6 +79,7 @@ src/codeinsight/
 │   ├── html_viewer.py     自己完結型のローカルHTMLビューアー
 │   ├── reading_report.py  make reading の成果物を1つの印刷用HTMLにまとめる（エスケープ・CSP・図のSVG埋め込み・打ち切りの明示）
 │   ├── pdf_export.py      HTMLをヘッドレスのブラウザでPDFにする（PDFの完成を監視し、終了しないブラウザを止める）
+│   ├── extract_export.py  切り出し（呼び出しグラフの範囲のソース）の Markdown / テキスト / JSON への出力（コードフェンスの衝突を避ける）
 │   ├── structure_view.py  ディレクトリ・ファイル・シンボルの階層表示
 │   ├── labels.py          解決状態の表示ラベル（CLI・TUIで共用）
 │   ├── tui_model.py       TUIの状態とキー操作（cursesに依存しない）
@@ -82,7 +90,7 @@ src/codeinsight/
 │   ├── permission.py      許可モデル（既定は拒否。--allow-run とコマンドの明示が揃うまで実行しない）
 │   ├── sandbox.py         隔離の方針（既定は最も厳しい）とバックエンドの確認
 │   ├── collectors.py      収集器の一覧（言語別。実行できるのはPythonのみ）
-│   └── service.py         plan（実行しない計画）/ run（許可の確認→コンテナで実行→観測の保存。実行前後のハッシュ比較）
+│   ├── service.py         plan（実行しない計画）/ run（許可の確認→コンテナで実行→観測の保存。実行前後のハッシュ比較）
 │   ├── executor.py        docker run の組み立てと実行（subprocess を使う唯一のモジュール。PermittedRun が必要）
 │   ├── observations.py    収集器のJSON→観測、解析結果のシンボルへの対応づけ
 │   └── runtime/pycollect.py コンテナの中で動く収集器（標準ライブラリのみ。値は記録しない）
@@ -97,7 +105,18 @@ src/codeinsight/
 │   ├── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存。explain_symbols: 問い合わせだけ並列・保存済みの再利用・再試行・打ち切り）
 │   └── evaluation.py      評価ケース（eval/ai_cases.toml）の読み込み・実行・機械的な採点（保存はしない。モデル・プロンプトの比較用）
 │
-├── (リポジトリ直下) eval/ai_cases.toml  AI評価ケース、.github/workflows/ci.yml  CI（pytest 3.11〜3.13・ruff・mypy）、Makefile、LICENSE（GPL-3.0-or-later）
+├── web/               ローカルのWebビューアー（標準ライブラリのみ。127.0.0.1、読み取り専用、GETのみ）
+│   ├── server.py          HTTPサーバー（トークン・Host検査・CSP。コンテナの中に限り 0.0.0.0 を許可）
+│   ├── api.py             API（HTTPに依存せず、(パス, クエリ) から辞書を返す。グラフ・ソース・切り出し・資料・使い方）
+│   ├── app_page.py        1ページのアプリ（HTML/JS。Markdownの描画、分割バー、資料、使い方）
+│   └── guide/             使い方（VIEWER.md と、実際の画面から作る画像）
+│
+├── mcp/               MCPサーバー（標準入出力、JSON-RPC。読み取り専用。AGENTS.md §3.13）
+│   ├── server.py          プロトコル（標準出力はメッセージのみ）
+│   ├── tools.py           ツール（検索・定義・呼び出し元/先・影響範囲・切り出し・読解カード・制御構造）
+│   └── serialize.py       結果の整形（ソースの断片は、起動時の許可がなければ件数・行番号のみ）
+│
+├── (リポジトリ直下) eval/（AI評価ケース）、.github/workflows/ci.yml（pytest 3.11〜3.13・ruff・mypy。コンテナ実行の結合テストを必須化）と ai-eval.yml（実モデルの煙テスト。週1回・手動）、Dockerfile・compose.yaml・.env.example（コンテナ実行。Ollamaはホストのものを使う）、Makefile、LICENSE（GPL-3.0-or-later）
 │
 ├── bootstrap.py       標準の解析アダプターの組み立て（CLI・将来のGUIで共用）
 └── cli/               コマンドラインインターフェース（責務ごとのモジュール。依存は common ← project ← reading、explore・graph・ai_commands は common のみ、parser が全てを束ねる）
@@ -106,6 +125,8 @@ src/codeinsight/
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── reading_c.py       Cの関数の読解コマンド（flow / dataflow / exceptions / state）の表示
+    ├── index_commands.py  外部ツールの取り込みと、ビューアー・MCPの起動（import-sarif / import-scip / compare-scip / extract / serve / mcp）
+    ├── reading_el.py      Emacs Lispの関数の読解コマンド（flow / exceptions / state）の表示
     ├── report.py          reading-report（成果物を1ファイルのPDF/HTMLにまとめる）
     ├── dynamic_commands.py 動的解析のコマンド（dynamic-plan / dynamic-run / dynamic-runs / observed）
     ├── graph.py           グラフ出力（graph）
@@ -113,6 +134,8 @@ src/codeinsight/
     ├── parser.py          コマンドの登録（argparse）とエントリポイント `main`
     └── __main__.py        `python -m codeinsight.cli`
 ```
+
+Webビューアー（`web/`）とMCPサーバー（`mcp/`）は、`application` の結果を読み取り専用で提供するだけで、解析の実行・対象の変更・外部への通信は行わない（`cli` から起動される）。
 
 AI層（`ai/`）は、解析基盤（domain・application）の結果を入力として解説を生成・検証する。解析基盤はAI層に依存せず、AIを使わない機能は、AI層が無くても（AIに接続できなくても）動作する。
 
@@ -173,6 +196,7 @@ cli ──> ai ──────────> application
 
 AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2-2）であり、専用の `explanations` テーブルに保存する。解析結果のテーブル（シンボル・参照・依存関係）には書き込まず、再解析でも解説は消えない（根拠にしたファイルが変わると「古い解説」と示す）。
 
+* v8: `dynamic_runs` / `dynamic_observations`（`dynamic-run` の実行の記録と観測。許可の内容・収集器・実行時のファイルのハッシュを持つ。静的解析の事実とは別。観測されなかったことは、存在しないことを意味しない）。
 * v7: `external_indexes` / `external_index_files` / `external_index_occurrences` / `external_index_symbols`（`import-scip` で取り込んだSCIPの索引）。
 * v6: `external_findings`（`import-sarif` で取り込んだ外部ツールの指摘。再解析でも消えず、ファイルが変わると「古い」と示す）。
 * v5: `projects.compile_commands_dir`（解析時に使った compile_commands.json の場所。Cの関数単位の解析が、問い合わせ時に同じ設定で再解析するため）。旧版のDBは開いた時に列を追加して移行する。
@@ -181,9 +205,18 @@ AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2
 
 * `GitRepository` は `git rev-parse` などの読み取り専用コマンドのみを実行する。
 * `AnalysisRepository` のDBファイルは、既定では対象リポジトリの外部（`~/.codeinsight/codeinsight.db`、`CODEINSIGHT_DATA_DIR`で変更可）に保存され、対象リポジトリ内には一切書き込まない。
-* 対象プログラムのビルド・実行は一切行わない。
+* 対象プログラムのビルド・実行は、既定では一切行わない。実行するのは、利用者が `dynamic-run --allow-run -- <コマンド>` で明示的に許可した場合に限り、**コンテナの中**（ネットワーク遮断・対象は読み取り専用・非特権）で、`dynamic/executor.py` だけが行う（実行の前後でファイルのハッシュを比べ、変わっていれば観測を保存しない）。
 * ソース表示（`show`）は、解析済みファイルとして登録されたプロジェクト内のパスのみを読み、プロジェクト外を指すパスは読まない。
 * 解析対象由来の文字列（シンボル名・診断メッセージ・ソース行）は、CLIでは端末の制御文字を無害化して出力し、HTMLビューアーでは `textContent` のみで表示する（AGENTS.md §4.4: リポジトリ内のソースコードを信頼できない入力として扱う）。
+
+## コンテナでの実行（Docker）
+
+`Dockerfile` と `compose.yaml` で、解析・ビューアー・AI解説・資料生成をコンテナで動かせる（OPERATIONS.md 10.1c2）。
+
+* 必要な個別ソフトウェア（git・Go・build-essential・graphviz・Chromium・make）はイメージに含める。Ollama は含めず、ホストのものを `host.docker.internal` で使う。
+* 解析結果のDB（ホストの `~/.codeinsight`）と対象（ホストと同じパス・読み取り専用）を割り当てて、ホストとコンテナで共有する。Goの補助プログラムの実行ファイルは、OS・CPUごとに別の名前にする（共有するDBの場所に、互いのものを置かないため）。
+* コンテナの中（`CODEINSIGHT_IN_CONTAINER=1`）に限り、ビューアーが `0.0.0.0` で待ち受け、AIの送信先 `host.docker.internal` を、この計算機として扱う。ホスト側の公開は `127.0.0.1` のみ。トークンとHostの検査は有効。
+* コンテナの中からは、動的解析（`dynamic-run`。コンテナを起動する）は動かない。
 
 ## 問い合わせ時の解析
 

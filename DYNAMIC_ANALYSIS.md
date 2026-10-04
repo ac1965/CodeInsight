@@ -95,7 +95,7 @@ Application: DynamicAnalysisService
         │
 Dynamic: permission.py   DynamicPermission（許可の検証）
          sandbox.py      SandboxPolicy / SandboxBackend（Protocol）
-         collectors.py   Collector（Protocol）: PythonCollector / CCollector（未実装）
+         collectors.py   収集器の一覧（Python: 実装済み / C: 未実装）。実行は executor.py、収集は runtime/pycollect.py
         │
 Domain:  observation.py  DynamicRun / Observation（静的な事実とは別）
 Infrastructure: AnalysisRepository（別テーブル）

@@ -193,7 +193,7 @@ def test_docker_targets_share_data_mount_the_target_read_only_and_publish_only_t
 def test_compose_file_publishes_loopback_only_mounts_read_only_and_never_creates_host_paths() -> None:
     text = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
     assert '"127.0.0.1:${PORT:-8765}:${PORT:-8765}"' in text and "0.0.0.0:" not in text  # ホスト側は 127.0.0.1 のみ
-    assert "read_only: true" in text and text.count("create_host_path: false") == 3  # 対象は読み取り専用。存在しない場所を root の所有で作らせない
+    assert "read_only: true" in text and text.count("create_host_path: false") == 5  # 対象は読み取り専用。書き込む場所（DB・資料）が無ければ、root の所有で作らせず、失敗させる
     assert "${TARGET:?" in text  # TARGET は必須
     assert "CODEINSIGHT_AI_ALLOW_SEND" in text and "AI_SEND:-" in text  # 送信の許可は、指定したときだけ
     assert "image: ollama" not in text  # Ollama のコンテナは含めない（ホストのものを使う）
