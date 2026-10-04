@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -155,7 +156,7 @@ def test_container_command_is_isolated_and_never_records_env_values(tmp_path: Pa
     run = executor.PermittedRun.create(permission, tmp_path, "img:1")
     argv, audit = executor.build_argv(run, tmp_path / "out", "name")
     joined = " ".join(argv)
-    for flag in ("--network none", "--read-only", "--cap-drop ALL", "no-new-privileges", "--user 65534:65534", "--pids-limit", "--memory"):
+    for flag in ("--network none", "--read-only", "--cap-drop ALL", "no-new-privileges", "--user", "--pids-limit", "--memory"):
         assert flag in joined
     assert f"{tmp_path}:/target:ro" in joined and "MY_SECRET=s3cr3t-value" in joined and "NOT_SET" not in joined
     assert "s3cr3t-value" not in " ".join(audit) and "MY_SECRET=<値は記録しない>" in " ".join(audit)  # 記録用には値を出さない
@@ -173,10 +174,95 @@ def test_permitted_run_cannot_be_created_without_permission(tmp_path: Path) -> N
         executor.PermittedRun.create(DynamicPermission(allow_run=True, command=("x",), sandbox_backend="none", allow_unsandboxed=True), tmp_path)
 
 
-@pytest.mark.skipif(shutil.which("docker") is None or not executor.image_present(executor.DEFAULT_IMAGE), reason="docker または python:3.12-slim がありません")
+def _container_available() -> bool:
+    return shutil.which("docker") is not None and executor.image_present(executor.DEFAULT_IMAGE)
+
+
+def test_container_is_available_when_ci_requires_it() -> None:
+    """CI（CODEINSIGHT_REQUIRE_CONTAINER=1）では、コンテナの結合テストを黙ってスキップさせない。"""
+
+    if os.environ.get("CODEINSIGHT_REQUIRE_CONTAINER") == "1":
+        assert _container_available(), "docker または python:3.12-slim がありません（CIで取得する手順を確認してください）"
+
+
+container = pytest.mark.skipif(not _container_available(), reason="docker または python:3.12-slim がありません")
+
+PROBE = (
+    "import os, socket, sys\n"
+    "def report(key, value): print(key + '=' + str(value), file=sys.stderr)\n"
+    "try:\n    socket.create_connection(('1.1.1.1', 53), timeout=3); report('network', 'open')\n"
+    "except OSError: report('network', 'blocked')\n"
+    "try:\n    open('/target/x.txt', 'w'); report('target', 'writable')\n"
+    "except OSError: report('target', 'readonly')\n"
+    "try:\n    open('/etc/x', 'w'); report('rootfs', 'writable')\n"
+    "except OSError: report('rootfs', 'readonly')\n"
+    "report('uid', os.getuid())\n"
+    "report('secret', os.environ.get('CODEINSIGHT_TEST_SECRET'))\n"
+    "report('allowed', os.environ.get('CODEINSIGHT_TEST_ALLOWED'))\n"
+)
+
+
+def _leftover_containers() -> list[str]:
+    done = subprocess.run(["docker", "ps", "-aq", "--filter", "name=codeinsight-dyn"], capture_output=True, text=True, check=False)
+    return done.stdout.split()
+
+
+@container
 def test_container_execution_end_to_end(db: str) -> None:
     repository, project, index = load(db)
     outcome = DynamicAnalysisService().run(project, DynamicPermission(allow_run=True, command=("main.py",)), index, repository)
     assert outcome.run.status == RunStatus.COMPLETED
-    assert {o.name for o in outcome.observations if o.detail.get("what") == "function"} >= {"Box.put", "helper"}
+    executed = {o.name: o.count for o in outcome.observations if o.detail.get("what") == "function"}
+    assert executed["Box.put"] == 3 and executed["helper"] == 2 and "never_called" not in executed
+    calls = {(o.name, o.target_name): o.count for o in outcome.observations if o.kind == ObservationKind.CALL}
+    assert calls[("Box.put", "helper")] == 2
+    assert any(o.kind == ObservationKind.FAILURE and o.detail["type"] == "ValueError" for o in outcome.observations)
+    assert any(o.symbol_id for o in outcome.observations)  # 解析結果のシンボルに対応づく
+    assert _leftover_containers() == []
+    repository.close()
+
+
+@container
+def test_container_isolation_on_the_real_container(db: str, project_dir: Path, monkeypatch) -> None:
+    """隔離の設定が、実際のコンテナで効いていること（ネットワーク遮断・対象と根ファイルシステムは読み取り専用・非特権・環境変数は許可リストのみ）。"""
+
+    monkeypatch.setenv("CODEINSIGHT_TEST_SECRET", "must-not-leak")
+    monkeypatch.setenv("CODEINSIGHT_TEST_ALLOWED", "passed")
+    (project_dir / "probe.py").write_text(PROBE, encoding="utf-8")
+    assert main(["analyze", str(project_dir), "--db", db]) == 0
+    repository, project, index = load(db)
+    permission = DynamicPermission(allow_run=True, command=("probe.py",), env_allowlist=("CODEINSIGHT_TEST_ALLOWED",))
+    outcome = DynamicAnalysisService().run(project, permission, index, repository)
+    assert outcome.run.status == RunStatus.COMPLETED
+    seen = dict(line.split("=", 1) for line in outcome.stderr_tail.splitlines() if "=" in line)
+    assert seen == {"network": "blocked", "target": "readonly", "rootfs": "readonly", "uid": str(os.getuid() or 65534), "secret": "None", "allowed": "passed"}
+    assert not (project_dir / "x.txt").exists()  # 対象には何も書かれていない
+    assert "must-not-leak" not in json.dumps(outcome.run.sandbox)  # 記録に環境変数の値を残さない
+    repository.close()
+
+
+@container
+def test_container_timeout_stops_the_container(db: str, project_dir: Path) -> None:
+    (project_dir / "slow.py").write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+    assert main(["analyze", str(project_dir), "--db", db]) == 0
+    repository, project, index = load(db)
+    started = time.monotonic()
+    outcome = DynamicAnalysisService().run(project, DynamicPermission(allow_run=True, command=("slow.py",), timeout_seconds=3), index, repository)
+    assert outcome.run.status == RunStatus.TIMEOUT and outcome.observations == []
+    assert time.monotonic() - started < 20  # 30秒待たずに止まる
+    assert _leftover_containers() == []
+    repository.close()
+
+
+@container
+def test_container_missing_command_and_uncaught_exception_are_recorded_as_failed(db: str, project_dir: Path) -> None:
+    (project_dir / "boom.py").write_text("def f():\n    raise RuntimeError('x')\nf()\n", encoding="utf-8")
+    assert main(["analyze", str(project_dir), "--db", db]) == 0
+    repository, project, index = load(db)
+    service = DynamicAnalysisService()
+    boom = service.run(project, DynamicPermission(allow_run=True, command=("boom.py",)), index, repository)
+    assert boom.run.status == RunStatus.FAILED and boom.run.exit_code == 1  # 異常終了を正常として扱わない
+    assert any(o.detail.get("what") == "uncaught" and o.detail["type"] == "RuntimeError" for o in boom.observations)
+    missing = service.run(project, DynamicPermission(allow_run=True, command=("no_such.py",)), index, repository)
+    assert missing.run.status == RunStatus.FAILED
     repository.close()

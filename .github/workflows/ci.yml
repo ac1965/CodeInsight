@@ -25,6 +25,8 @@ jobs:
       - name: 動的解析の結合テスト用に、Pythonのコンテナイメージを取得する（無いとテストはスキップされる）
         run: docker pull python:3.12-slim
       - name: テスト（AIへの送信は行わない。HTTPはこの計算機内のスタブのみ）
+        env:
+          CODEINSIGHT_REQUIRE_CONTAINER: "1"  # コンテナの結合テストを、スキップではなく必須にする
         run: uv run --python ${{ matrix.python-version }} pytest -q tests
 
   lint:

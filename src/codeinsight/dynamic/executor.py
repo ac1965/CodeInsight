@@ -76,6 +76,14 @@ def image_present(image: str) -> bool:
     return result.returncode == 0
 
 
+def container_user() -> str:
+    """コンテナ内の利用者。root でない。通常は、実行した利用者と同じ uid:gid（Linux では、他人に読めない対象や作業領域を読み書きするために必要）。
+    root で実行している場合だけ、権限のない 65534（nobody）にする。"""
+
+    uid, gid = os.getuid(), os.getgid()
+    return f"{uid}:{gid}" if uid != 0 else "65534:65534"
+
+
 def build_argv(run: PermittedRun, out_dir: Path, container_name: str) -> tuple[list[str], list[str]]:
     """docker run の引数を作る。戻り値は (実行用の引数, 記録用の引数)。環境変数の値は、実行用にだけ渡す。"""
 
@@ -86,7 +94,7 @@ def build_argv(run: PermittedRun, out_dir: Path, container_name: str) -> tuple[l
         "--network", "bridge" if policy.network == "allowed" else "none",
         "--read-only", "--tmpfs", "/tmp:rw,size=64m",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-        "--user", "65534:65534",
+        "--user", container_user(),
         "--memory", f"{policy.memory_mb}m", "--pids-limit", str(policy.max_processes),
         "--ulimit", f"fsize={policy.max_file_size_mb * 1024 * 1024}",
         "-v", f"{run.root}:{CONTAINER_TARGET}:ro",

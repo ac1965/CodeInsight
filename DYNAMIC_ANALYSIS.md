@@ -2,7 +2,7 @@
 
 状態: **段階1を実装済み（Pythonをコンテナで実行して観測）**。許可モデル・計画表示（`dynamic-plan`）・コンテナでの実行（`dynamic-run`）・保存（スキーマv8）・`observed`・`dynamic-runs` が動く。Cの収集器・入出力・引数の形・静的との差分は未実装。
 
-実装の要点: 実行は `dynamic/executor.py` だけが行う（`subprocess` を使う唯一のモジュール。`PermittedRun`＝許可の確認を通った実行でなければ呼べない。テストで検査）。コンテナは、ネットワーク遮断・対象は読み取り専用・非特権利用者・全 capability 削除・メモリ/プロセス数/時間の上限・環境変数は許可リストのみ。収集器（`dynamic/runtime/pycollect.py`、標準ライブラリのみ）はコンテナの中で動き、**値は記録しない**（名前・位置・件数・例外の型だけ）。実行の前後で対象のファイルのハッシュを比べ、変わっていれば `target_modified` として観測を保存しない。イメージ（既定 `python:3.12-slim`）の取得は自動では行わない（利用者が取得するか、`--image` で指定）。
+実装の要点: 実行は `dynamic/executor.py` だけが行う（`subprocess` を使う唯一のモジュール。`PermittedRun`＝許可の確認を通った実行でなければ呼べない。テストで検査）。コンテナは、ネットワーク遮断・対象は読み取り専用・非特権利用者（実行した利用者と同じ uid:gid。root で実行した場合のみ 65534）・全 capability 削除・メモリ/プロセス数/時間の上限・環境変数は許可リストのみ。収集器（`dynamic/runtime/pycollect.py`、標準ライブラリのみ）はコンテナの中で動き、**値は記録しない**（名前・位置・件数・例外の型だけ）。実行の前後で対象のファイルのハッシュを比べ、変わっていれば `target_modified` として観測を保存しない。イメージ（既定 `python:3.12-slim`）の取得は自動では行わない（利用者が取得するか、`--image` で指定）。
 
 関連: [AGENTS.md](AGENTS.md) §1.1-4・§3.11・§10-4、[OPERATIONS.md](OPERATIONS.md) 1.1、[REQUIREMENTS.md](REQUIREMENTS.md) 将来の検討。
 
