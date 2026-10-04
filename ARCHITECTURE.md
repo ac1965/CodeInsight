@@ -78,11 +78,14 @@ src/codeinsight/
 │   ├── tui_view.py        TUIの画面の組み立て（描画命令を返す純粋関数）
 │   └── tui.py             cursesによる入出力（薄い層）
 │
-├── dynamic/           動的解析（スタブ。設計は DYNAMIC_ANALYSIS.md。対象を実行するコードを持たない）
+├── dynamic/           動的解析（段階1: Pythonをコンテナで実行して観測。設計は DYNAMIC_ANALYSIS.md。実行するコードは executor.py だけ）
 │   ├── permission.py      許可モデル（既定は拒否。--allow-run とコマンドの明示が揃うまで実行しない）
 │   ├── sandbox.py         隔離の方針（既定は最も厳しい）とバックエンドの確認
-│   ├── collectors.py      収集器の一覧（言語別・すべて未実装）
-│   └── service.py         plan（実行しない計画）/ run（許可の確認のみ。実行は未実装）
+│   ├── collectors.py      収集器の一覧（言語別。実行できるのはPythonのみ）
+│   └── service.py         plan（実行しない計画）/ run（許可の確認→コンテナで実行→観測の保存。実行前後のハッシュ比較）
+│   ├── executor.py        docker run の組み立てと実行（subprocess を使う唯一のモジュール。PermittedRun が必要）
+│   ├── observations.py    収集器のJSON→観測、解析結果のシンボルへの対応づけ
+│   └── runtime/pycollect.py コンテナの中で動く収集器（標準ライブラリのみ。値は記録しない）
 │
 ├── ai/                AI解説（解析結果を入力に、解説を生成・検証する。解析器の代替にはしない）
 │   ├── config.py          AIConfig（送信の許可・送信先・APIキーの秘匿）、設定の解決（コマンドライン>環境変数>設定ファイル）
@@ -104,7 +107,7 @@ src/codeinsight/
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── reading_c.py       Cの関数の読解コマンド（flow / dataflow / exceptions / state）の表示
     ├── report.py          reading-report（成果物を1ファイルのPDF/HTMLにまとめる）
-    ├── dynamic_commands.py 動的解析のコマンド（dynamic-plan / dynamic-run。スタブ）
+    ├── dynamic_commands.py 動的解析のコマンド（dynamic-plan / dynamic-run / dynamic-runs / observed）
     ├── graph.py           グラフ出力（graph）
     ├── ai_commands.py     AI解説（explain / explain-file / explain-path / ask / explanations / ai-status / ai-eval）
     ├── parser.py          コマンドの登録（argparse）とエントリポイント `main`

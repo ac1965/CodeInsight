@@ -61,5 +61,8 @@ class Observation:
     end_line: int | None = None
     target_symbol_id: str | None = None  # call: 呼び出し先
     target_name: str = ""
+    path: str = ""  # 観測された位置のファイル（相対パス）。解析結果と対応づけられなくても残る
+    name: str = ""  # 観測された関数の修飾名（収集器が報告したもの）
+    target_path: str = ""
     count: int = 1
     detail: dict = field(default_factory=dict)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -184,4 +184,43 @@ CREATE TABLE IF NOT EXISTS explanations (
     ai_generated INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_explanations_project ON explanations(project_id, target_kind, target);
+"""
+
+# バージョン8: 動的解析（実行して観測した結果）。事実・外部ツールの結果とは別に、実行の許可の内容・収集器・実行時の
+# ファイルのハッシュとともに保存する。観測は「この実行で起きたこと」であり、観測されなかったことは意味しない。
+V8_TABLES = """
+CREATE TABLE IF NOT EXISTS dynamic_runs (
+    run_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(project_id),
+    started_at TEXT NOT NULL,
+    command TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    sandbox TEXT NOT NULL,
+    collector TEXT NOT NULL,
+    collector_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    revision TEXT,
+    source_hashes TEXT NOT NULL,
+    exit_code INTEGER,
+    duration_seconds REAL,
+    notes TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dynamic_runs_project ON dynamic_runs(project_id, started_at);
+CREATE TABLE IF NOT EXISTS dynamic_observations (
+    observation_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES dynamic_runs(run_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    symbol_id TEXT,
+    target_path TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    target_symbol_id TEXT,
+    count INTEGER NOT NULL,
+    detail TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dynamic_obs_run ON dynamic_observations(run_id, kind);
+CREATE INDEX IF NOT EXISTS idx_dynamic_obs_symbol ON dynamic_observations(symbol_id);
 """

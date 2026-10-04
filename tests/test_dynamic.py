@@ -10,7 +10,6 @@ from codeinsight.cli import main
 from codeinsight.domain.observation import DynamicRun, Observation, ObservationKind, RunStatus
 from codeinsight.dynamic.collectors import COLLECTORS, collectors_for
 from codeinsight.dynamic.permission import (
-    DynamicAnalysisNotImplemented,
     DynamicPermission,
     DynamicPermissionError,
 )
@@ -87,23 +86,32 @@ def test_the_dynamic_code_contains_no_way_to_execute_programs() -> None:
     files = [*(ROOT / "src" / "codeinsight" / "dynamic").glob("*.py"), ROOT / "src" / "codeinsight" / "cli" / "dynamic_commands.py"]
     assert len(files) >= 6
     for path in files:
+        if path.name == "executor.py":
+            continue  # 実行は、このモジュールだけ（下のテストで、使える範囲を制限する）
         code = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines() if not line.strip().startswith(("#", '"', "'")))
         found = [m.group(0) for m in forbidden.finditer(re.sub(r'""".*?"""', "", code, flags=re.S))]
         assert not found, f"{path.name} に実行系の呼び出しがある: {found}"  # スタブ段階では、実行コードを持たない
 
 
-def test_service_run_checks_permission_first_and_never_executes(tmp_path: Path) -> None:
+def test_only_the_executor_runs_programs_and_never_through_a_shell() -> None:
+    source = (ROOT / "src" / "codeinsight" / "dynamic" / "executor.py").read_text(encoding="utf-8")
+    assert "shell=True" not in source and not re.search(r"\bos\.(system|exec\w*|spawn\w*|popen)\b|\beval\(|\bexec\(|__import__", source)
+    users = [p.name for p in (ROOT / "src" / "codeinsight").rglob("*.py") if "subprocess" in p.read_text(encoding="utf-8") and "dynamic" in p.parts]
+    assert users == ["executor.py"]  # 動的解析の中で subprocess を使うのは、executor.py だけ
+
+
+def test_service_run_checks_permission_before_anything_else(tmp_path: Path) -> None:
+    from codeinsight.application.project_index import ProjectIndex
     from codeinsight.domain import Project
 
     project = Project("p", tmp_path, "p")
-    marker = tmp_path / "marker"
+    index = ProjectIndex("p", {}, {}, lambda: [], lambda: [])
+    called = []
     service = DynamicAnalysisService()
-    command = ("touch", str(marker))
+    command = ("touch", str(tmp_path / "marker"))
     with pytest.raises(DynamicPermissionError):
-        service.run(project, DynamicPermission(command=command))  # 許可なし
-    with pytest.raises(DynamicAnalysisNotImplemented):
-        service.run(project, DynamicPermission(allow_run=True, command=command))  # 許可はあるが未実装
-    assert not marker.exists()  # どちらの場合も、コマンドは実行されていない
+        service.run(project, DynamicPermission(command=command), index, run_executor=lambda run: called.append(run))  # 許可なし
+    assert not called and not (tmp_path / "marker").exists()  # 許可がなければ、実行の仕組みに到達しない
 
 
 # --- CLI ---
@@ -131,14 +139,15 @@ def test_cli_plan_shows_the_plan_without_executing(db: str, tmp_path: Path, caps
     assert not marker.exists()
 
 
-def test_cli_run_refuses_without_permission_and_never_runs_even_with_it(db: str, tmp_path: Path, capsys) -> None:
+def test_cli_run_refuses_without_permission_and_without_the_image(db: str, tmp_path: Path, capsys) -> None:
     marker = tmp_path / "marker"
     assert main(["dynamic-run", "--db", db, "--", "touch", str(marker)]) == 2
     assert "許可が揃っていません" in capsys.readouterr().err and not marker.exists()
 
-    assert main(["dynamic-run", "--db", db, "--allow-run", "--", "touch", str(marker)]) == 3
+    # 許可があっても、イメージが無ければ実行しない（イメージの取得は自動では行わない）
+    assert main(["dynamic-run", "--db", db, "--allow-run", "--image", "codeinsight-no-such-image:0", "--", "touch", str(marker)]) == 3
     err = capsys.readouterr().err
-    assert "未実装" in err and "何も実行していません" in err and not marker.exists()
+    assert "自動では行いません" in err and "対象は実行されていません" in err and not marker.exists()
 
     assert main(["dynamic-run", "--db", db, "--allow-run"]) == 2  # コマンドの指定が無い
     assert "コマンドが指定されていません" in capsys.readouterr().err

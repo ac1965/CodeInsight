@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 動的解析 段階1（未リリース）
+
+* `dynamic-run --allow-run -- <コマンド>` が、Pythonをコンテナ（ネットワーク遮断・対象は読み取り専用・非特権・capability削除・資源の上限・環境変数は許可リストのみ）で実行し、観測（実行された関数・呼び出し・行・例外の型と位置・終了コード。**値は記録しない**）を保存する。実行は `dynamic/executor.py` だけが行い、`PermittedRun`（許可の確認済み）が必須。イメージの取得は自動では行わない（`--image`）。
+* 実行の前後で対象のファイルのハッシュを比べ、変わっていれば `target_modified` として観測を保存しない。時間切れ・収集器の出力なしは、正常終了として扱わない。
+* 新しいコマンド: `observed <シンボル>`（実行回数・呼び出し元/先。静的にも確認できた呼び出しかを併記）、`dynamic-runs`（履歴。実行後にソースが変わったものは古い観測）。スキーマv8（`dynamic_runs`・`dynamic_observations`。静的解析の事実とは別のテーブル）。
+* ビューアー: 切り出し結果を、Markdown原文ではなくHTMLで表示（保存は従来どおりMarkdown）。
+
 ## MCPサーバー（未リリース）
 
 * ツール `understand`（読解カード）と `control_flow`（関数の制御構造と指標。Python・C・Emacs Lisp）を追加。ソースの断片に当たる項目は、`--allow-source` が無い場合、件数・行番号だけにする（`mcp/serialize.py`）。Claude Code から呼び出し、読解カードの `caught_by_callers`・`limitations`・未解決の呼び出しの件数まで、正しく読み取れることを確認した。

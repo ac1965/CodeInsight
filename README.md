@@ -46,7 +46,7 @@ CodeInsight
 ├── Analysis        … 言語別の静的解析(C/Python/Emacs Lisp)、シンボル抽出、参照解決、呼び出しグラフ、関数単位の制御フロー・データフロー(Python: ast / C: Clang AST / Emacs Lisp: 自前のS式リーダー)
 ├── Domain          … 特定のGUI/DB/LLMに依存しないドメインモデル
 ├── AI              … 解析結果を利用したコード解説(解析器の代替にはしない)
-├── Dynamic         … 動的解析(設計とスタブのみ。許可の確認と、実行しない計画表示。対象を実行するコードを持たない)
+├── Dynamic         … 動的解析(段階1: Pythonをコンテナで実行して観測。許可が必須で、実行するコードは dynamic/executor.py だけ)
 ├── Infrastructure  … ファイル・Git・永続化・キャッシュ・設定
 └── Presentation    … プロジェクト/ソースコード/構造・依存関係/AI解説の各画面
 ```
@@ -259,7 +259,7 @@ make lint          # ruff と mypy(CIと同じ)
 * [ANALYSIS.md](ANALYSIS.md) — 解析方式と既知の制約
 * [REQUIREMENTS.md](REQUIREMENTS.md) — 要件に対する実装状況の要約
 * [TESTING.md](TESTING.md) — テスト方法と実行結果
-* [DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md) — 動的解析の設計（スタブ。機能案・許可モデル・隔離・データモデル・段階的な導入。実行は未実装）
+* [DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md) — 動的解析の設計と現状（機能案・許可モデル・隔離・データモデル・段階的な導入。段階1のPython実行を実装済み）
 * [OPERATIONS.md](OPERATIONS.md) — 運用ガイド（導入・日常の運用・言語別の手順・資料の作成・AI解説の安全な運用・結果の読み方・トラブルシューティング・保守）
 * [CHANGELOG.md](CHANGELOG.md) — 変更履歴
 

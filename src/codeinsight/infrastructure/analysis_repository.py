@@ -28,6 +28,7 @@ from codeinsight.domain import (
     Symbol,
     SymbolKind,
 )
+from codeinsight.domain.observation import DynamicRun, Observation, ObservationKind, RunStatus
 from codeinsight.infrastructure.schema import (
     BASE_SCHEMA,
     SCHEMA_VERSION,
@@ -36,6 +37,7 @@ from codeinsight.infrastructure.schema import (
     V4_TABLES,
     V6_TABLES,
     V7_TABLES,
+    V8_TABLES,
 )
 
 _PROJECT_COLUMNS = (
@@ -118,6 +120,7 @@ class AnalysisRepository:
         connection.executescript(V4_TABLES)
         connection.executescript(V6_TABLES)
         connection.executescript(V7_TABLES)
+        connection.executescript(V8_TABLES)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
 
@@ -192,6 +195,7 @@ class AnalysisRepository:
         self._connection.execute("DELETE FROM explanations WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM external_findings WHERE project_id = ?", (project_id,))
         self.delete_external_indexes(project_id, commit=False)
+        self.delete_dynamic_runs(project_id)
         self._connection.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
         self._commit()
 
@@ -516,6 +520,63 @@ class AnalysisRepository:
         count = self._connection.execute(query, params).rowcount
         self._commit()
         return count
+
+    # --- 動的解析（実行して観測した結果。解析結果とは別に管理する） ---
+
+    def save_dynamic_run(self, run: DynamicRun, observations: list[Observation]) -> None:
+        self._connection.execute("DELETE FROM dynamic_runs WHERE run_id = ?", (run.run_id,))
+        self._connection.execute(
+            "INSERT INTO dynamic_runs (run_id, project_id, started_at, command, permission, sandbox, collector, collector_version, status, "
+            "revision, source_hashes, exit_code, duration_seconds, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (run.run_id, run.project_id, run.started_at.isoformat(), json.dumps(list(run.command), ensure_ascii=False),
+             json.dumps(run.permission, ensure_ascii=False), json.dumps(run.sandbox, ensure_ascii=False), run.collector,
+             run.collector_version, run.status.value, run.revision, json.dumps(run.source_hashes), run.exit_code,
+             run.duration_seconds, json.dumps(run.notes, ensure_ascii=False)),
+        )
+        self._connection.executemany(
+            "INSERT INTO dynamic_observations (observation_id, run_id, kind, path, name, start_line, end_line, symbol_id, target_path, "
+            "target_name, target_symbol_id, count, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(o.observation_id, o.run_id, o.kind.value, o.path, o.name, o.start_line, o.end_line, o.symbol_id, o.target_path,
+              o.target_name, o.target_symbol_id, o.count, json.dumps(o.detail, ensure_ascii=False)) for o in observations],
+        )
+        self._commit()
+
+    def list_dynamic_runs(self, project_id: str) -> list[DynamicRun]:
+        rows = self._connection.execute(
+            "SELECT * FROM dynamic_runs WHERE project_id = ? ORDER BY started_at DESC", (project_id,)
+        ).fetchall()
+        return [
+            DynamicRun(
+                row["run_id"], row["project_id"], datetime.fromisoformat(row["started_at"]), tuple(json.loads(row["command"])),
+                json.loads(row["permission"]), json.loads(row["sandbox"]), row["collector"], row["collector_version"],
+                RunStatus(row["status"]), row["revision"], json.loads(row["source_hashes"]), row["exit_code"],
+                row["duration_seconds"], json.loads(row["notes"]),
+            )
+            for row in rows
+        ]
+
+    def list_dynamic_observations(self, run_id: str, kind: ObservationKind | None = None) -> list[Observation]:
+        query, params = "SELECT * FROM dynamic_observations WHERE run_id = ?", [run_id]
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(kind.value)
+        rows = self._connection.execute(query + " ORDER BY path, start_line, name", params).fetchall()
+        return [
+            Observation(
+                row["observation_id"], row["run_id"], ObservationKind(row["kind"]), None, row["symbol_id"], row["start_line"],
+                row["end_line"], row["target_symbol_id"], row["target_name"], row["path"], row["name"], row["target_path"],
+                row["count"], json.loads(row["detail"]),
+            )
+            for row in rows
+        ]
+
+    def delete_dynamic_runs(self, project_id: str) -> int:
+        ids = [r[0] for r in self._connection.execute("SELECT run_id FROM dynamic_runs WHERE project_id = ?", (project_id,))]
+        for run_id in ids:
+            self._connection.execute("DELETE FROM dynamic_observations WHERE run_id = ?", (run_id,))
+        self._connection.execute("DELETE FROM dynamic_runs WHERE project_id = ?", (project_id,))
+        self._commit()
+        return len(ids)
 
     # --- 外部のコード索引（SCIP。解析結果とは別に管理する） ---
 
