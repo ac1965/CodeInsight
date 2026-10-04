@@ -22,22 +22,36 @@ type Call struct {
 	Line     int    `json:"line"`
 	EndLine  int    `json:"end_line"`
 	Name     string `json:"name"`
+	Chain    string `json:"chain,omitempty"`     // a.b.c.Name(...) の a.b.c（識別子の連鎖の場合）
 	Selector bool   `json:"selector,omitempty"`  // x.Name(...) の形（x が識別子でない場合 `a.b.Name()` も含む）
 	X        string `json:"x,omitempty"`         // pkg.Func / x.Method の x（識別子の場合）
 	RecvType string `json:"recv_type,omitempty"` // x の型（同じ関数内の宣言から、静的に分かる場合）。例: Server / pkg.Client
 }
 
+type Field struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"` // 型名（Name / pkg.Name）。ポインタ・型引数を除く
+	Line int    `json:"line"`
+}
+
+type IMethod struct {
+	Name  string `json:"name"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
 type Decl struct {
-	Kind     string   `json:"kind"` // func / method / struct / interface / type / var / const
-	Name     string   `json:"name"`
-	Recv     string   `json:"recv,omitempty"` // メソッドのレシーバーの型名（ポインタ・型引数を除く）
-	Start    int      `json:"start"`
-	End      int      `json:"end"`
-	Doc      string   `json:"doc,omitempty"`
-	Embeds   []string `json:"embeds,omitempty"` // struct / interface に埋め込まれた型
-	Methods  []string `json:"methods,omitempty"`
-	Calls    []Call   `json:"calls,omitempty"`
-	Receiver string   `json:"receiver_name,omitempty"`
+	Kind     string    `json:"kind"` // func / method / struct / interface / type / var / const
+	Name     string    `json:"name"`
+	Recv     string    `json:"recv,omitempty"` // メソッドのレシーバーの型名（ポインタ・型引数を除く）
+	Start    int       `json:"start"`
+	End      int       `json:"end"`
+	Doc      string    `json:"doc,omitempty"`
+	Embeds   []string  `json:"embeds,omitempty"`   // struct / interface に埋め込まれた型
+	Fields   []Field   `json:"fields,omitempty"`   // struct の名前つきフィールド
+	IMethods []IMethod `json:"imethods,omitempty"` // interface のメソッド
+	Calls    []Call    `json:"calls,omitempty"`
+	Receiver string    `json:"receiver_name,omitempty"`
 }
 
 type Import struct {
@@ -174,6 +188,31 @@ func localTypes(decl *ast.FuncDecl) map[string]string {
 	return types
 }
 
+// identChain は、`a.b.c` のような識別子の連鎖から、(「a.b.c」, 先頭の「a」) を返す。連鎖でなければ空。
+func identChain(expr ast.Expr) (string, string) {
+	parts := []string{}
+	for depth := 0; depth < 6; depth++ {
+		switch t := expr.(type) {
+		case *ast.Ident:
+			parts = append([]string{t.Name}, parts...)
+			if len(parts) < 2 {
+				return "", ""
+			}
+			return strings.Join(parts, "."), parts[0]
+		case *ast.SelectorExpr:
+			parts = append([]string{t.Sel.Name}, parts...)
+			expr = t.X
+		case *ast.StarExpr:
+			expr = t.X
+		case *ast.ParenExpr:
+			expr = t.X
+		default:
+			return "", ""
+		}
+	}
+	return "", ""
+}
+
 func collectCalls(fset *token.FileSet, decl *ast.FuncDecl) []Call {
 	if decl.Body == nil {
 		return nil
@@ -195,6 +234,9 @@ func collectCalls(fset *token.FileSet, decl *ast.FuncDecl) []Call {
 			if x, ok := fun.X.(*ast.Ident); ok {
 				entry.X = x.Name
 				entry.RecvType = types[x.Name]
+			} else if chain, root := identChain(fun.X); chain != "" {
+				entry.Chain = chain
+				entry.RecvType = types[root]
 			}
 		case *ast.IndexExpr:
 			if ident, ok := fun.X.(*ast.Ident); ok {
@@ -255,6 +297,9 @@ func analyze(name string, source []byte) Result {
 									entry.Embeds = append(entry.Embeds, n)
 								}
 							}
+							for _, n := range f.Names {
+								entry.Fields = append(entry.Fields, Field{Name: n.Name, Type: typeName(f.Type), Line: fset.Position(n.Pos()).Line})
+							}
 						}
 					case *ast.InterfaceType:
 						entry.Kind = "interface"
@@ -265,7 +310,7 @@ func analyze(name string, source []byte) Result {
 								}
 							}
 							for _, n := range f.Names {
-								entry.Methods = append(entry.Methods, n.Name)
+								entry.IMethods = append(entry.IMethods, IMethod{Name: n.Name, Start: fset.Position(f.Pos()).Line, End: fset.Position(f.End()).Line})
 							}
 						}
 					}

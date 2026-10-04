@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from codeinsight.analysis.go_analyzer import KEY_GO, KEY_GO_IMPORT, KEY_GO_METHOD
+from codeinsight.analysis.go_analyzer import KEY_GO, KEY_GO_CHAIN, KEY_GO_IMPORT, KEY_GO_METHOD, TYPE_PREFIX
 from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL
 from codeinsight.analysis.python_analyzer import (
     KEY_DIRECT,
@@ -110,6 +110,12 @@ class ReferenceResolver:
                 self._go_by_qname[symbol.qualified_name].append(symbol)
                 if symbol.kind == SymbolKind.METHOD:
                     self._go_methods[symbol.name].append(symbol)
+        # Go: ファイルごとに、そのファイルが import しているプロジェクト内のパッケージ（同名メソッドの候補を絞るため）
+        self._go_file_imports: dict[str, set[str]] = defaultdict(set)
+        for dependency in dependencies:
+            dependency_key = dependency.target_key or ""
+            if dependency_key.startswith(KEY_GO_IMPORT):
+                self._go_file_imports[dependency.source_file_id].add(dependency_key[len(KEY_GO_IMPORT):])
         self._py_suffix_index: dict[str, list[Symbol]] | None = None
         self._py_modules = {
             qn: [s for s in group if s.kind == SymbolKind.MODULE]
@@ -313,10 +319,21 @@ class ReferenceResolver:
         else:
             self._set(reference, ResolutionStatus.EXTERNAL, "プロジェクト内に定義がない（Emacs本体・他のパッケージ、または動的に定義）")
 
+    def _go_package_of(self, symbol: Symbol) -> str:
+        """Goのシンボルの import パス（修飾名 `パス.名前` / `パス.型.メソッド` から）。"""
+
+        parts = symbol.qualified_name.rsplit(".", 2 if symbol.kind in (SymbolKind.METHOD, SymbolKind.FUNCTION_DECLARATION, SymbolKind.CLASS_VARIABLE) else 1)
+        return parts[0]
+
     def _resolve_go(self, reference: Reference) -> None:
         key = reference.target_key or ""
+        source = self._symbols_by_id.get(reference.source_symbol_id)
+        file_id = source.file_id if source is not None else ""
         if key.startswith(KEY_GO_METHOD):
-            self._go_method_by_name(reference, key[len(KEY_GO_METHOD):], "レシーバーの型を静的に確定できないため、同名のメソッドの一致による解決")
+            self._go_method_by_name(reference, key[len(KEY_GO_METHOD):], "レシーバーの型を静的に確定できないため、同名のメソッドの一致による解決", file_id=file_id)
+            return
+        if key.startswith(KEY_GO_CHAIN):
+            self._resolve_go_chain(reference, key[len(KEY_GO_CHAIN):], file_id)
             return
         qualified = key.removeprefix(KEY_GO)
         matches = self._go_by_qname.get(qualified, [])
@@ -328,31 +345,76 @@ class ReferenceResolver:
             else:
                 self._set(reference, ResolutionStatus.UNRESOLVED, "埋め込まれた型を、解析対象の中に見つけられない")
             return
-        callable_matches = [s for s in matches if s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)]
-        if len(callable_matches) == 1:
-            self._resolved(reference, callable_matches[0])
-            return
-        if len(callable_matches) > 1:
-            self._set(reference, ResolutionStatus.AMBIGUOUS, "同じ修飾名の定義が複数ある（ビルドタグによる切り替えなど）")
+        if self._resolve_go_target(reference, matches):
             return
         type_matches = [s for s in matches if s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF)]
         if type_matches:
             self._resolved(reference, type_matches[0], "型変換（関数の呼び出しではない）", Confidence.INFERRED)
             return
-        # メソッドの呼び出しで、型にメソッドが見つからない: 埋め込みで引き継いだメソッド・インターフェース経由・外部の型の可能性
+        # メソッドの呼び出しで、型にメソッドが見つからない: 埋め込みで引き継いだメソッドの可能性
         owner, _, method = qualified.rpartition(".")
-        if owner and owner in self._go_by_qname and any(s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF) for s in self._go_by_qname[owner]):
-            owner_kind = next(s.kind for s in self._go_by_qname[owner] if s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF))
-            reason = "インターフェース経由の呼び出し。実装は複数ありうる" if owner_kind == SymbolKind.INTERFACE else "型自身にメソッドが無い（埋め込みで引き継いだメソッドの可能性）。同名のメソッドの一致による解決"
-            self._go_method_by_name(reference, method, reason, same_package=owner.rpartition(".")[0])
+        owners = [s for s in self._go_by_qname.get(owner, []) if s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF)]
+        if owners:
+            self._go_method_by_name(
+                reference, method, "型自身にメソッドが無い（埋め込みで引き継いだメソッドの可能性）。同名のメソッドの一致による解決", same_package=owner.rpartition(".")[0], file_id=file_id
+            )
             return
         self._set(reference, ResolutionStatus.UNRESOLVED, "解析対象の中に、同じパッケージの関数が見つからない（関数型の変数・外部の定義・ビルドタグの可能性）")
 
-    def _go_method_by_name(self, reference: Reference, name: str, reason: str, same_package: str | None = None) -> None:
+    def _resolve_go_target(self, reference: Reference, matches: list[Symbol]) -> bool:
+        """修飾名に一致した関数・メソッド・インターフェースのメソッドで、参照を解決する。解決できなければ False。"""
+
+        callable_matches = [s for s in matches if s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD, SymbolKind.FUNCTION_DECLARATION)]
+        if len(callable_matches) == 1:
+            if callable_matches[0].kind == SymbolKind.FUNCTION_DECLARATION:
+                self._resolved(reference, callable_matches[0], "インターフェースのメソッド。実際の呼び出し先は、実装する型のメソッドになりうる", Confidence.INFERRED)
+            else:
+                self._resolved(reference, callable_matches[0])
+            return True
+        if len(callable_matches) > 1:
+            self._set(reference, ResolutionStatus.AMBIGUOUS, "同じ修飾名の定義が複数ある（ビルドタグによる切り替えなど）")
+            return True
+        return False
+
+    def _resolve_go_chain(self, reference: Reference, body: str, file_id: str) -> None:
+        """`a.b.M()` を、a の型から、構造体のフィールドの型をたどって、メソッドに解決する。"""
+
+        root, _, rest = body.partition("|")
+        fields, _, method = rest.rpartition("|")
+        current = root
+        for name in fields.split("."):
+            members = [s for s in self._go_by_qname.get(f"{current}.{name}", []) if s.kind == SymbolKind.CLASS_VARIABLE]
+            if len(members) != 1 or not members[0].summary.startswith(TYPE_PREFIX):
+                self._go_method_by_name(reference, method, f"フィールド {name} の型をたどれない（埋め込み・型の宣言が解析対象に無い）。同名のメソッドの一致による解決", file_id=file_id)
+                return
+            current = members[0].summary[len(TYPE_PREFIX):]
+            if current.startswith(("ext:", "builtin:")):
+                self._set(reference, ResolutionStatus.EXTERNAL, "プロジェクト外の型のメソッド")
+                return
+        matches = self._go_by_qname.get(f"{current}.{method}", [])
+        if self._resolve_go_target(reference, matches):
+            return
+        if any(s.kind in (SymbolKind.STRUCT, SymbolKind.INTERFACE, SymbolKind.TYPEDEF) for s in self._go_by_qname.get(current, [])):
+            self._go_method_by_name(
+                reference, method, "型自身にメソッドが無い（埋め込みで引き継いだメソッドの可能性）。同名のメソッドの一致による解決", same_package=current.rpartition(".")[0], file_id=file_id
+            )
+        else:
+            self._go_method_by_name(reference, method, "フィールドの型の宣言が解析対象に無い。同名のメソッドの一致による解決", file_id=file_id)
+
+    def _go_method_by_name(self, reference: Reference, name: str, reason: str, same_package: str | None = None, file_id: str = "") -> None:
         candidates = self._go_methods.get(name, [])
         if same_package:
-            local = [s for s in candidates if s.qualified_name.startswith(same_package + ".")]
+            local = [s for s in candidates if self._go_package_of(s) == same_package]
             candidates = local or candidates
+        elif file_id:
+            # 同名のメソッドのうち、このファイルのパッケージか、このファイルが import しているパッケージのものだけを候補にする
+            own = {sym.qualified_name.rpartition("/")[0] for sym in self._symbols_by_id.values() if sym.file_id == file_id and sym.kind == SymbolKind.MODULE}
+            reachable = self._go_file_imports.get(file_id, set()) | own
+            filtered = [s for s in candidates if self._go_package_of(s) in reachable]
+            if candidates and not filtered:
+                self._set(reference, ResolutionStatus.UNRESOLVED, "同名のメソッドは、このファイルが import していない別パッケージにだけある（外部の型のメソッドの可能性）")
+                return
+            candidates = filtered
         if len(candidates) == 1:
             self._resolved(reference, candidates[0], reason, Confidence.INFERRED)
         elif len(candidates) > 1:

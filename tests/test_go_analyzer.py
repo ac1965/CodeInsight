@@ -64,13 +64,20 @@ def test_calls_resolve_by_package_and_by_declared_receiver_type(view) -> None:
     assert target(count) == f"{MODULE}.count"
 
 
-def test_interface_calls_and_embedded_methods_are_inferred_not_confirmed(view) -> None:
-    _, _, _, _, _, call, target, _ = view
-    save = call(f"{MODULE}/svc.Service.Place", "Save")  # 左辺が a.b の形: 型を確定できない。同名のメソッドが1つだけ
+def test_interface_calls_resolve_to_the_interface_method_as_inferred(view) -> None:
+    symbols, _, _, _, symbol, call, target, _ = view
+    assert symbol(f"{MODULE}/store.Repository.Save").kind == SymbolKind.FUNCTION_DECLARATION  # インターフェースのメソッドは、宣言として抽出する
+    save = call(f"{MODULE}/svc.Service.Place", "Save")  # s.Repo.Save(): s は Service、フィールド Repo は Repository（インターフェース）
     assert save.resolution_status == ResolutionStatus.RESOLVED and save.confidence == Confidence.INFERRED
-    assert target(save) == f"{MODULE}/store.Memory.Save"
-    listing = call(f"{MODULE}.count", "r.List")  # r は Repository（インターフェース）。実装は複数ありうるため、推定
-    assert listing.confidence == Confidence.INFERRED and target(listing) == f"{MODULE}/store.Memory.List"
+    assert target(save) == f"{MODULE}/store.Repository.Save" and "インターフェース" in save.note  # 実装（Memory.Save）は、実行時に決まる
+    listing = call(f"{MODULE}.count", "r.List")  # r は Repository
+    assert listing.confidence == Confidence.INFERRED and target(listing) == f"{MODULE}/store.Repository.List"
+
+
+def test_struct_fields_are_symbols_with_their_types_and_embedded_methods_are_inferred(view) -> None:
+    _, _, _, _, symbol, call, target, _ = view
+    field = symbol(f"{MODULE}/svc.Service.Repo")
+    assert field.kind == SymbolKind.CLASS_VARIABLE and field.summary == f"型: {MODULE}/store.Repository"
     log = call(f"{MODULE}/svc.Service.Place", "s.Log")  # Service 自身には Log が無く、埋め込みの Base から引き継ぐ
     assert log.confidence == Confidence.INFERRED and target(log) == f"{MODULE}/svc.Base.Log"
 

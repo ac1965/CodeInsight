@@ -46,6 +46,8 @@ HELPER_SOURCE = Path(__file__).resolve().parent / "go_helper" / "goparse.go"
 KEY_GO = "go:"  # go:<importパス>.<名前> / go:<importパス>.<型>.<メソッド>
 KEY_GO_METHOD = "gomethod:"  # gomethod:<メソッド名>（レシーバーの型を確定できない）
 KEY_GO_IMPORT = "goimport:"  # goimport:<importパス>（プロジェクト内のパッケージ）
+KEY_GO_CHAIN = "gochain:"  # gochain:<起点の型>|<フィールドの連鎖>|<メソッド>（a.b.M() の a の型が分かる場合）
+TYPE_PREFIX = "型: "  # 構造体のフィールドのシンボルの要約。型の修飾名を持つ（解決でフィールドをたどるため）
 BUILTIN_FUNCTIONS = frozenset(
     "append cap clear close complex copy delete imag len make max min new panic print println real recover".split()
 )
@@ -207,6 +209,7 @@ class GoAnalyzer:
             symbol = self._declaration(unit, ids, result, decl, package_path, module_symbol, types_here)
             if symbol is not None:
                 pending.append((symbol, decl))
+                self._members(unit, ids, result, symbol, decl, package_path, module, aliases)
         for symbol, decl in pending:
             for call in decl.get("calls") or []:
                 self._call(unit, ids, result, symbol, call, package_path, module, aliases)
@@ -259,6 +262,40 @@ class GoAnalyzer:
             types_here[name] = symbol
         return symbol if kind_name in ("func", "method", "struct", "interface") else None
 
+    def _qualify_type(self, name: str, package_path: str, module: str, aliases: dict[str, str]) -> str:
+        """型名（Name / pkg.Name）の修飾名。組み込み型は `builtin:`、プロジェクト外の型は `ext:` を付ける。"""
+
+        if not name:
+            return ""
+        owner_path, _, short = name.rpartition(".")
+        if owner_path:
+            path = aliases.get(owner_path)
+            if path is None:
+                return ""
+            return f"{path}.{short}" if self._is_internal(path, module) else f"ext:{path}.{short}"
+        if short in BUILTIN_TYPES:
+            return f"builtin:{short}"
+        return f"{package_path}.{short}"
+
+    def _members(self, unit, ids, result, owner: Symbol, decl: dict, package_path: str, module: str, aliases: dict[str, str]) -> None:
+        """構造体のフィールド（型を持つ）と、インターフェースのメソッド（宣言）をシンボルにする。"""
+
+        for field in decl.get("fields") or []:
+            qualified_type = self._qualify_type(field.get("type", ""), package_path, module, aliases)
+            result.symbols.append(
+                build_symbol(
+                    ids, unit.file_id, name=field["name"], qualified_name=f"{owner.qualified_name}.{field['name']}", kind=SymbolKind.CLASS_VARIABLE,
+                    start_line=field["line"], end_line=field["line"], parent=owner, summary=TYPE_PREFIX + qualified_type if qualified_type else "",
+                )
+            )
+        for method in decl.get("imethods") or []:
+            result.symbols.append(
+                build_symbol(
+                    ids, unit.file_id, name=method["name"], qualified_name=f"{owner.qualified_name}.{method['name']}", kind=SymbolKind.FUNCTION_DECLARATION,
+                    start_line=method["start"], end_line=method["end"], parent=owner, summary="インターフェースのメソッド（宣言）",
+                )
+            )
+
     # --- 参照 ---
 
     def _reference(self, unit, ids, result, source: Symbol, kind: ReferenceKind, name: str, key: str | None, line: int, end: int,
@@ -284,7 +321,17 @@ class GoAnalyzer:
             else:
                 add(f"{x}.{name}", None, ResolutionStatus.EXTERNAL, "プロジェクト外（標準ライブラリ・外部のモジュール）")
             return
-        if call.get("selector") and not x:  # a.b.Method() / f().Method(): 左辺の型を、この解析では確定できない
+        chain = call.get("chain", "")
+        if chain and recv_type:  # a.b.Method(): a の型が分かれば、フィールドをたどって b の型を求める（解決時に）
+            root = self._qualify_type(recv_type, package_path, module, aliases)
+            if root.startswith("ext:") or root.startswith("builtin:"):
+                add(name, None, ResolutionStatus.EXTERNAL, "プロジェクト外の型を起点にした呼び出し")
+            elif root:
+                add(name, f"{KEY_GO_CHAIN}{root}|{chain.split('.', 1)[1]}|{name}")
+            else:
+                add(name, f"{KEY_GO_METHOD}{name}")
+            return
+        if call.get("selector") and not x:  # f().Method(): 左辺の型を、この解析では確定できない
             add(name, f"{KEY_GO_METHOD}{name}")
             return
         if x:  # x.Method()
