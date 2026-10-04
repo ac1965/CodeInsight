@@ -213,6 +213,8 @@ uv run codeinsight tui          # 構造ツリー・ソース・呼び出し関�
 ```bash
 uv run codeinsight graph call --root main --depth 2 --format mermaid
 uv run codeinsight graph flow --root <関数> --format html -o flow.html   # 制御フロー図
+uv run codeinsight serve --project <プロジェクト>                          # ローカルのWebビューアー（グラフ・ソース・切り出し）
+uv run codeinsight extract <関数> --depth 2 -o reading.md                  # 呼び出しの範囲のソースを切り出す
 uv run codeinsight graph arch --format mermaid                           # コンポーネント間の依存(層の逆向き依存の候補は破線)
 uv run codeinsight graph deps --format dot -o deps.dot
 uv run codeinsight graph inherit --format json

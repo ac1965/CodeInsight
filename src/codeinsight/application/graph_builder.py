@@ -40,6 +40,7 @@ class GraphNode:
     kind: str  # function / method / class / module / file / external / unresolved ...
     path: str | None = None
     line: int | None = None
+    end_line: int | None = None  # シンボルの終了行（本体の範囲を、ソースとして切り出すため）
     distance: int | None = None  # 起点に焦点を当てた表示の、起点からの距離（負: 起点に依存している側＝Depended On By、正: 起点が依存している側＝Depends On）
     group: str = ""  # 同じ場所（ファイル・ディレクトリ）のノードをまとめる名前
 
@@ -165,6 +166,7 @@ def _symbol_node(index: ProjectIndex, symbol: Symbol) -> GraphNode:
         kind=symbol.kind.value,
         path=index.path_of(symbol.file_id),
         line=symbol.start_line,
+        end_line=symbol.end_line,
     )
 
 

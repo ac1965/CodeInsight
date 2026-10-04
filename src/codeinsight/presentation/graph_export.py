@@ -199,6 +199,7 @@ def model_to_dict(model: GraphModel) -> dict:
                 "kind": n.kind,
                 "path": n.path,
                 "line": n.line,
+                "end_line": n.end_line,
                 "distance": n.distance,
                 "group": n.group,
             }

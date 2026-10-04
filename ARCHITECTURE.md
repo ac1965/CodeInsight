@@ -40,6 +40,7 @@ src/codeinsight/
 │   ├── c_flow_service.py      Cの関数単位の解析（制御フロー・データフロー・状態・終了経路・リスク。Clang AST）
 │   ├── flow_service.py          制御フロー・データフロー・状態・例外経路（ソースの鮮度を確認して実行）
 │   ├── risk_service.py          潜在的な問題の手がかり
+│   ├── extract_service.py       呼び出しグラフの範囲の関数のソースの切り出し
 │   ├── external_service.py      外部連携の分類・副作用の候補
 │   ├── graph_service.py         グラフ（呼び出し・依存・継承・制御フロー等）の組み立て。CLIとWebサーバーで共有
 │   ├── external_findings_service.py 外部ツール（SARIF）の指摘の取り込みと、古さの判定

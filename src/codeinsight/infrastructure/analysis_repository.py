@@ -75,9 +75,10 @@ class AnalysisRepository:
     保存状態を残さない）。
     """
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, check_same_thread: bool = True) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(str(db_path))
+        # check_same_thread=False は、呼び出し側が排他制御する場合（Webビューアーが、リクエストを1件ずつ処理する場合）のみ使う
+        self._connection = sqlite3.connect(str(db_path), check_same_thread=check_same_thread)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._transaction_depth = 0

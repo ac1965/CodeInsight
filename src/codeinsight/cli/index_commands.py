@@ -102,3 +102,33 @@ def cmd_extract(args: argparse.Namespace) -> int:
         print(output, end="")
     warn_if_stale(stale)
     return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """解析結果を、ローカルのWebビューアーとして提供する（読み取り専用。ループバックにだけバインドする）。"""
+
+    import webbrowser
+
+    from codeinsight.web.api import ViewerApi
+    from codeinsight.web.server import LOOPBACK_HOSTS, ViewerServer
+
+    if args.host not in LOOPBACK_HOSTS:
+        raise CliError(f"--host は、ループバック（{', '.join(LOOPBACK_HOSTS)}）だけを指定できます。外部のホストへは公開しません。")
+    repository, project = open_project_context(args)
+    api = ViewerApi(repository, project)
+    try:
+        server = ViewerServer(args.host, args.port, api)
+    except OSError as exc:
+        raise CliError(f"サーバーを起動できません（ポート {args.port}）: {exc}") from exc
+    print(f"CodeInsight ビューアー: {project.name}", file=sys.stderr)
+    print(f"  {server.url}", file=sys.stderr)
+    print("  ※ このURLにはトークンが含まれます。共有しないでください。読み取り専用で、ローカルからのみ接続できます。Ctrl-C で終了します。", file=sys.stderr)
+    if args.open:
+        webbrowser.open(server.url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("終了します", file=sys.stderr)
+    finally:
+        server.server_close()
+    return 0

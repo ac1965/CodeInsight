@@ -31,7 +31,7 @@ from codeinsight.cli.explore import (
     reference_command,
 )
 from codeinsight.cli.graph import cmd_graph
-from codeinsight.cli.index_commands import cmd_compare_scip, cmd_extract, cmd_import_scip
+from codeinsight.cli.index_commands import cmd_compare_scip, cmd_extract, cmd_import_scip, cmd_serve
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
 from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
 from codeinsight.domain import SymbolKind
@@ -199,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--no-line-numbers", action="store_true", help="行番号を付けない（コードとしてそのまま使う場合）")
     extract.add_argument("--file", help="同名のシンボルが複数ある場合に、ファイルで絞り込む")
     extract.add_argument("-o", "--output", help="出力先ファイル（省略時は標準出力）")
+
+    serve = add("serve", "解析結果を、ローカルのWebビューアーとして提供する（読み取り専用。127.0.0.1 にだけバインド。グラフ・ソース・切り出しをブラウザで）", cmd_serve, ("text",), exclude=False)
+    serve.add_argument("--host", default="127.0.0.1", help="バインドするアドレス（ループバックのみ: 127.0.0.1・localhost・::1）")
+    serve.add_argument("--port", type=int, default=8765, help="ポート（既定: 8765。0 で空きポートを自動選択）")
+    serve.add_argument("--open", action="store_true", help="起動後にブラウザで開く（既定はオフ）")
 
     externals = add("externals", "外部システム・外部ライブラリとの接続（ネットワーク・DB・ファイル・プロセス等）を分類して表示する", cmd_externals)
     externals.add_argument("--category", action="append", choices=list(CATEGORY_LABELS), help="カテゴリで絞り込む")

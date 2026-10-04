@@ -13,7 +13,7 @@ _TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="__CSP__">
 <title>CodeInsight グラフビューアー</title>
 <style>
 :root { color-scheme: light dark; --bg:#ffffff; --fg:#1f2937; --muted:#6b7280; --line:#9ca3af;
@@ -55,6 +55,14 @@ button:hover { background:var(--panel); }
 .group-title { fill:var(--muted); font-size:10px; }
 .group-line { stroke:var(--border); stroke-width:1; }
 .neighbors { margin:4px 0 0; padding-left:16px; font-size:12px; }
+body.app main { height:calc(100vh - 380px); min-height:280px; }
+#reader { border-top:1px solid var(--border); padding:8px 16px; }
+#reader .tabs button.active { background:var(--hit); }
+#reader pre { margin:6px 0; max-height:40vh; overflow:auto; padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:4px; font:12px/1.45 ui-monospace, monospace; white-space:pre; }
+.src-line.hl { background:var(--hit); }
+.src-line .n { display:inline-block; min-width:5ch; text-align:right; color:var(--muted); margin-right:1ch; }
+#controls { padding:8px 16px; border-bottom:1px solid var(--border); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+#controls select, #controls input { padding:3px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--fg); }
 .node.decision rect { fill:var(--warn-bg); stroke:var(--node-stroke); }
 .node.terminal rect { fill:var(--ext-bg); stroke:var(--ext); rx:14; }
 dt { color:var(--muted); font-size:12px; margin-top:8px; }
@@ -67,6 +75,7 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   <h1 id="title"></h1>
   <p class="notes" id="notes"></p>
 </header>
+__CONTROLS__
 <div class="toolbar">
   <input id="filter" type="search" placeholder="ノードを検索" aria-label="ノードを検索">
   <span>
@@ -81,11 +90,12 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   <div id="canvas"><svg id="graph" role="img" aria-label="グラフ"></svg></div>
   <aside id="detail"><p class="notes">ノードまたは辺をクリックすると詳細を表示します。</p></aside>
 </main>
-<script id="graph-data" type="application/json">__DATA__</script>
-<script>
-(function () {
+__READER__
+__DATA_SCRIPT__
+<script__NONCE__>
+function renderGraph(data, hooks) {
   "use strict";
-  var data = JSON.parse(document.getElementById("graph-data").textContent);
+  hooks = hooks || {};
   var NS = "http://www.w3.org/2000/svg";
   var NODE_W = 230, NODE_H = 30, GAP_X = 90, GAP_Y = 18, PAD = 24;
 
@@ -95,6 +105,8 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   document.getElementById("stats").textContent = "ノード " + data.nodes.length + " / 辺 " + data.edges.length;
 
   var legend = document.getElementById("legend");
+  legend.textContent = "";
+  document.getElementById("graph").textContent = "";
   [["confirmed", "確定"], ["inferred", "推定"], ["unresolved", "未解決"], ["external", "外部"]].forEach(function (item) {
     var span = document.createElement("span");
     var svg = document.createElementNS(NS, "svg");
@@ -197,14 +209,14 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
   }
   function fitScale() { return Math.min(1, (canvas.clientWidth - 8) / contentW); }
   function fit() { applyScale(fitScale()); }
-  document.getElementById("zoom-in").addEventListener("click", function () { applyScale(scale * 1.25); });
-  document.getElementById("zoom-out").addEventListener("click", function () { applyScale(scale / 1.25); });
-  document.getElementById("zoom-fit").addEventListener("click", fit);
-  canvas.addEventListener("wheel", function (ev) {
+  document.getElementById("zoom-in").onclick = function () { applyScale(scale * 1.25); };
+  document.getElementById("zoom-out").onclick = function () { applyScale(scale / 1.25); };
+  document.getElementById("zoom-fit").onclick = fit;
+  canvas.onwheel = function (ev) {
     if (!(ev.ctrlKey || ev.metaKey)) return;
     ev.preventDefault();
     applyScale(scale * (ev.deltaY < 0 ? 1.1 : 1 / 1.1));
-  }, { passive: false });
+  };
   applyScale(Math.max(0.7, fitScale()));  // 初期表示は文字が読める倍率にし、全体表示はボタンで
   var defs = document.createElementNS(NS, "defs");
   var marker = document.createElementNS(NS, "marker");
@@ -320,6 +332,7 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
       nodeEls.forEach(function (x) { x.el.classList.toggle("faded", !near[x.n.id]); });
       var dependsOn = edges.filter(function (e) { return e.source === n.id; }).map(function (e) { return data.nodes[ids[e.target]].label; });
       var dependedBy = edges.filter(function (e) { return e.target === n.id; }).map(function (e) { return data.nodes[ids[e.source]].label; });
+      if (hooks.onNode) hooks.onNode(n);
       show(n.label, [
         ["種別", n.kind],
         ["場所", n.path ? n.path + (n.line ? ":" + n.line : "") : ""],
@@ -338,7 +351,7 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
       canvas.scrollTo(Math.max(0, pos[ids[data.focus]].x * scale - canvas.clientWidth / 3), 0);
     }
   }
-  document.getElementById("filter").addEventListener("input", function (ev) {
+  document.getElementById("filter").oninput = function (ev) {
     var q = ev.target.value.toLowerCase();
     var first = null;
     nodeEls.forEach(function (x, i) {
@@ -349,16 +362,17 @@ dd { margin:0; word-break:break-all; white-space:pre-wrap; }
     if (first !== null) {
       canvas.scrollTo(Math.max(0, pos[first].x * scale - 40), Math.max(0, pos[first].y * scale - 40));
     }
-  });
-  svg.addEventListener("click", function (ev) {
+  };
+  svg.onclick = function (ev) {
     if (ev.target === svg) {
       edgeEls.forEach(function (x) { x.el.classList.remove("dim"); });
       nodeEls.forEach(function (x) { x.el.classList.remove("faded"); });
       if (selected) selected.classList.remove("selected");
       selected = null;
     }
-  });
-})();
+  };
+}
+__BOOT__
 </script>
 </body>
 </html>
@@ -378,5 +392,24 @@ def _embed(model: GraphModel) -> str:
     )
 
 
+_STATIC_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"
+
+
 def render_html(model: GraphModel) -> str:
-    return _TEMPLATE.replace("__DATA__", _embed(model))
+    """グラフ1つを埋め込んだ、自己完結型のHTML（外部リソースも通信も使わない）。"""
+
+    boot = 'renderGraph(JSON.parse(document.getElementById("graph-data").textContent), {});'
+    return (
+        _TEMPLATE.replace("__CSP__", _STATIC_CSP).replace("__CONTROLS__", "").replace("__READER__", "").replace("__NONCE__", "")
+        .replace("__DATA_SCRIPT__", f'<script id="graph-data" type="application/json">{_embed(model)}</script>')
+        .replace("__BOOT__", boot)
+    )
+
+
+def render_template(csp: str, controls: str, reader: str, nonce: str, boot: str) -> str:
+    """動的なビューアー（serve）用の骨組み。データはAPIから取得するため、埋め込まない。"""
+
+    return (
+        _TEMPLATE.replace("__CSP__", csp).replace("__CONTROLS__", controls).replace("__READER__", reader).replace("__NONCE__", f' nonce="{nonce}"')
+        .replace("__DATA_SCRIPT__", "").replace("__BOOT__", boot)
+    )
