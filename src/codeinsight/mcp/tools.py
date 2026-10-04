@@ -12,14 +12,19 @@ from typing import Any
 
 from codeinsight.analysis.call_graph import CallNode, Direction
 from codeinsight.application import NavigationService
+from codeinsight.application.c_flow_service import CFlowService
+from codeinsight.application.elisp_flow_service import ElispFlowService
 from codeinsight.application.extract_service import DIRECTIONS, ExtractService
+from codeinsight.application.flow_service import FlowAnalysisError, FlowService
 from codeinsight.application.freshness_service import FreshnessService
 from codeinsight.application.impact_service import ImpactService
 from codeinsight.application.navigation_service import AmbiguousSymbolError, SymbolNotFoundError
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.search_service import search_symbols_in_index
-from codeinsight.domain import FileFreshness, Project, ResolutionStatus, Symbol, SymbolKind
+from codeinsight.application.understand_service import UnderstandService
+from codeinsight.domain import FileFreshness, Language, Project, ResolutionStatus, Symbol, SymbolKind
 from codeinsight.infrastructure import AnalysisRepository
+from codeinsight.mcp.serialize import to_plain
 from codeinsight.presentation import extract_export
 
 MAX_TEXT = 300
@@ -89,11 +94,16 @@ class CodeInsightTools:
                               "depth": {"type": "integer", "minimum": 0, "maximum": 4, "default": 1},
                               "max_items": {"type": "integer", "minimum": 1, "maximum": 50, "default": 15},
                               "max_lines": {"type": "integer", "minimum": 1, "maximum": 400, "default": 120}}, ["symbol"]),
+            self._definition("understand", "関数・メソッドの「読解カード」を返す。コードリーディングの8つの問い（なぜ存在するか・誰が呼ぶか・入力・変更・戻り値・影響・失敗時の挙動・履歴の手がかり）に、静的解析・Git履歴で確認できた事実だけで答える。確認できなかったこと・対応範囲外のことは limitations に示す。理由や意図の推測は含まない。時間がかかることがある。",
+                             {"symbol": _SYMBOL, "file": _FILE, "depth": {"type": "integer", "minimum": 1, "maximum": 4, "default": 3}}, ["symbol"]),
+            self._definition("control_flow", "関数の制御構造（分岐・繰り返し・例外処理・return/raise・終了呼び出し）を、行番号・ネストつきで返し、指標（循環的複雑度など）を付ける。構文から確認できた構造で、実行時に通る経路・到達可能性は示さない。Python・C・Emacs Lisp に対応する。",
+                             {"symbol": _SYMBOL, "file": _FILE}, ["symbol"]),
             self._definition("project_info", "プロジェクトの解析状況（ファイル数・シンボル数・言語・解析後に変更されたファイル）を返す。結果が古い可能性の確認に使う。", {}, []),
         ]
         self._handlers: dict[str, Callable[[dict], dict]] = {
             "search_symbols": self._search, "get_definition": self._get_definition, "callers": self._callers, "callees": self._callees,
             "impact": self._impact, "extract_source": self._extract, "project_info": self._project_info,
+            "understand": self._understand, "control_flow": self._control_flow,
         }
 
     @staticmethod
@@ -238,6 +248,36 @@ class CodeInsightTools:
                     item["lines"] = []
                     item["omitted_reason"] = "ソースの本文は、サーバーの起動時に --allow-source が指定されていないため、返していません（位置・解決状態だけを返しています）"
         data["source_included"] = self._allow_source
+        return data
+
+    def _understand(self, arguments: dict) -> dict:
+        symbol = self._resolve(arguments)
+        try:
+            card = UnderstandService(self._navigation).understand(self._project, self._index, symbol, _integer(arguments, "depth", 3, 1, 4))
+        except FlowAnalysisError as exc:
+            raise ToolError(str(exc)) from exc
+        data = to_plain(card, self._allow_source)
+        data["source_included"] = self._allow_source
+        data["note"] = "確認できた事実だけの読解カードです。resolution・confidence が inferred・unresolved のものは、確定ではありません。limitations に、確認できなかったこと・対応範囲外のことを示します。"
+        return data
+
+    def _control_flow(self, arguments: dict) -> dict:
+        symbol = self._resolve(arguments)
+        language = self._index.files[symbol.file_id].language
+        try:
+            if language == Language.C:
+                summary = CFlowService(self._navigation).control_flow(self._project, self._index, symbol)
+            elif language == Language.ELISP:
+                summary = ElispFlowService(self._navigation).control_flow(self._project, self._index, symbol)
+            elif language == Language.PYTHON:
+                summary = FlowService(self._navigation).control_flow(self._project, self._index, symbol)
+            else:
+                raise ToolError(f"{language.value} の制御フローには、対応していません（Python・C・Emacs Lisp）")
+        except FlowAnalysisError as exc:
+            raise ToolError(str(exc)) from exc
+        data = to_plain(summary, self._allow_source)
+        data.update({"symbol": self._summary(symbol), "language": language.value, "source_included": self._allow_source,
+                     "note": "構文から確認できた構造です。実行時に通る経路・到達可能性は示しません。detail（条件式などの断片）は、--allow-source のときだけ返します。"})
         return data
 
     def _project_info(self, arguments: dict) -> dict:
