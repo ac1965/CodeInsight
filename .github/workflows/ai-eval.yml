@@ -1,0 +1,59 @@
+name: AI評価（実モデル）
+
+# 実際のLLMで、AI解説の評価セット（eval/ai_cases.toml）を回す。通常のCI（ci.yml）とは分け、push では動かさない。
+# GitHub の標準ランナー（メモリ約16GB・GPUなし）では、qwen3-coder（約18GB）は動かないため、小型のモデルを使う。
+# 目的は、Ollama の実際のAPIとの接続、プロンプト・引用の検証が実モデルの出力でも動くこと、の煙テスト。
+# 小型モデルの回答の質（合格率）は評価しない。質の評価は、手元で qwen3-coder などを使う（TESTING.md）。
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"  # 毎週月曜 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Ollama のモデル名（小型のもの）"
+        default: "qwen2.5-coder:1.5b"
+
+permissions:
+  contents: read
+
+jobs:
+  ai-eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      MODEL: ${{ inputs.model || 'qwen2.5-coder:1.5b' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv python install 3.12
+      - run: uv sync --extra dev --python 3.12
+      - name: Ollama を起動する（公式イメージ。この計算機の 127.0.0.1 だけに公開する）
+        run: |
+          docker run -d --name ollama -p 127.0.0.1:11434:11434 ollama/ollama
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:11434/api/version && break; sleep 2; done
+          docker exec ollama ollama --version
+      - name: モデルを取得する
+        run: docker exec ollama ollama pull "$MODEL"
+      - name: 評価セットを実行する（一部のケース。AIへの送信先は、この計算機の Ollama のみ）
+        run: |
+          uv run --python 3.12 codeinsight ai-eval --allow-send --ai-model "$MODEL" --no-save \
+            --only layered-place-order --only layered-store-save --only layered-question --only flow-exceptions --only c-main \
+            --timeout 600 --report ai-eval-report.json
+      - name: 煙テストとして、実モデルの出力が採点まで通ったことを確認する
+        run: |
+          uv run --python 3.12 python - <<'PY'
+          import json
+          report = json.load(open("ai-eval-report.json", encoding="utf-8"))
+          print(json.dumps({k: v for k, v in report.items() if k != "results"}, ensure_ascii=False, indent=2))
+          results = report.get("results", [])
+          assert len(results) == 5, f"5ケースの結果が必要です: {len(results)}"
+          errors = [r for r in results if r.get("error")]
+          assert not errors, f"AIへの接続・生成に失敗したケースがあります: {[r.get('id') for r in errors]}"
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-eval-report
+          path: ai-eval-report.json
+          if-no-files-found: ignore
