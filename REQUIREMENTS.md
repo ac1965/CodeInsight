@@ -26,6 +26,7 @@
 | 3.11 コードリーディングの到達点 | △ | 下記。 |
 | 3.12 外部ツールの結果の取り込み | ○ | SARIF 2.1.0（`import-sarif`）と SCIP（`import-scip`、`compare-scip`: 自身の参照解決との比較。scip-python・scip-clang・scip-go で検証）。自身の結果とは別に、ツール名・版・取り込み時のハッシュとともに保存し、古くなれば「古い」と示す。CodeQL は取り込まない方針。 |
 | 3.13 AIエージェント向けインターフェース（MCP） | ○ | `mcp`（標準入出力。読み取り専用）。検索・定義・呼び出し元/先・影響範囲・切り出し・読解カード・制御構造。ソースの断片は `--allow-source` のときだけ。古い結果は全結果に示し、位置の対応しない本文は返さない。Claude Code から呼び出して確認済み。 |
+| 3.14 ローカルのWebビューアーと、コンテナでの実行 | ○ | `serve`（読み取り専用・127.0.0.1・トークンとHostの検査）、Docker/compose（コンテナの中に限る `0.0.0.0` と `host.docker.internal`、ホスト側は 127.0.0.1 のみ。必要なソフトウェアはイメージに含め、Ollama はホストのもの）。CIでの検証は未実施。 |
 | 動的解析（3.11 の一部） | △ | 段階1: Python をコンテナで実行して観測（`dynamic-run`・`observed`・`dynamic-runs`）。許可が必須で、対象を変更しない（実行前後のハッシュ照合）。Cの収集器・入出力・引数の形・静的との差分は未実装（[DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md)）。 |
 
 ## 非機能要件（AGENTS.md §4）の対応状況
@@ -154,7 +155,7 @@
 | 11 | 運用 | `.gitignore` に私が追加した `.aider*` が残っている（利用者が手動対応する方針） | 低 | 触らない |
 | 12 | C機能 | Cの関数内の解析は流れ非依存の近似まで。ポインタ・エイリアス、関数ポインタ先、呼び出し元の実引数の追跡、制御フロー図が未対応 | 中 | 近似の精度は libiberty で検証済み（TESTING.md）。値や条件を考慮した解析はPhase 5 |
 | 13 | C機能 | `risks` の `unchecked-alloc`・`format-string` などは構文パターンの手がかりで、誤検出を含む。Cの `risks` は全ファイルを再解析するため遅い（libiberty で約1分） | 低〜中 | 手がかりであり断定ではない。性能は必要なら関数単位のキャッシュで改善 |
-| 14 | 動的解析 | 段階1（Pythonの実行観測）のみ。Cの収集器・入出力・引数の形・静的との差分（`dynamic-diff`）・Python の戻り値の形は未実装。コンテナの中からは動かない | 中 | [DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md)。観測を AGENTS.md §3.5.1 にどう位置づけるかは、承認を得てから文案を作る |
+| 14 | 動的解析 | 段階1（Pythonの実行観測）のみ。Cの収集器・入出力・引数の形・静的との差分（`dynamic-diff`）・Python の戻り値の形は未実装。コンテナの中からは動かない | 中 | [DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md)。観測の位置づけは AGENTS.md §3.5.1・§3.11 に反映済み |
 | 15 | C機能 | GCC の `-fanalyzer`（SARIF）による経路つきの手がかり | 低 | 実験のみ・組み込まない方針（B）。検出が少なく誤検出を含む（TESTING.md） |
 | 16 | 範囲 | MCPサーバー化・Go/C++/Emacs Lispアダプター・Docker対応は実装済み。Go・C++の関数単位の解析、MCPの書き込み系ツール（作らない方針）は対象外 | — | — |
 | 17 | 運用 | Docker の構成は、CIでは検証していない（手元の Docker Desktop・ホストの Ollama で確認）。実モデルの煙テスト（`ai-eval.yml`）は、結果の確認が未了 | 低 | TESTING.md |

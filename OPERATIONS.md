@@ -477,6 +477,8 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 
 ### 10.1c2 Docker で動かす（`docker compose up`。AIは、ホストの Ollama）
 
+規定は AGENTS.md §3.14（ビューアーの公開範囲・コンテナの中に限る例外）。
+
 解析・ビューアー・AI解説・資料生成を、コンテナで動かせます（`Dockerfile`・`compose.yaml`・`make docker-*`）。
 
 * **必要な個別ソフトウェアは、すべてイメージに入れてあります**: git（変更履歴）、Go（Goアダプターの補助プログラムを作る）、build-essential（Cの標準ヘッダー）、graphviz（図）、Chromium（資料のPDF。コンテナ用に `--no-sandbox` の包み）、make（`make reading`）。ホストに入れる必要はありません。

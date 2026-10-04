@@ -168,5 +168,5 @@ Observation(observation_id, run_id, kind, file_id, symbol_id, start_line, end_li
 * サンドボックスのバックエンドの選定（Docker/Podman を必須にするか、`bwrap` も対象にするか）。
 * 複数回の実行の観測を統合する方法（集計の規則）。
 * 観測の保持期間と、DBの大きさの管理。
-* 「観測」を AGENTS.md の用語（確定/推定/未解決/外部）にどう位置づけるか（§3.5.1 への追記が必要な可能性。承認を得てから）。
+* （決定済み）「観測」は、確定/推定/未解決/外部とは別の区分として扱う（AGENTS.md §3.5.1・§3.11 に反映。承認済み）。
 * Python 3.11 と 3.12 以降で、収集の仕組み（`settrace` / `sys.monitoring`）をどう分けるか。
