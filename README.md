@@ -28,7 +28,7 @@ C言語およびPythonを主要な対象言語とし(Goはシンボル・呼び�
 
 ## 開発状況
 
-**Phase 1〜4(解析基盤・コードナビゲーション・可視化・根拠つきのAI解説)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Python(ほか C++・Go・Emacs Lisp)のシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)も実装済みで(下記「AIで解説する」)、端末UI(`tui`)、コードリーディング資料の一括生成(`make reading`)、Cの関数単位の解析も使えます。C++・Go・Emacs Lispの解析、ローカルのWebビューアー(`serve`)、MCPサーバー(`mcp`)、外部ツール(SARIF・SCIP)の取り込み、Dockerでの実行も使えます。動的解析(実行観測)は、段階1(Pythonをコンテナで実行)まで実装済みです([DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md))。実装状況の詳細と制約は [REQUIREMENTS.md](REQUIREMENTS.md) と [ANALYSIS.md](ANALYSIS.md) を参照してください。
+**Phase 1〜4(解析基盤・コードナビゲーション・可視化・根拠つきのAI解説)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Python(ほか C++・Go・Emacs Lisp)のシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)も実装済みで(下記「AIで解説する」)、端末UI(`tui`)、コードリーディング資料の一括生成(`make reading`)、Cの関数単位の解析も使えます。C++・Go・Emacs Lispの解析、ローカルのWebビューアー(`serve`)、MCPサーバー(`mcp`)、外部ツール(SARIF・SCIP)の取り込み、Dockerでの実行も使えます。動的解析(実行観測)は、Pythonとc(gcov: 関数・行の実行回数)をコンテナで実行する範囲まで実装済みです([DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md))。実装状況の詳細と制約は [REQUIREMENTS.md](REQUIREMENTS.md) と [ANALYSIS.md](ANALYSIS.md) を参照してください。
 
 * 静的に確定できない関係(関数ポインタ、動的な呼び出し等)は推測で確定せず、**未解決**として明示します。候補を特定できるが実行時の挙動で変わりうるものは**推定**として、確定と区別します(AGENTS.md §3.5.1)。
 * 制御フロー・データフロー・状態・リスク・読解カードは**Python・C・Emacs Lisp**が対象です(Cは呼び出し先を経由した終了の連鎖も示します)。制御フロー図（`graph flow`）はPython・C・Emacs Lispが対象です。例外の伝播・呼び出し元の実引数・設定値・実行環境・境界の詳細は**Python**のみです。Emacs Lispも、制御フロー・エラー（シグナル）の経路・状態・データフロー・リスク・読解カードに対応します（呼び出し元の実引数・設定値・実行環境・境界の検出は未対応。解決は名前の一致による推定）。データフローは関数単位・流れ非依存の**近似**で、ポインタのエイリアス・関数ポインタ先・マクロの内部は追えないと明示します。言語ごとの対応範囲は [OPERATIONS.md](OPERATIONS.md) 10.2。
@@ -160,6 +160,8 @@ uv run codeinsight compare-scip                                 # 自身の参�
 uv run codeinsight dynamic-plan -- main.py                      # 実行しない計画（許可・隔離・収集器の確認）
 uv run codeinsight dynamic-run --allow-run -- main.py           # Pythonをコンテナで実行して観測（取得済みのイメージが必要。--image）
 uv run codeinsight observed <関数>                              # 観測された実行回数・呼び出し元/先・例外（静的にも確認できたかを併記）
+uv run codeinsight dynamic-run --allow-run --collector c -- make test  # C（gcov。取得済みの gcc イメージが必要。--image）
+uv run codeinsight dynamic-diff                                 # 観測と静的解析の差分（実行しない）
 uv run codeinsight dynamic-runs                                 # 実行の履歴（実行後にソースが変わったものは古い観測）
 ```
 

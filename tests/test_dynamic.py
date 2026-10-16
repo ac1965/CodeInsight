@@ -73,7 +73,7 @@ def test_domain_models_and_collector_catalog() -> None:
     assert RunStatus.DENIED.value == "denied" and RunStatus.TARGET_MODIFIED.value == "target_modified"
     run = DynamicRun("r1", "p1", __import__("datetime").datetime.now(), ("pytest",), {}, {}, "python-monitoring", "0", RunStatus.DENIED)
     assert run.status == RunStatus.DENIED and Observation("o1", "r1", ObservationKind.CALL).count == 1
-    assert all(not c.implemented for c in COLLECTORS)  # すべて未実装
+    assert {c.name for c in COLLECTORS if c.implemented} == {"python-monitoring", "c-gcov"}  # 実装済みの収集器だけが、実行できる
     assert {c.name for c in collectors_for({"c"})} == {"c-gcov", "c-instrument", "c-syscall"}
     assert all(c.needs_rebuild for c in COLLECTORS if c.name in ("c-gcov", "c-instrument"))  # 再コンパイルを伴うものを区別する
 

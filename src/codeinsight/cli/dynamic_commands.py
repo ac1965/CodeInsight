@@ -13,7 +13,7 @@ from codeinsight.application import NavigationService
 from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.domain.observation import ObservationKind, RunStatus
 from codeinsight.dynamic.diff import compare as compare_with_static
-from codeinsight.dynamic.executor import DEFAULT_IMAGE, ExecutorError
+from codeinsight.dynamic.executor import DEFAULT_IMAGE, DEFAULT_IMAGE_C, ExecutorError
 from codeinsight.dynamic.permission import ENV_ALLOW_RUN, DynamicPermission, DynamicPermissionError
 from codeinsight.dynamic.service import DynamicAnalysisService, hash_files
 
@@ -31,6 +31,7 @@ def _permission(args: argparse.Namespace) -> DynamicPermission:
         allow_unsandboxed=args.allow_unsandboxed,
         timeout_seconds=args.timeout,
         keep_workdir=args.keep_workdir,
+        collector=args.collector,
     )
 
 
@@ -62,7 +63,7 @@ def cmd_dynamic_plan(args: argparse.Namespace) -> int:
     print(f"  隔離: {sandbox['backend']}（{available}） / ネットワーク: {'許可' if sandbox['network'] == 'allowed' else '遮断'}"
           f" / 対象: {sandbox['target_mount']} / 作業領域: {sandbox['workdir']} / 時間: {sandbox['timeout_seconds']:.0f}秒"
           f" / メモリ: {sandbox['memory_mb']}MB / 環境変数: {', '.join(sandbox['env']) or '（なし）'}")
-    print("  収集器（実行できるのは Python のみ）:")
+    print("  収集器（実行できるのは、Python と C(gcov) のみ。--collector で選ぶ）:")
     for collector in plan.collectors:
         rebuild = " [再コンパイルを伴う]" if collector.needs_rebuild else ""
         print(f"    {collector.name}: {', '.join(k.value for k in collector.kinds)} — {collector.mechanism}{rebuild}")
@@ -231,7 +232,8 @@ def register(add) -> None:
         sub.add_argument("--allow-unsandboxed", action="store_true", help="隔離なしの実行を許可する（非推奨）")
         sub.add_argument("--timeout", type=float, default=60.0, help="時間の上限（秒）")
         if name == "dynamic-run":
-            sub.add_argument("--image", default=DEFAULT_IMAGE, help=f"実行に使うコンテナのイメージ（既定: {DEFAULT_IMAGE}。取得は自動では行わない）")
+            sub.add_argument("--image", default=None, help=f"実行に使うコンテナのイメージ（既定: Python は {DEFAULT_IMAGE}、C は {DEFAULT_IMAGE_C}。取得は自動では行わない）")
+        sub.add_argument("--collector", choices=("python", "c"), default="python", help="収集器。python: コマンドは Python のスクリプト（または -m モジュール）。c: コマンドはビルドと実行（例: make test）。gcov で再コンパイルし、関数・行の実行回数を取る")
         sub.add_argument("--keep-workdir", action="store_true", help="実行後も作業領域を残す")
         sub.add_argument("command", nargs=argparse.REMAINDER, help="-- の後に、実行するコマンド（シェルを介さない argv）")
     runs = add("dynamic-runs", "動的解析の実行履歴を表示する（実行後にソースが変わった実行は、古いものとして示す）", cmd_dynamic_runs, exclude=False)

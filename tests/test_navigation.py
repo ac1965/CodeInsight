@@ -98,7 +98,8 @@ def test_references_to_symbol(analyzed, c_callgraph_dir: Path) -> None:
     add = nav.resolve_symbol(index, "add").symbol
     hits = nav.references_to(index, add)
     assert [(h.path, h.reference.reference_kind, h.source.name) for h in hits] == [
-        ("main.c", ReferenceKind.FUNCTION_REF, "main")
+        ("main.c", ReferenceKind.FUNCTION_REF, "main"),
+        ("ops.c", ReferenceKind.CALL, "apply"),  # calc->op(...) は、フィールドへ代入された add への推定
     ]
 
 

@@ -36,7 +36,7 @@
 | 解析器とAIの責務分離 | 構造の判定は決定論的な解析器が行い、AIは要約・説明だけを担う。AIが使えなくても主要機能は動く |
 | 非侵襲 | 対象のソースを変更しない。対象のプログラムを実行しない。ビルドや外部通信は明示的な許可がある場合だけ |
 
-**現時点では行わないこと**（将来の検討対象。条件は [1.1](#11-現時点では行わないことと将来の検討)）: 許可なしの対象の実行（動的解析は、段階1のPythonのみ、許可つき）、バグの断定、値や条件を考慮した解析、ポインタのエイリアス解析、意味的な検索、設計意図の推測。
+**現時点では行わないこと**（将来の検討対象。条件は [1.1](#11-現時点では行わないことと将来の検討)）: 許可なしの対象の実行（動的解析は、Python と C(gcov) のみ、許可つき）、バグの断定、値や条件を考慮した解析、ポインタのエイリアス解析、意味的な検索、設計意図の推測。
 
 ### 1.1 現時点では行わないことと将来の検討
 
@@ -100,6 +100,10 @@ make check      # 構文確認 + ruff + mypy + 全テスト（CIと同じ検査�
 ### 3.3 libclang の補足（Cを解析する環境）
 
 pip版の libclang は、コンパイラが暗黙に行うシステムヘッダーの探索（macOS の SDK、`<stdarg.h>` などの組み込みヘッダー）を行いません。CodeInsight が `xcrun --show-sdk-path` や `clang`/`gcc` の設定値の問い合わせ（読み取り専用）で補います。Linux では `gcc` か `clang` が入っていると、標準ヘッダーを見つけられます。
+
+**新しい構文を解析したいとき（`CODEINSIGHT_LIBCLANG`）**: PyPI の `libclang` は 18.1.1 が最新で、C23 以降の構文（`__builtin_c23_va_start`、`constexpr` など）で失敗することがあります。計算機に新しい LLVM / Xcode があれば、環境変数 `CODEINSIGHT_LIBCLANG` にその共有ライブラリのパス（例: `/Library/Developer/CommandLineTools/usr/lib/libclang.dylib`、Homebrew の `llvm/lib/libclang.dylib`、Linux の `/usr/lib/llvm-N/lib/libclang.so`）を指定すると、同じ Python バインディングのまま使えます。**自動では選びません**（版で結果が変わるため）。指定が無効なときは、警告して同梱のものに戻します。指定を変えると、変更のないファイルも再解析されます。**新しいほど良いとは限りません**: emacs での実測では、C23/C2y の構文は解析できる一方、新しい clang は GCC 向けのコードに厳しく、解析に失敗した C ファイルは、同梱の 389 件に対し 428 件に増えました（同じ条件での比較。TESTING.md）。自分の対象で、両方を試して選んでください。
+
+規格（`-std=`）を指定できない場合（`compile_commands.json` が無い・コマンドに規格が無い）は、既定の C11 で解析し、**構文エラーになったファイルだけ C23 で解析し直します**（成功したら、警告に「C23 として解析しました（推定）」と残します。C23 でも失敗すれば、元のエラーを残します）。
 
 ---
 
@@ -237,7 +241,7 @@ uv run codeinsight analyze /path/to/project --compile-commands /tmp/build
 
 #### それでも解析できないもの
 
-libclang が未対応の C23 構文（`_Countof` など）やGCC固有の属性、他OS向けのコード（Win32・MS-DOS）、記録に無い領域。これらは「解析失敗」として記録され、正常に解析したものとして扱われません（結果は `partial`）。
+libclang が未対応の C23 構文やGCC固有の属性（`CODEINSIGHT_LIBCLANG` で新しい libclang を指定すると解析できるものがある。3.3）、他OS向けのコード（Win32・MS-DOS）、記録に無い領域（ビルドで生成されるヘッダー・このホストに無いシステムヘッダーなど。見つからないヘッダーがあるときは、エラーに対処の案内が付く）。これらは「解析失敗」として記録され、正常に解析したものとして扱われません（結果は `partial`）。
 
 ### 6.3 Emacs Lisp
 
@@ -729,7 +733,7 @@ make test-fast    # 最初の失敗で止める
 | 品質・履歴 | `history`, `tests`, `impact`, `unused`, `docs-check` |
 | AI | `explain`, `explain-many`（複数を並列・再開つき）, `explain-file`, `explain-path`, `ask`, `explanations`, `ai-status`, `ai-eval` |
 | 資料の1ファイル化 | `reading-report` |
-| 動的解析（Python） | `dynamic-plan`（実行しない計画の表示）, `dynamic-run`（許可が揃えばコンテナで実行。`--image` でイメージを指定。イメージの取得は自動では行わない）, `dynamic-runs`（履歴。実行後にソースが変わったものは古い観測として示す）, `observed <シンボル>`（実行回数・呼び出し元/先・例外。静的解析との一致も示す） |
+| 動的解析（Python・C） | `dynamic-plan`（実行しない計画の表示）, `dynamic-diff`（観測と静的解析の差分。保存済みの結果を読むだけ）, `dynamic-run`（`--collector c` で、C をビルドして関数・行の実行回数を観測。gcov）（許可が揃えばコンテナで実行。`--image` でイメージを指定。イメージの取得は自動では行わない）, `dynamic-runs`（履歴。実行後にソースが変わったものは古い観測として示す）, `observed <シンボル>`（実行回数・呼び出し元/先・例外。静的解析との一致も示す） |
 
 共通オプション: `--db`, `--project`, `--format {text,json}`, `--exclude GLOB`。詳細は各コマンドの `--help`。
 

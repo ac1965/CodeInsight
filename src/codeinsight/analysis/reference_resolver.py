@@ -54,6 +54,9 @@ class _Lookup:
 _INHERITANCE_NOTE = "サブクラスでのオーバーライドにより、実際の呼び出し先が異なる可能性がある"
 
 
+_CANDIDATES_MARK = " ［候補: "
+
+
 class ReferenceResolver:
     """プロジェクト全体のシンボル表を用いて、参照・依存関係の参照先を解決する。
 
@@ -156,8 +159,46 @@ class ReferenceResolver:
                     )
                 else:
                     self._unresolved_bases.add(reference.source_symbol_id)
+        self._resolve_function_pointers(references)
 
     # --- 共通 ---
+
+    def _resolve_function_pointers(self, references: Sequence[Reference]) -> None:
+        """C: 関数ポインタ経由の呼び出しを、同じ「置き場」（構造体のフィールド・グローバル変数）へ関数を代入・初期化している箇所から絞り込む。
+
+        根拠は「プロジェクトの中で、その置き場に関数のアドレスが代入・初期化されている」ことだけ。実行時にどれが入っているか
+        （再代入・プロジェクト外のコードによる代入・ポインタのコピー）は分からないため、候補が1つでも**確定にはしない（推定）**。
+        候補が複数なら曖昧（どれか1つを選ばない）、代入が見つからなければ未解決のまま。"""
+
+        bindings: dict[str, dict[str, Symbol]] = defaultdict(dict)
+        for reference in references:
+            if (
+                reference.slot_key
+                and reference.reference_kind == ReferenceKind.FUNCTION_REF
+                and reference.resolution_status == ResolutionStatus.RESOLVED
+                and reference.target_symbol_id
+            ):
+                target = self._symbols_by_id.get(reference.target_symbol_id)
+                if target is not None and target.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD):
+                    bindings[reference.slot_key][target.symbol_id] = target
+        for reference in references:
+            if not (reference.slot_key and reference.reference_kind == ReferenceKind.CALL and reference.target_key is None):
+                continue
+            base = reference.note.split(_CANDIDATES_MARK)[0]
+            candidates = sorted(bindings.get(reference.slot_key, {}).values(), key=lambda s: (s.qualified_name, s.symbol_id))
+            reference.target_symbol_id = None
+            if not candidates:
+                self._set(reference, ResolutionStatus.UNRESOLVED, f"{base}{_CANDIDATES_MARK}このプロジェクトの中に、関数を代入・初期化している箇所は見つからない］")
+            elif len(candidates) == 1:
+                self._resolved(
+                    reference, candidates[0],
+                    f"{base}{_CANDIDATES_MARK}プロジェクトの中で、この置き場に代入・初期化されている関数は {candidates[0].qualified_name} だけ。"
+                    "再代入・外部のコードによる代入があれば、実際の呼び出し先は変わりうる］",
+                    Confidence.INFERRED,
+                )
+            else:
+                names = ", ".join(c.qualified_name for c in candidates[:8]) + (f" ほか{len(candidates) - 8}件" if len(candidates) > 8 else "")
+                self._set(reference, ResolutionStatus.AMBIGUOUS, f"{base}{_CANDIDATES_MARK}この置き場に代入・初期化されている関数が複数ある: {names}］")
 
     def _language_of(self, file_id: str) -> Language:
         source_file = self._files_by_id.get(file_id)

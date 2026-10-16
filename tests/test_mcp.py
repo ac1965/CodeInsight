@@ -62,7 +62,11 @@ def test_search_definition_callers_callees_and_impact(setup) -> None:
     assert [c["name"] for c in callers["callers"]] == ["main"] and callers["callers"][0]["resolution"] == "resolved"
     assert callers["callers"][0]["evidence"].startswith("main.c:")  # 根拠位置つき
     callees, _ = _call(server, "callees", {"symbol": "apply"})
-    assert any(c["resolution"] == "unresolved" for c in callees["callees"]) and callees["unresolved_or_external"] >= 1  # 関数ポインタは、未解決として示す
+    # calc->op(...) は、フィールドへ代入された add への推定。確定（confirmed）ではなく、推定（inferred）として根拠・理由つきで返す
+    via_pointer = next(c for c in callees["callees"] if c["name"] == "add")
+    assert via_pointer["resolution"] == "resolved" and via_pointer["confidence"] == "inferred" and "再代入" in via_pointer["note"]
+    main_callees, _ = _call(server, "callees", {"symbol": "main"})
+    assert any(c["resolution"] == "unresolved" for c in main_callees["callees"]) and main_callees["unresolved_or_external"] >= 1  # 変数経由の関数ポインタは、未解決として示す
     impact, _ = _call(server, "impact", {"symbol": "apply", "depth": 2})
     assert "main" in {a["qualified_name"] for a in impact["affected"]} and "動的な呼び出し" in impact["note"]
     info, _ = _call(server, "project_info")

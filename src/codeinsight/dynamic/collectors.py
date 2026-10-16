@@ -1,4 +1,4 @@
-"""観測の収集器（言語別）の一覧。すべて未実装で、計画の表示にだけ使う。"""
+"""観測の収集器（言語別）の一覧。実装済みは `implemented=True`（それ以外は計画の表示にだけ使う）。"""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ class CollectorSpec:
 
 
 COLLECTORS: tuple[CollectorSpec, ...] = (
-    CollectorSpec("python-monitoring", "python", (K.CALL, K.COVERAGE, K.FAILURE, K.TIMING), "sys.monitoring（3.12+）/ sys.settrace"),
+    CollectorSpec("python-monitoring", "python", (K.CALL, K.COVERAGE, K.FAILURE), "sys.monitoring（3.12+）/ sys.settrace", implemented=True),
     CollectorSpec("python-audit", "python", (K.IO,), "sys.addaudithook（ファイル・ネットワーク・プロセスの監査イベント）"),
-    CollectorSpec("c-gcov", "c", (K.COVERAGE, K.CALL), "gcov（--coverage で再コンパイル）", needs_rebuild=True),
+    CollectorSpec("c-gcov", "c", (K.COVERAGE,), "gcov（--coverage で、作業領域の複製を再コンパイル。関数・行の実行回数のみ。呼び出しの辺は得られない）", needs_rebuild=True, implemented=True),
     CollectorSpec("c-instrument", "c", (K.CALL, K.TIMING), "-finstrument-functions（再コンパイル）", needs_rebuild=True),
     CollectorSpec("c-syscall", "c", (K.IO, K.FAILURE), "strace / dtrace / ltrace（OSによる）"),
 )

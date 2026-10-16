@@ -1,6 +1,6 @@
 # 動的解析の設計と現状
 
-状態: **段階1を実装済み（Pythonをコンテナで実行して観測）**。許可モデル・計画表示（`dynamic-plan`）・コンテナでの実行（`dynamic-run`）・保存（スキーマv8）・`observed`・`dynamic-runs` が動く。静的との差分（`dynamic-diff`）も実装済み。Cの収集器・入出力・引数の形は未実装。
+状態: **段階1を実装済み（Pythonをコンテナで実行して観測）。Cは gcov（関数・行の実行回数）を実装済み**。許可モデル・計画表示（`dynamic-plan`）・コンテナでの実行（`dynamic-run`）・保存（スキーマv8）・`observed`・`dynamic-runs` が動く。静的との差分（`dynamic-diff`）も実装済み。Cの呼び出しの辺・入出力・引数の形は未実装。
 
 実装の要点: 実行は `dynamic/executor.py` だけが行う（`subprocess` を使う唯一のモジュール。`PermittedRun`＝許可の確認を通った実行でなければ呼べない。テストで検査）。コンテナは、ネットワーク遮断・対象は読み取り専用・非特権利用者（実行した利用者と同じ uid:gid。root で実行した場合のみ 65534）・全 capability 削除・メモリ/プロセス数/時間の上限・環境変数は許可リストのみ。収集器（`dynamic/runtime/pycollect.py`、標準ライブラリのみ）はコンテナの中で動き、**値は記録しない**（名前・位置・件数・例外の型だけ）。実行の前後で対象のファイルのハッシュを比べ、変わっていれば `target_modified` として観測を保存しない。イメージ（既定 `python:3.12-slim`）の取得は自動では行わない（利用者が取得するか、`--image` で指定）。
 
@@ -95,7 +95,7 @@ Application: DynamicAnalysisService
         │
 Dynamic: permission.py   DynamicPermission（許可の検証）
          sandbox.py      SandboxPolicy / SandboxBackend（Protocol）
-         collectors.py   収集器の一覧（Python: 実装済み / C: 未実装）。実行は executor.py、収集は runtime/pycollect.py
+         collectors.py   収集器の一覧（Python・C(gcov): 実装済み）。実行は executor.py、収集は runtime/pycollect.py（Python）・runtime/ccollect.sh（C。gcov のテキストは c_observation.py が観測に変換）
         │
 Domain:  observation.py  DynamicRun / Observation（静的な事実とは別）
 Infrastructure: AnalysisRepository（別テーブル）
@@ -147,7 +147,7 @@ Observation(observation_id, run_id, kind, file_id, symbol_id, start_line, end_li
 | 1（**実装済み**。コンテナでの実機確認はイメージ取得後） | サンドボックスのバックエンド（コンテナ）、Python の収集器（D1・D2・D3）、保存（スキーマv8）、`observed` | 隔離された実行で観測を保存でき、対象が変更されないことを確認できる |
 | 2（一部実装済み: `dynamic-diff`） | 静的との差分（D4）、`tui`・`graph` への「観測」の重ね合わせ、`exceptions`/`tests` の補強 | 未解決の辺の解決候補を、観測として示せる |
 | 3 | 外部入出力（D5）、形（D6）、時間（D7） | |
-| 4 | C の収集器（計装・`gcov`）、ビルド/実行の許可の整理 | |
+| 4（一部実装済み: `c-gcov`） | C の収集器: **gcov（関数・行の実行回数）は実装済み**。計装（`-finstrument-functions`、呼び出しの辺）、ビルド/実行の許可の整理は未実装 | gcov は、対象の複製の中で再コンパイルして関数・行の実行回数を観測できる |
 | 5 | テイント（D8）。別途設計 | |
 
 ## 8. リスクと対策

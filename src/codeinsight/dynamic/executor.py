@@ -19,11 +19,15 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from codeinsight.dynamic import c_observation
 from codeinsight.dynamic.permission import DynamicPermission
 from codeinsight.dynamic.sandbox import SandboxPolicy
 
 DEFAULT_IMAGE = "python:3.12-slim"
+DEFAULT_IMAGE_C = "gcc:14"  # Cの収集器（gcov）には、C のツールチェーン（cc・gcov・make）が要る。取得は自動では行わない
 COLLECTOR_SCRIPT = Path(__file__).parent / "runtime" / "pycollect.py"
+C_COLLECTOR_SCRIPT = Path(__file__).parent / "runtime" / "ccollect.sh"
+CONTAINER_C_COLLECTOR = "/collector/ccollect.sh"
 CONTAINER_TARGET = "/target"
 CONTAINER_COLLECTOR = "/collector/pycollect.py"
 CONTAINER_OUT = "/out"
@@ -43,8 +47,9 @@ class PermittedRun:
     image: str
 
     @classmethod
-    def create(cls, permission: DynamicPermission, root: Path, image: str = DEFAULT_IMAGE) -> PermittedRun:
+    def create(cls, permission: DynamicPermission, root: Path, image: str | None = None) -> PermittedRun:
         permission.check()
+        image = image or (DEFAULT_IMAGE_C if permission.collector == "c" else DEFAULT_IMAGE)
         if permission.sandbox_backend != "container":
             raise ExecutorError("現在の実行機能は、コンテナ（--sandbox container）だけに対応しています。")
         return cls(permission, root.resolve(), image)
@@ -89,19 +94,21 @@ def build_argv(run: PermittedRun, out_dir: Path, container_name: str) -> tuple[l
 
     permission = run.permission
     policy = SandboxPolicy.from_permission(permission)
+    is_c = permission.collector == "c"
     base = [
         "run", "--rm", "--name", container_name,
         "--network", "bridge" if policy.network == "allowed" else "none",
-        "--read-only", "--tmpfs", "/tmp:rw,size=64m",
+        # C は、対象を複製してビルドするため、作業領域（tmpfs）を広げる。それ以外の書き込み先は無い（根ファイルシステムは読み取り専用）
+        "--read-only", "--tmpfs", f"/tmp:rw,exec,size={512 if is_c else 64}m",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--user", container_user(),
         "--memory", f"{policy.memory_mb}m", "--pids-limit", str(policy.max_processes),
         "--ulimit", f"fsize={policy.max_file_size_mb * 1024 * 1024}",
         "-v", f"{run.root}:{CONTAINER_TARGET}:ro",
-        "-v", f"{COLLECTOR_SCRIPT.resolve()}:{CONTAINER_COLLECTOR}:ro",
+        "-v", f"{(C_COLLECTOR_SCRIPT if is_c else COLLECTOR_SCRIPT).resolve()}:{CONTAINER_C_COLLECTOR if is_c else CONTAINER_COLLECTOR}:ro",
         "-v", f"{out_dir}:{CONTAINER_OUT}:rw",
         "-w", CONTAINER_TARGET,
-        "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "PYTHONPATH=" + CONTAINER_TARGET,
+        *(["-e", "HOME=/tmp"] if is_c else ["-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "PYTHONPATH=" + CONTAINER_TARGET]),
     ]
     audit = list(base)
     env_args: list[str] = []
@@ -109,11 +116,26 @@ def build_argv(run: PermittedRun, out_dir: Path, container_name: str) -> tuple[l
         if name in os.environ:
             env_args += ["-e", f"{name}={os.environ[name]}"]
             audit += ["-e", f"{name}=<値は記録しない>"]
-    tail = [
-        run.image, "python", CONTAINER_COLLECTOR, "--root", CONTAINER_TARGET, "--out", f"{CONTAINER_OUT}/observation.json",
-        "--", *permission.command,
-    ]
+    if is_c:
+        tail = [run.image, "sh", CONTAINER_C_COLLECTOR, "--root", CONTAINER_TARGET, "--out", CONTAINER_OUT, "--", *permission.command]
+    else:
+        tail = [
+            run.image, "python", CONTAINER_COLLECTOR, "--root", CONTAINER_TARGET, "--out", f"{CONTAINER_OUT}/observation.json",
+            "--", *permission.command,
+        ]
     return base + env_args + tail, audit + tail
+
+
+def _read_c_observation(out_dir: Path, duration: float) -> dict | None:
+    """Cの収集器（ccollect.sh）が書いた終了コードと gcov のテキストを、観測のJSONにする。どちらかが無ければ None（収集器が動かなかった）。"""
+
+    gcov, exit_file = out_dir / "gcov.txt", out_dir / "exit_code"
+    try:
+        if not gcov.is_file() or gcov.stat().st_size > MAX_OUTPUT_BYTES or not exit_file.is_file():
+            return None
+        return c_observation.parse(gcov.read_text(encoding="utf-8", errors="replace"), int(exit_file.read_text().strip()), duration)
+    except (OSError, ValueError):
+        return None
 
 
 def execute(run: PermittedRun) -> ExecutionResult:
@@ -144,7 +166,9 @@ def execute(run: PermittedRun) -> ExecutionResult:
         duration = time.monotonic() - started
         observation = None
         output = out_dir / "observation.json"
-        if output.is_file() and output.stat().st_size <= MAX_OUTPUT_BYTES:
+        if run.permission.collector == "c":
+            observation = _read_c_observation(out_dir, duration) if not timed_out else None
+        elif output.is_file() and output.stat().st_size <= MAX_OUTPUT_BYTES:
             try:
                 observation = json.loads(output.read_text(encoding="utf-8"))
             except (OSError, ValueError):

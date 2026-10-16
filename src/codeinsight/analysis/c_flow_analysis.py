@@ -587,6 +587,84 @@ class CState:
     parameter_mutations: list[CParameterMutation] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _Alias:
+    """ローカルのポインタ変数が、関数の中で1回だけ代入された値から指していると分かる先（推定）。"""
+
+    name: str  # 指す先の変数名
+    scope: str  # global / static / param
+    how: str  # 代入の式（表示用）
+
+
+_POINTER_NOTE = "ポインタ {pointer} 経由（{pointer} への代入は1箇所だけで、{target} を指すと推定。他の経路での変更は追えない）"
+
+
+def _decl_key(declaration: ci.Cursor) -> tuple[str, int]:
+    return declaration.spelling, declaration.extent.start.offset
+
+
+def _pointer_aliases(function: CFunction) -> dict[tuple[str, int], _Alias]:
+    """関数の中で、ローカルのポインタ変数が1回だけ代入され、その先が分かる場合の対応表。
+
+    次の形だけを扱う: `T *p = &g;` `p = &g.field;` `p = array;`（グローバル・static変数のアドレスや配列）、`p = param;`（ポインタ引数のコピー）。
+    再代入・`p++`・`&p` がある変数、別のポインタのコピーの連鎖、ポインタ値を持つグローバル変数（指す先は不明）は、追えないものとして扱う。
+    """
+
+    root = function.cursor
+    assignments: dict[tuple[str, int], list[ci.Cursor]] = {}
+    tainted: set[tuple[str, int]] = set()
+    declarations: dict[tuple[str, int], ci.Cursor] = {}
+
+    def local_pointer(reference: ci.Cursor) -> ci.Cursor | None:
+        declaration = reference.referenced
+        if declaration is None or declaration.kind != CK.VAR_DECL or declaration.type.kind != ci.TypeKind.POINTER:
+            return None
+        return declaration if _scope_of(declaration, root) == "local" else None
+
+    for node in root.walk_preorder():
+        if node.kind == CK.VAR_DECL and node.type.kind == ci.TypeKind.POINTER and _scope_of(node, root) == "local":
+            declarations[_decl_key(node)] = node
+            initializers = [c for c in _children(node) if c.kind not in (CK.TYPE_REF, CK.PARM_DECL)]
+            if initializers:
+                assignments.setdefault(_decl_key(node), []).append(initializers[-1])
+        elif node.kind in (CK.BINARY_OPERATOR, CK.COMPOUND_ASSIGNMENT_OPERATOR):
+            parts = _children(node)
+            target = _unwrap(parts[0]) if parts else None
+            if target is not None and target.kind == CK.DECL_REF_EXPR and local_pointer(target) is not None:
+                declaration = target.referenced
+                if node.kind == CK.BINARY_OPERATOR and _operator(node) == "=" and len(parts) == 2:
+                    assignments.setdefault(_decl_key(declaration), []).append(parts[1])
+                else:
+                    tainted.add(_decl_key(declaration))
+        elif node.kind == CK.UNARY_OPERATOR and _operator(node) in ("++", "--", "&"):
+            children = _children(node)
+            inner = _unwrap(children[0]) if children else None
+            if inner is not None and inner.kind == CK.DECL_REF_EXPR and local_pointer(inner) is not None:
+                tainted.add(_decl_key(inner.referenced))
+
+    aliases: dict[tuple[str, int], _Alias] = {}
+    for key, expressions in assignments.items():
+        if key in tainted or key not in declarations or len(expressions) != 1:
+            continue
+        value = _unwrap(expressions[0])
+        while value.kind == CK.CSTYLE_CAST_EXPR:
+            inner = [c for c in _children(value) if c.kind != CK.TYPE_REF]
+            if len(inner) != 1:
+                break
+            value = _unwrap(inner[0])
+        base = _root_variable(value)
+        if base is None or base.referenced is None:
+            continue
+        scope = _scope_of(base.referenced, root)
+        takes_address = value.kind == CK.UNARY_OPERATOR and _operator(value) == "&"
+        is_array = value.type.kind in (ci.TypeKind.CONSTANTARRAY, ci.TypeKind.INCOMPLETEARRAY)
+        if scope in ("global", "static") and (takes_address or is_array):
+            aliases[key] = _Alias(base.spelling, scope, text(function, expressions[0], 40))
+        elif scope == "param" and value.kind == CK.DECL_REF_EXPR and base.referenced.type.kind == ci.TypeKind.POINTER:
+            aliases[key] = _Alias(base.spelling, scope, text(function, expressions[0], 40))
+    return aliases
+
+
 def analyze_state(function: CFunction) -> CState:
     state = CState()
     root = function.cursor
@@ -597,18 +675,25 @@ def analyze_state(function: CFunction) -> CState:
         declaration = reference.referenced
         return _scope_of(declaration, root) if declaration is not None else "local"
 
+    aliases = _pointer_aliases(function)
+
     def record_write(target_expr: ci.Cursor, line: int, detail: str, mode: str = "write") -> None:
         base = _root_variable(target_expr)
         if base is None or base.referenced is None:
             return
         scope = classify(base)
         written_refs.add(base.extent.start.offset)
+        name = base.spelling
+        alias = aliases.get(_decl_key(base.referenced)) if scope == "local" and _unwrap(target_expr).kind != CK.DECL_REF_EXPR else None
+        if alias is not None:  # `*p = ...`・`p->f = ...` で、p が1回だけ代入された先への書き込み（推定）
+            scope, name = alias.scope, alias.name
+            detail = f"{detail} [{_POINTER_NOTE.format(pointer=base.spelling, target=alias.name)}]"
         if scope in ("global", "static"):
-            state.accesses.append(CStateAccess(base.spelling, scope, mode, line, detail))
-        elif scope == "param" and base.spelling in param_pointers and _unwrap(target_expr).kind != CK.DECL_REF_EXPR:
+            state.accesses.append(CStateAccess(name, scope, mode, line, detail))
+        elif scope == "param" and name in param_pointers and _unwrap(target_expr).kind != CK.DECL_REF_EXPR:
             node = _unwrap(target_expr)
             how = "field_store" if node.kind == CK.MEMBER_REF_EXPR else "subscript_store" if node.kind == CK.ARRAY_SUBSCRIPT_EXPR else "deref_store"
-            state.parameter_mutations.append(CParameterMutation(base.spelling, line, how, detail))
+            state.parameter_mutations.append(CParameterMutation(name, line, how, detail))
 
     def visit(cursor: ci.Cursor) -> None:
         kind = cursor.kind

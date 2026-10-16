@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 
@@ -13,6 +14,7 @@ def analyzer_fingerprint() -> str:
     """
 
     digest = hashlib.sha256()
+    digest.update(os.environ.get("CODEINSIGHT_LIBCLANG", "").strip().encode("utf-8"))  # libclang を替えたら再解析する
     for path in sorted(Path(__file__).parent.glob("*.py")):
         digest.update(path.name.encode("utf-8"))
         digest.update(path.read_bytes())

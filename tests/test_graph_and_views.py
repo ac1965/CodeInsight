@@ -60,7 +60,7 @@ def test_unresolved_calls_from_different_callers_are_not_merged(
     _, _, index = _index(analyzed, c_callgraph_dir)
     model = GraphBuilder(index).call_graph()
     unresolved_ops = [n for n in model.nodes if n.kind == "unresolved" and n.label == "op"]
-    assert len(unresolved_ops) == 2  # main内のopとapply内のopは別物
+    assert len(unresolved_ops) == 1  # main内の変数経由のop。apply内の calc->op は、代入された add への推定で解決される
 
 
 def test_subgraph_respects_root_depth_and_direction(analyzed, c_callgraph_dir: Path) -> None:
@@ -69,13 +69,13 @@ def test_subgraph_respects_root_depth_and_direction(analyzed, c_callgraph_dir: P
     apply_symbol = nav.resolve_symbol(index, "apply").symbol
 
     out = builder.call_graph(apply_symbol, depth=1, traversal=Traversal.OUT)
-    assert {n.label for n in out.nodes} == {"apply", "op"}
+    assert {n.label for n in out.nodes} == {"apply", "add"}  # calc->op は、フィールドへ代入された add への推定の辺
 
     incoming = builder.call_graph(apply_symbol, depth=1, traversal=Traversal.IN)
     assert {n.label for n in incoming.nodes} == {"apply", "main"}
 
     both = builder.call_graph(apply_symbol, depth=1, traversal=Traversal.BOTH)
-    assert {n.label for n in both.nodes} == {"apply", "op", "main"}
+    assert {n.label for n in both.nodes} == {"apply", "add", "main"}
 
     isolated = builder.call_graph(nav.resolve_symbol(index, "helper").symbol, depth=1, traversal=Traversal.OUT)
     assert [n.label for n in isolated.nodes] == ["helper"]  # 辺が無くても起点は示す

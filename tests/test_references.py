@@ -53,9 +53,11 @@ def test_c_function_pointer_calls_are_unresolved(analyzed, c_callgraph_dir: Path
     assert via_variable.target_symbol_id is None
     assert "関数ポインタ" in via_variable.note
 
+    # 構造体メンバ経由の呼び出しは、そのフィールドへ代入・初期化されている関数（main.c の `{add, 0}`）から推定する。確定にはしない
     (via_member,) = find(ReferenceKind.CALL, "apply", "op")
-    assert via_member.resolution_status == ResolutionStatus.UNRESOLVED
-    assert "関数ポインタ" in via_member.note
+    assert via_member.resolution_status == ResolutionStatus.RESOLVED
+    assert via_member.confidence == Confidence.INFERRED
+    assert "関数ポインタ" in via_member.note and "再代入" in via_member.note
 
 
 def test_c_function_address_is_recorded_as_function_ref_not_call(

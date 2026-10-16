@@ -7,8 +7,10 @@ from pathlib import Path
 
 import clang.cindex as cindex
 
+from codeinsight.analysis.c_flow_analysis import _operator as _assign_operator
 from codeinsight.analysis.ids import KEY_SYSTEM_HEADER, KEY_TEMPLATE, KEY_VIRTUAL, IdAllocator, build_symbol
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
+from codeinsight.analysis.libclang_select import configure as configure_libclang
 from codeinsight.domain import (
     Dependency,
     DependencyKind,
@@ -22,6 +24,19 @@ from codeinsight.domain import (
 )
 
 _DEFAULT_ARGS = ["-std=c11"]
+_C23_ARG = "-std=c23"
+_MISSING_HEADER_HINT = (
+    "ヘッダーが見つからないため解析できません。ビルドで生成されるヘッダー（config.h など）が無いか、このホストに無いシステムヘッダーの可能性があります。"
+    "対象の configure とビルドを（別の場所で）実行し、compile_commands.json を渡すと解決することがあります（自動では実行しません）。"
+)
+NOTE_FUNCTION_POINTER = "関数ポインタ経由の呼び出しであり、呼び出し先を静的に確定できない"
+NOTE_FUNCTION_POINTER_MEMBER = "構造体メンバの関数ポインタ経由の呼び出しであり、呼び出し先を確定できない"
+
+
+def _is_default_std(args: list[str]) -> bool:
+    """規格を利用者（コンパイル設定）が指定せず、既定の C11 を使っているか。"""
+
+    return _DEFAULT_ARGS[0] in args and not any(a.startswith(("-std=", "--std=")) and a != _DEFAULT_ARGS[0] for a in args)
 
 
 def _query_compiler(command: list[str]) -> str:
@@ -152,6 +167,61 @@ def _with_system_includes(args: list[str], system_args: list[str]) -> list[str]:
     return [*system_args, *args]
 
 
+_WRAPPER_KINDS = frozenset({cindex.CursorKind.UNEXPOSED_EXPR, cindex.CursorKind.PAREN_EXPR, cindex.CursorKind.CSTYLE_CAST_EXPR})
+
+
+def _strip_wrappers(cursor: cindex.Cursor) -> cindex.Cursor:
+    """暗黙の変換・括弧・キャストを外した、中身の式。"""
+
+    while cursor.kind in _WRAPPER_KINDS:
+        inner = [c for c in cursor.get_children() if c.kind != cindex.CursorKind.TYPE_REF]
+        if len(inner) != 1:
+            break
+        cursor = inner[0]
+    return cursor
+
+
+def _slot_of(expression: cindex.Cursor) -> str | None:
+    """関数ポインタを保持する「置き場」の照合キー（構造体のフィールド、またはグローバル/static変数のUSR）。特定できなければ None。
+
+    ローカル変数・引数は、関数をまたいで代入と呼び出しを結び付けられないため、置き場にしない。
+    """
+
+    node = _strip_wrappers(expression)
+    referenced = node.referenced
+    if referenced is None:
+        return None
+    if node.kind == cindex.CursorKind.MEMBER_REF_EXPR and referenced.kind == cindex.CursorKind.FIELD_DECL:
+        return referenced.get_usr() or None
+    if node.kind == cindex.CursorKind.DECL_REF_EXPR and referenced.kind == cindex.CursorKind.VAR_DECL:
+        parent = referenced.semantic_parent
+        if parent is not None and parent.kind == cindex.CursorKind.TRANSLATION_UNIT:
+            return referenced.get_usr() or None
+    return None
+
+
+def _function_ref_in(expression: cindex.Cursor) -> cindex.Cursor | None:
+    """式が（`&` を付けても付けなくても）関数の名前そのものなら、その DECL_REF_EXPR。"""
+
+    node = _strip_wrappers(expression)
+    if node.kind == cindex.CursorKind.UNARY_OPERATOR:
+        inner = list(node.get_children())
+        if len(inner) == 1 and _assign_operator(node) == "&":
+            node = _strip_wrappers(inner[0])
+    if node.kind == cindex.CursorKind.DECL_REF_EXPR and node.referenced is not None and node.referenced.kind == cindex.CursorKind.FUNCTION_DECL:
+        return node
+    return None
+
+
+def _field_usrs_in_order(init_list: cindex.Cursor) -> list[str]:
+    """初期化子リストの型が構造体のとき、そのフィールドのUSRを宣言順に返す（位置による初期化の対応づけ用）。"""
+
+    declaration = init_list.type.get_canonical().get_declaration()
+    if declaration is None or declaration.kind != cindex.CursorKind.STRUCT_DECL:
+        return []
+    return [f.get_usr() for f in declaration.get_children() if f.kind == cindex.CursorKind.FIELD_DECL]
+
+
 _TYPE_DECL_KINDS = frozenset(
     {
         cindex.CursorKind.STRUCT_DECL,
@@ -262,6 +332,7 @@ class CAnalyzer:
     _is_cpp = False
 
     def __init__(self, compile_commands_dir: Path | None = None) -> None:
+        configure_libclang()  # コンパイルデータベースの読み込み（libclang の使用）より前に行う
         self._compilation_database: cindex.CompilationDatabase | None = None
         if compile_commands_dir is not None:
             try:
@@ -304,15 +375,20 @@ class CAnalyzer:
             if args_warning:
                 result.warnings.append(args_warning)
 
-        try:
-            translation_unit = self._index.parse(
-                str(parse_path),
-                args=args,
-                unsaved_files=[(str(absolute_path), unit.content)],
-                options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
-            )
-        except cindex.TranslationUnitLoadError as exc:
-            result.errors.append(f"構文解析に失敗しました: {exc}")
+        def parse_with(parse_args: list[str]) -> cindex.TranslationUnit | None:
+            try:
+                return self._index.parse(
+                    str(parse_path),
+                    args=parse_args,
+                    unsaved_files=[(str(absolute_path), unit.content)],
+                    options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
+                )
+            except cindex.TranslationUnitLoadError as exc:
+                result.errors.append(f"構文解析に失敗しました: {exc}")
+                return None
+
+        translation_unit = parse_with(args)
+        if translation_unit is None:
             return None
 
         def in_system_header(diag: cindex.Diagnostic) -> bool:
@@ -335,14 +411,23 @@ class CAnalyzer:
             location_file = diag.location.file
             return location_file is not None and _resolved(location_file.name) == target_name
 
-        fatal_diagnostics = [
-            diag
-            for diag in translation_unit.diagnostics
-            if diag.severity >= cindex.Diagnostic.Error and own_diagnostic(diag)
-        ]
+        def fatal_of(tu: cindex.TranslationUnit) -> list[cindex.Diagnostic]:
+            return [d for d in tu.diagnostics if d.severity >= cindex.Diagnostic.Error and own_diagnostic(d)]
+
+        fatal_diagnostics = fatal_of(translation_unit)
+        if fatal_diagnostics and not self._is_cpp and _is_default_std(args):
+            # 規格を指定しない（C11の既定）で失敗したときだけ、C23 として解析し直す。C23 でも失敗すれば、元のエラーを残す。
+            retried = parse_with([*(a for a in args if a != _DEFAULT_ARGS[0]), _C23_ARG])
+            if retried is not None and not fatal_of(retried):
+                translation_unit, fatal_diagnostics = retried, []
+                result.warnings.append(
+                    "C11 では構文エラーになったため、C23 として解析しました（推定。コンパイル設定が無く、規格を確定できません）。"
+                )
         if fatal_diagnostics:
             for diag in fatal_diagnostics:
                 result.errors.append(f"{diag.location}: {diag.spelling}")
+            if any("file not found" in d.spelling for d in fatal_diagnostics):
+                result.errors.append(_MISSING_HEADER_HINT)
             return None
 
         outside = 0
@@ -394,6 +479,7 @@ class CAnalyzer:
             key: str | None,
             status: ResolutionStatus,
             note: str = "",
+            slot_key: str | None = None,
         ) -> None:
             # ローカル変数の初期化式などで生じた参照は、変数ではなく
             # それを含む関数からの参照として記録する（呼び出し元を関数にするため）。
@@ -415,17 +501,50 @@ class CAnalyzer:
                     source_location=location_of(cursor),
                     resolution_status=status,
                     note=note,
+                    slot_key=slot_key,
                 )
             )
+
+        slot_hints: dict[tuple[int, int], str] = {}  # 関数名の式の位置 → それを代入・初期化している置き場
+
+        def hint_slot(slot: str | None, value: cindex.Cursor) -> None:
+            function_ref = _function_ref_in(value)
+            if slot and function_ref is not None:
+                slot_hints[(function_ref.extent.start.line, function_ref.extent.start.column)] = slot
+
+        def hint_assignment(cursor: cindex.Cursor) -> None:
+            children = list(cursor.get_children())
+            if len(children) == 2 and _assign_operator(cursor) == "=":
+                hint_slot(_slot_of(children[0]), children[1])
+
+        def hint_initializer(init_list: cindex.Cursor) -> None:
+            fields = _field_usrs_in_order(init_list)
+            position = 0
+            for item in init_list.get_children():
+                parts = list(item.get_children())
+                if parts and parts[0].kind == cindex.CursorKind.MEMBER_REF and len(parts) == 2:  # 指示付き初期化 `.name = value`
+                    designator = parts[0].referenced
+                    slot = designator.get_usr() if designator is not None else None
+                    hint_slot(slot or None, parts[1])
+                    if slot in fields:
+                        position = fields.index(slot) + 1
+                else:  # 位置による初期化
+                    if position < len(fields):
+                        hint_slot(fields[position], item)
+                    position += 1
 
         def collect_reference(cursor: cindex.Cursor, source: Symbol | None) -> None:
             if source is None:
                 return
             kind = cursor.kind
+            if kind == cindex.CursorKind.BINARY_OPERATOR:
+                hint_assignment(cursor)
+            elif kind == cindex.CursorKind.INIT_LIST_EXPR:
+                hint_initializer(cursor)
             if kind == cindex.CursorKind.CALL_EXPR:
                 self._collect_call(cursor, source, callee_locations, add_reference)
             elif kind == cindex.CursorKind.DECL_REF_EXPR:
-                self._collect_decl_ref(cursor, source, callee_locations, add_reference)
+                self._collect_decl_ref(cursor, source, callee_locations, add_reference, slot_hints)
             elif kind == cindex.CursorKind.CXX_BASE_SPECIFIER:
                 base = cursor.referenced
                 usr = base.get_usr() if base is not None else ""
@@ -494,7 +613,10 @@ class CAnalyzer:
                 continue
             line = cursor.extent.start.line
             written = cursor.spelling
-            included = cursor.get_included_file()
+            try:
+                included = cursor.get_included_file()
+            except AssertionError:  # バインディングは、見つからなかったファイル（null）を受け付けず、AssertionError で落ちる
+                included = None
             key: str | None = None
             status = ResolutionStatus.UNRESOLVED
             note = ""
@@ -589,19 +711,19 @@ class CAnalyzer:
                         ResolutionStatus.UNRESOLVED,
                     )
                     return
-            note = "関数ポインタ経由の呼び出しであり、呼び出し先を静的に確定できない"
+            note = NOTE_FUNCTION_POINTER
             name = callee.spelling or "<関数ポインタ>"
         elif callee.kind == cindex.CursorKind.MEMBER_REF_EXPR:
-            note = "構造体メンバの関数ポインタ経由の呼び出しであり、呼び出し先を確定できない"
+            note = NOTE_FUNCTION_POINTER_MEMBER
             name = callee.spelling or "<関数ポインタ>"
         else:
             note = "呼び出し対象が式の評価結果であり、静的に確定できない"
             name = callee.spelling or "<式>"
         add_reference(
-            ReferenceKind.CALL, cursor, source, name, None, ResolutionStatus.UNRESOLVED, note
+            ReferenceKind.CALL, cursor, source, name, None, ResolutionStatus.UNRESOLVED, note, _slot_of(callee)
         )
 
-    def _collect_decl_ref(self, cursor, source, callee_locations, add_reference) -> None:
+    def _collect_decl_ref(self, cursor, source, callee_locations, add_reference, slot_hints=None) -> None:
         if (cursor.extent.start.line, cursor.extent.start.column) in callee_locations:
             return  # 呼び出しの対象として記録済み
         referenced = cursor.referenced
@@ -619,6 +741,7 @@ class CAnalyzer:
                 referenced.spelling,
                 usr,
                 ResolutionStatus.UNRESOLVED,
+                slot_key=(slot_hints or {}).get((cursor.extent.start.line, cursor.extent.start.column)),
             )
         elif referenced.kind == cindex.CursorKind.VAR_DECL:
             parent = referenced.semantic_parent
@@ -690,6 +813,8 @@ class CAnalyzer:
     def _command_args(self, command: cindex.CompileCommand) -> list[str]:
         args = list(command.arguments)[1:]  # コンパイラ実行ファイル名を除く
         args = [arg for arg in args if arg != command.filename]
+        while args and args[-1] == "--":  # ファイル名の前の区切り。ファイル名を除いた後に残ると、libclang が解析に失敗する
+            args.pop()
         return _with_system_includes(_absolutize_paths(_strip_output_options(args), command.directory), self._system_args)
 
     def _listed_files(self) -> set[str]:

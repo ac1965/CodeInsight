@@ -44,8 +44,11 @@ def test_callers_and_unresolved_calls_are_reported_not_followed(env) -> None:
     callers = service.extract(project, index, _symbol(index, "apply"), "callers", 1)
     assert [i.symbol.name for i in callers.items] == ["main"] and callers.items[0].role == "caller"
     result = service.extract(project, index, _symbol(index, "apply"), "callees", 1)
-    assert any(c.status == "unresolved" for c in result.omitted_calls)  # 関数ポインタの呼び出しは、ソースを出さず、一覧にする
-    assert not any(i.symbol.name == "op" for i in result.items)
+    assert not any(i.symbol.name == "op" for i in result.items)  # 関数ポインタ自体は、関数としてたどらない
+    # calc->op は、フィールドへ代入された add への推定（確定ではない）。たどる対象には含めるが、推定として扱う
+    assert any(i.symbol.name == "add" for i in result.items)
+    main_callees = service.extract(project, index, _symbol(index, "main"), "callees", 1)
+    assert any(c.status == "unresolved" for c in main_callees.omitted_calls)  # 変数経由の関数ポインタ（op(2, 3)）は、ソースを出さず、一覧にする
 
 
 def test_markdown_has_toc_notes_and_safe_fences(env) -> None:

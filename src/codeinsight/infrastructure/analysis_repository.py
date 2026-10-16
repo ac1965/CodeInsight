@@ -38,6 +38,7 @@ from codeinsight.infrastructure.schema import (
     V6_TABLES,
     V7_TABLES,
     V8_TABLES,
+    V9_COLUMNS,
 )
 
 _PROJECT_COLUMNS = (
@@ -54,7 +55,7 @@ _SYMBOL_COLUMNS = (
 )
 _REFERENCE_COLUMNS = (
     "reference_id, file_id, source_symbol_id, target_name, target_key, target_symbol_id, "
-    "reference_kind, start_line, end_line, resolution_status, confidence, note"
+    "reference_kind, start_line, end_line, resolution_status, confidence, note, slot_key"
 )
 _DEPENDENCY_COLUMNS = (
     "dependency_id, source_file_id, target_name, target_key, target_file_id, "
@@ -117,6 +118,10 @@ class AnalysisRepository:
             if column not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         connection.executescript(V2_TABLES)
+        for table, column, definition in V9_COLUMNS:
+            existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         connection.executescript(V4_TABLES)
         connection.executescript(V6_TABLES)
         connection.executescript(V7_TABLES)
@@ -285,7 +290,7 @@ class AnalysisRepository:
         self._insert_symbols(symbols)
         self._connection.executemany(
             f"INSERT INTO references_ ({_REFERENCE_COLUMNS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     r.reference_id,
@@ -300,6 +305,7 @@ class AnalysisRepository:
                     r.resolution_status.value,
                     r.confidence.value,
                     r.note,
+                    r.slot_key,
                 )
                 for r in references or []
             ],
@@ -756,6 +762,7 @@ def _reference_from_row(row: sqlite3.Row) -> Reference:
         target_symbol_id=row["target_symbol_id"],
         confidence=Confidence(row["confidence"]),
         note=row["note"],
+        slot_key=row["slot_key"],
     )
 
 

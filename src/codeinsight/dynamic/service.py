@@ -23,7 +23,8 @@ from codeinsight.dynamic.permission import DynamicPermission
 from codeinsight.dynamic.sandbox import BACKENDS, SandboxPolicy
 from codeinsight.infrastructure.analysis_repository import AnalysisRepository
 
-COLLECTOR_NAME = "python-monitoring"
+COLLECTOR_NAMES = {"python": "python-monitoring", "c": "c-gcov"}
+COLLECTOR_LANGUAGES = {"python": {"python"}, "c": {"c", "cpp"}}  # 実行前後のハッシュ照合（対象を変更しない確認）の対象
 COLLECTOR_VERSION = "1"
 
 Executor = Callable[[executor.PermittedRun], executor.ExecutionResult]
@@ -76,8 +77,14 @@ class DynamicAnalysisService:
         if permission.allow_network:
             notes.append("ネットワークが許可されています。実行が外部へ通信する可能性があります。")
         if any(c.needs_rebuild for c in collectors_for(languages)):
-            notes.append("Cの収集器には再コンパイルを伴うものがあります（未実装。対象の外の作業領域で行い、ビルドの許可とは別に実行の許可も必要）。")
-        notes.append("実行できる収集器は、Python（python-monitoring）だけです。")
+            notes.append("Cの収集器は再コンパイルを伴います（対象の複製の中で行い、対象は変更しません。ビルドの許可とは別に、実行の許可が必要です）。実装済みは c-gcov だけです。")
+        notes.append("実行できる収集器は、Python（python-monitoring。--collector python）と C（c-gcov。--collector c）です。")
+        if permission.collector == "c":
+            notes.append(
+                "C の収集器（gcov）は、コマンド（ビルドと実行。例: make test）を、対象の複製（作業領域）の中で実行します。cc・gcc・clang の呼び出しに"
+                "「--coverage -O0 -g」を足して再コンパイルするため、ビルドが CC（既定の cc）を使う必要があります。"
+                f"取れるのは関数・行の実行回数だけで、呼び出しの辺・例外は得られません。イメージは {executor.DEFAULT_IMAGE_C}（cc・gcov・make が必要）が既定で、取得は自動では行いません。"
+            )
         return DynamicPlan(
             project.name, permission.summary(), not reasons, reasons, policy.describe(),
             backend.available() if backend else None, collectors_for(languages), notes,
@@ -89,13 +96,13 @@ class DynamicAnalysisService:
         permission: DynamicPermission,
         index: ProjectIndex,
         repository: AnalysisRepository | None = None,
-        image: str = executor.DEFAULT_IMAGE,
+        image: str | None = None,
         run_executor: Executor | None = None,
     ) -> DynamicRunOutcome:
         """許可を確認し（揃っていなければ例外）、コンテナで実行して、観測を保存する。`run_executor` はテスト用の差し替え。"""
 
         permitted = executor.PermittedRun.create(permission, project.root_path, image)  # 許可の確認はここで行う
-        python_paths = sorted(f.relative_path for f in index.files.values() if f.language.value == "python")
+        python_paths = sorted(f.relative_path for f in index.files.values() if f.language.value in COLLECTOR_LANGUAGES[permission.collector])
         root = project.root_path.resolve()
         before = hash_files(root, python_paths)
         started = datetime.now()
@@ -123,7 +130,7 @@ class DynamicAnalysisService:
         mechanism = result.observation.get("mechanism", "") if result.observation else ""
         run = DynamicRun(
             run_id, project.project_id, started, permission.command, permission.summary(),
-            SandboxPolicy.from_permission(permission).describe() | {"image": image, "docker": result.docker_argv}, COLLECTOR_NAME,
+            SandboxPolicy.from_permission(permission).describe() | {"image": permitted.image, "docker": result.docker_argv}, COLLECTOR_NAMES[permission.collector],
             f"{COLLECTOR_VERSION}/{mechanism}" if mechanism else COLLECTOR_VERSION, status, project.repository_revision, before,
             exit_code, round(result.duration_seconds, 3), notes,
         )

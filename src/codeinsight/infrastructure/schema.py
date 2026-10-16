@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -59,6 +59,11 @@ V2_COLUMNS = (
     ("source_files", "analyzer_version", "TEXT NOT NULL DEFAULT ''"),
     ("analysis_results", "repository_revision", "TEXT"),
     ("projects", "compile_commands_dir", "TEXT"),  # v5: Cの関数単位の解析で、解析時と同じコンパイル設定を使うため
+)
+
+# v9: V2_TABLES で作られるテーブルへの列の追加（テーブル作成の後に適用する）。
+V9_COLUMNS = (
+    ("references_", "slot_key", "TEXT"),  # Cの関数ポインタの置き場（代入と呼び出しを結び付ける）
 )
 
 V2_TABLES = """

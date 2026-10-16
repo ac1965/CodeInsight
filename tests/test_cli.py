@@ -64,7 +64,7 @@ def test_callers_callees_and_unresolved_are_shown(c_project: Path, db: str, caps
 def test_unresolved_is_grouped_by_reason_and_limited(c_project: Path, db: str, capsys) -> None:
     code, out, _ = run(capsys, "unresolved", "--limit", "1", "--db", db)
     assert code == 0
-    assert out.count("■") == 2  # 理由は2種類（変数経由・構造体メンバ経由）
+    assert out.count("■") == 1  # 未解決の理由は、変数経由の1種類。構造体メンバ経由（calc->op）は、代入された関数から推定されて解決済みになった
     code, out, _ = run(capsys, "unresolved", "--all", "--db", db)
     assert "ほか" not in out
 

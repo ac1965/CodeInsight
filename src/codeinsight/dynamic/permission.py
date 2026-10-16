@@ -12,6 +12,7 @@ from dataclasses import dataclass
 ENV_ALLOW_RUN = "CODEINSIGHT_DYNAMIC_ALLOW_RUN"
 MAX_TIMEOUT_SECONDS = 3600.0
 SANDBOX_BACKENDS = ("container", "bwrap", "none")
+COLLECTORS = ("python", "c")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -39,6 +40,7 @@ class DynamicPermission:
     allow_unsandboxed: bool = False  # 隔離なしの実行の許可（sandbox_backend="none" のときに必要）
     timeout_seconds: float = 60.0
     keep_workdir: bool = False
+    collector: str = "python"  # python: コマンドは Python のスクリプト（または -m モジュール）。c: コマンドはビルド・実行（gcov。再コンパイルを伴う）
 
     def violations(self) -> list[str]:
         """許可が揃っていない理由（空なら、許可が揃っている）。"""
@@ -52,6 +54,8 @@ class DynamicPermission:
             reasons.append(f"サンドボックスの種類が不正です: {self.sandbox_backend}（{', '.join(SANDBOX_BACKENDS)}）")
         elif self.sandbox_backend == "none" and not self.allow_unsandboxed:
             reasons.append("隔離なしの実行には、追加の許可（--allow-unsandboxed）が必要です")
+        if self.collector not in COLLECTORS:
+            reasons.append(f"収集器の種類が不正です: {self.collector}（{', '.join(COLLECTORS)}）")
         if not 0 < self.timeout_seconds <= MAX_TIMEOUT_SECONDS:
             reasons.append(f"時間の上限は 0 秒より大きく {int(MAX_TIMEOUT_SECONDS)} 秒以下にしてください")
         bad = [name for name in self.env_allowlist if not _ENV_NAME.match(name)]
@@ -77,4 +81,5 @@ class DynamicPermission:
             "allow_run": self.allow_run, "command": list(self.command), "allow_network": self.allow_network,
             "env_allowlist": list(self.env_allowlist), "sandbox_backend": self.sandbox_backend,
             "allow_unsandboxed": self.allow_unsandboxed, "timeout_seconds": self.timeout_seconds, "keep_workdir": self.keep_workdir,
+            "collector": self.collector,
         }

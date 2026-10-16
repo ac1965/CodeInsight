@@ -52,3 +52,6 @@ class Reference:
     target_symbol_id: str | None = None
     confidence: Confidence = Confidence.CONFIRMED
     note: str = ""
+    # C: 関数ポインタの「置き場」（構造体のフィールド・グローバル変数）の照合キー。
+    # CALL では呼び出す置き場、FUNCTION_REF では関数のアドレスを代入・初期化している置き場。
+    slot_key: str | None = None
