@@ -55,7 +55,20 @@ def test_fingerprint_changes_with_the_libclang_setting(monkeypatch) -> None:
     assert analyzer_fingerprint() != before  # libclang を替えたら、変更のないファイルも再解析される
 
 
-@pytest.mark.skipif(not libclang_select.candidates(), reason="新しい libclang が見つからない")
+def _recent_libclang() -> list[str]:
+    """`_Countof` を解析できる版（clang 21 以降）と分かる候補だけ。パスに LLVM の版がある場合はそれで、macOS の Xcode / Command Line Tools は同梱の版が新しいものとして扱う。"""
+
+    import re
+
+    found = []
+    for path in libclang_select.candidates():
+        match = re.search(r"llvm[-@]?(\d+)", path)
+        if (match and int(match.group(1)) >= 21) or "Xcode" in path or "CommandLineTools" in path:
+            found.append(path)
+    return found
+
+
+@pytest.mark.skipif(not _recent_libclang(), reason="clang 21 以降の libclang が見つからない（CIの Ubuntu は LLVM 18）")
 def test_newer_libclang_parses_syntax_the_bundled_one_cannot(tmp_path: Path) -> None:
     (tmp_path / "x.c").write_text("#include <stddef.h>\nint arr[4];\nsize_t n(void) { return _Countof(arr); }\n", encoding="utf-8")
     code = (
@@ -65,7 +78,7 @@ def test_newer_libclang_parses_syntax_the_bundled_one_cannot(tmp_path: Path) -> 
         "r=CAnalyzer().analyze_file(SourceUnit(file_id='f',absolute_path=p,relative_path='x.c',content=t))\n"
         "print(json.dumps({'errors':r.errors}))\n"
     )
-    env = {**os.environ, libclang_select.ENV: libclang_select.candidates()[0]}
+    env = {**os.environ, libclang_select.ENV: _recent_libclang()[0]}
     done = subprocess.run([sys.executable, "-c", code, str(tmp_path)], env=env, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout.splitlines()[-1])["errors"] == []
