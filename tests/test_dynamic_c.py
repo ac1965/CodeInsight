@@ -121,6 +121,7 @@ def test_c_run_records_function_execution_and_never_modifies_the_target(project_
     assert {p.name: p.read_bytes() for p in project_dir.iterdir()} == before  # 対象に、ビルドの生成物も残らない（複製の中で行う）
     diff = compare(index, outcome.run, outcome.observations)
     assert diff.executed_functions >= 2 and diff.not_executed >= 1  # never_called は「実行を観測できなかった関数」
+    assert diff.static_only == [] and any("呼び出しの辺を観測できない" in n for n in diff.notes)  # 辺を観測できない収集器で、「静的のみ」と誤って示さない
     repository.close()
     assert main(["observed", "twice", "--db", db]) == 0
     assert "実行された回数: 3" in capsys.readouterr().out
@@ -138,3 +139,78 @@ def test_failed_build_is_recorded_as_failed_not_completed(project_dir: Path, tmp
     assert outcome.run.status == RunStatus.FAILED and outcome.run.exit_code != 0  # ビルドの失敗を正常として扱わない
     repository.close()
     json.dumps(outcome.run.permission)
+
+
+def _c_container_available() -> bool:
+    return shutil.which("docker") is not None and executor.image_present(executor.DEFAULT_IMAGE_C)
+
+
+def test_c_container_is_available_when_ci_requires_it() -> None:
+    """CI（CODEINSIGHT_REQUIRE_CONTAINER=1）では、Cのコンテナの結合テストを黙ってスキップさせない。"""
+
+    import os
+
+    if os.environ.get("CODEINSIGHT_REQUIRE_CONTAINER") == "1":
+        assert _c_container_available(), f"docker または {executor.DEFAULT_IMAGE_C} がありません（CIで取得する手順を確認してください）"
+
+
+c_container = pytest.mark.skipif(not _c_container_available(), reason=f"docker または {executor.DEFAULT_IMAGE_C} がありません")
+
+C_PROBE = r"""
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+static void report(const char *key, const char *value) { fprintf(stderr, "%s=%s\n", key, value); }
+int main(void) {
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_port = htons(53); inet_pton(AF_INET, "1.1.1.1", &a.sin_addr);
+    report("network", connect(s, (struct sockaddr *)&a, sizeof a) == 0 ? "open" : "blocked");
+    FILE *f = fopen("/target/x.txt", "w"); report("target", f ? "writable" : "readonly");
+    f = fopen("/etc/x", "w"); report("rootfs", f ? "writable" : "readonly");
+    char buf[16]; snprintf(buf, sizeof buf, "%d", (int)(getuid() != 0)); report("unprivileged", buf);
+    const char *secret = getenv("CODEINSIGHT_TEST_SECRET"); report("secret", secret ? secret : "None");
+    return 0;
+}
+"""
+
+
+@c_container
+def test_c_container_end_to_end_with_gcov(project_dir: Path, tmp_path: Path, capsys) -> None:
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(project_dir), "--db", db]) == 0
+    capsys.readouterr()
+    before = {p.name: p.read_bytes() for p in project_dir.iterdir()}
+    repository = AnalysisRepository(Path(db))
+    project = repository.list_projects()[0]
+    index = ProjectIndex.load(repository, project.project_id)
+    permission = DynamicPermission(allow_run=True, command=("sh", "build.sh"), collector="c")
+    outcome = DynamicAnalysisService().run(project, permission, index, repository)
+    assert outcome.run.status == RunStatus.COMPLETED and outcome.run.collector == "c-gcov", outcome.stderr_tail
+    executed = {o.name: o.count for o in outcome.observations if o.detail.get("what") == "function"}
+    assert executed["twice"] == 3 and executed["main"] == 1 and "never_called" not in executed
+    assert any(o.symbol_id for o in outcome.observations if o.name == "twice")
+    assert {p.name: p.read_bytes() for p in project_dir.iterdir()} == before  # 対象は読み取り専用で、ビルドの生成物は複製の中だけ
+    assert subprocess.run(["docker", "ps", "-aq", "--filter", "name=codeinsight-dyn"], capture_output=True, text=True, check=False).stdout.split() == []
+    repository.close()
+
+
+@c_container
+def test_c_container_isolation_on_the_real_container(project_dir: Path, tmp_path: Path, monkeypatch) -> None:
+    """Cの収集器でも、隔離が実際のコンテナで効いていること（ネットワーク遮断・対象と根ファイルシステムは読み取り専用・非特権・環境変数は許可リストのみ）。"""
+
+    monkeypatch.setenv("CODEINSIGHT_TEST_SECRET", "must-not-leak")
+    (project_dir / "probe.c").write_text(C_PROBE, encoding="utf-8")
+    (project_dir / "probe.sh").write_text("set -e\n$CC probe.c -o probe\n./probe\n", encoding="utf-8")
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(project_dir), "--db", db]) == 0
+    repository = AnalysisRepository(Path(db))
+    project = repository.list_projects()[0]
+    index = ProjectIndex.load(repository, project.project_id)
+    outcome = DynamicAnalysisService().run(project, DynamicPermission(allow_run=True, command=("sh", "probe.sh"), collector="c"), index, repository)
+    assert outcome.run.status == RunStatus.COMPLETED, outcome.stderr_tail
+    seen = dict(line.split("=", 1) for line in outcome.stderr_tail.splitlines() if "=" in line)
+    assert seen == {"network": "blocked", "target": "readonly", "rootfs": "readonly", "unprivileged": "1", "secret": "None"}
+    assert not (project_dir / "x.txt").exists() and "must-not-leak" not in json.dumps(outcome.run.sandbox)
+    repository.close()

@@ -22,8 +22,10 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
       - name: 依存のインストール
         run: uv sync --extra dev --python ${{ matrix.python-version }}
-      - name: 動的解析の結合テスト用に、Pythonのコンテナイメージを取得する（無いとテストはスキップされる）
-        run: docker pull python:3.12-slim
+      - name: 動的解析の結合テスト用に、Python と C のコンテナイメージを取得する（無いとテストはスキップされる）
+        run: |
+          docker pull python:3.12-slim
+          docker pull gcc:14
       - name: テスト（AIへの送信は行わない。HTTPはこの計算機内のスタブのみ）
         env:
           CODEINSIGHT_REQUIRE_CONTAINER: "1"  # コンテナの結合テストを、スキップではなく必須にする

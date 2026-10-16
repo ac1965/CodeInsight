@@ -19,6 +19,7 @@ from codeinsight.application.project_index import ProjectIndex
 from codeinsight.domain import SymbolKind
 from codeinsight.domain.observation import DynamicRun, Observation, ObservationKind
 from codeinsight.domain.reference import ResolutionStatus
+from codeinsight.dynamic.collectors import COLLECTORS
 
 _FUNCTION_KINDS = frozenset({SymbolKind.FUNCTION, SymbolKind.METHOD})
 NOTE = (
@@ -120,7 +121,14 @@ def compare(index: ProjectIndex, run: DynamicRun, observations: list[Observation
         )
         result.observed_only.append(edge(caller_id, callee_id, count=count, candidates=candidates,
                                          reason="" if candidates else "呼び出し元に、未解決・曖昧な呼び出しも見つかりません"))
-    for (caller_id, callee_id), lines in sorted(static_edges.items()):
+    spec = next((c for c in COLLECTORS if c.name == run.collector), None)
+    observes_calls = spec is None or ObservationKind.CALL in spec.kinds
+    if not observes_calls:
+        result.notes.append(
+            f"この実行の収集器（{run.collector}）は、呼び出しの辺を観測できないため、辺の比較（観測のみ・静的のみ）はしていません。"
+            "関数が実行されたかどうか（実行された関数・実行を観測できなかった関数）だけが比較の対象です。"
+        )
+    for (caller_id, callee_id), lines in sorted(static_edges.items() if observes_calls else []):
         if caller_id in executed_ids and (caller_id, callee_id) not in observed_edges:
             result.static_only.append(edge(caller_id, callee_id, reason=f"呼び出し元は実行されたが、この辺は観測されない（静的な呼び出し位置: L{', L'.join(map(str, sorted(set(lines))))}）"))
 
