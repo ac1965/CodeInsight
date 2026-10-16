@@ -12,6 +12,7 @@ import os
 from codeinsight.application import NavigationService
 from codeinsight.cli.common import CliError, emit_json, prepare_read, resolve_symbol_arg, safe, warn_if_stale
 from codeinsight.domain.observation import ObservationKind, RunStatus
+from codeinsight.dynamic.diff import compare as compare_with_static
 from codeinsight.dynamic.executor import DEFAULT_IMAGE, ExecutorError
 from codeinsight.dynamic.permission import ENV_ALLOW_RUN, DynamicPermission, DynamicPermissionError
 from codeinsight.dynamic.service import DynamicAnalysisService, hash_files
@@ -166,6 +167,57 @@ def cmd_observed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dynamic_diff(args: argparse.Namespace) -> int:
+    repository, project, index, stale = prepare_read(args)
+    runs = [r for r in repository.list_dynamic_runs(project.project_id) if r.status in (RunStatus.COMPLETED, RunStatus.FAILED)]
+    if args.run:
+        runs = [r for r in runs if r.run_id.startswith(args.run)]
+        if not runs:
+            raise CliError(f"実行ID {args.run} の観測（完了・異常終了）が見つかりません。dynamic-runs で確認できます。", 2)
+    if not runs:
+        print("比較できる観測がありません（dynamic-run で実行できます。時間切れ・対象が変更された実行の観測は保存されません）。")
+        return 0
+    run = runs[0]  # 新しい順
+    diff = compare_with_static(index, run, repository.list_dynamic_observations(run.run_id))
+    limit = args.limit
+
+    def rows(edges):
+        return [{"caller": e.caller, "caller_path": e.caller_path, "callee": e.callee, "callee_path": e.callee_path, "count": e.count,
+                 "reason": e.reason, "candidates": [{"line": c.line, "target": c.target_name, "status": c.status} for c in e.candidates]}
+                for e in edges]
+
+    if args.format == "json":
+        emit_json({"run_id": diff.run_id, "status": diff.status, "executed_functions": diff.executed_functions, "not_executed_functions": diff.not_executed,
+                   "both": rows(diff.both), "observed_only": rows(diff.observed_only), "unmatched": rows(diff.unmatched),
+                   "static_only": rows(diff.static_only), "stale_files": diff.stale_files, "not_compared": diff.not_compared, "notes": diff.notes})
+        return 0
+    warn_if_stale(stale)
+    print(f"静的解析との差分（実行 {diff.run_id}、{diff.status}、{safe(' '.join(diff.command))}）")
+    print(f"  実行された関数 {diff.executed_functions}件 / 静的にも確認できた呼び出し {len(diff.both)}件 / 観測のみ {len(diff.observed_only) + len(diff.unmatched)}件"
+          f" / 静的のみ（呼び出し元は実行）{len(diff.static_only)}件 / 実行を観測できなかった関数（観測した範囲のファイル内）{diff.not_executed}件")
+
+    def show(title, edges, with_count=True):
+        if not edges:
+            return
+        print(f"\n{title}（{len(edges)}件）")
+        for e in edges[:limit]:
+            tail = f" ×{e.count}" if with_count and e.count else ""
+            print(f"  {safe(e.caller)} ({e.caller_path}) → {safe(e.callee)} ({e.callee_path}){tail}")
+            if e.reason:
+                print(f"      {e.reason}")
+            for c in e.candidates:
+                print(f"      解決候補（確定ではない）: L{c.line} {safe(c.target_name)} [{'未解決' if c.status == 'unresolved' else '曖昧'}]")
+        if len(edges) > limit:
+            print(f"  …ほか{len(edges) - limit}件（--limit で変更）")
+
+    show("観測のみ: 観測されたが、静的な確定済みの辺には無い呼び出し", diff.observed_only)
+    show("観測のみ: 解析結果のシンボルに対応づけられない呼び出し", diff.unmatched)
+    show("静的のみ: 呼び出し元は実行されたが、この実行では観測されなかった辺（通らなかっただけかもしれません）", diff.static_only, False)
+    for note in diff.notes:
+        print(f"  ※ {note}")
+    return 0
+
+
 def register(add) -> None:
     for name, help_text, func in (
         ("dynamic-plan", "動的解析の計画を表示する（実行しない。許可・隔離・収集器の確認）", cmd_dynamic_plan),
@@ -186,4 +238,7 @@ def register(add) -> None:
     observed = add("observed", "シンボルについて、動的解析で観測されたこと（実行回数・呼び出し元/先・例外）を表示する", cmd_observed)
     observed.add_argument("symbol", help="関数・メソッド名")
     observed.add_argument("--file")
+    diff = add("dynamic-diff", "観測（動的解析）と静的解析の差分を表示する（観測のみ・静的のみ。保存済みの結果を読むだけで、実行しない）", cmd_dynamic_diff, ("text", "json"), exclude=False)
+    diff.add_argument("--run", metavar="ID", help="実行IDの先頭（既定: 最新の実行）")
+    diff.add_argument("--limit", type=int, default=30, help="各区分の表示件数の上限")
     del runs

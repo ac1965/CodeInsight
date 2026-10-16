@@ -27,7 +27,7 @@
 | 3.12 外部ツールの結果の取り込み | ○ | SARIF 2.1.0（`import-sarif`）と SCIP（`import-scip`、`compare-scip`: 自身の参照解決との比較。scip-python・scip-clang・scip-go で検証）。自身の結果とは別に、ツール名・版・取り込み時のハッシュとともに保存し、古くなれば「古い」と示す。CodeQL は取り込まない方針。 |
 | 3.13 AIエージェント向けインターフェース（MCP） | ○ | `mcp`（標準入出力。読み取り専用）。検索・定義・呼び出し元/先・影響範囲・切り出し・読解カード・制御構造。ソースの断片は `--allow-source` のときだけ。古い結果は全結果に示し、位置の対応しない本文は返さない。Claude Code から呼び出して確認済み。 |
 | 3.14 ローカルのWebビューアーと、コンテナでの実行 | ○ | `serve`（読み取り専用・127.0.0.1・トークンとHostの検査）、Docker/compose（コンテナの中に限る `0.0.0.0` と `host.docker.internal`、ホスト側は 127.0.0.1 のみ。必要なソフトウェアはイメージに含め、Ollama はホストのもの）。CIでの検証は未実施。 |
-| 動的解析（3.11 の一部） | △ | 段階1: Python をコンテナで実行して観測（`dynamic-run`・`observed`・`dynamic-runs`）。許可が必須で、対象を変更しない（実行前後のハッシュ照合）。Cの収集器・入出力・引数の形・静的との差分は未実装（[DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md)）。 |
+| 動的解析（3.11 の一部） | △ | 段階1: Python をコンテナで実行して観測（`dynamic-run`・`observed`・`dynamic-runs`）。許可が必須で、対象を変更しない（実行前後のハッシュ照合）。静的との差分は `dynamic-diff`。Cの収集器・入出力・引数の形は未実装（[DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md)）。 |
 
 ## 非機能要件（AGENTS.md §4）の対応状況
 
