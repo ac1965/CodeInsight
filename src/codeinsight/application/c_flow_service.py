@@ -202,7 +202,7 @@ class CFlowService:
                     report.skipped.append(callee.qualified_name)
                     continue
                 for item in callee_exits:
-                    if item.kind in _PROPAGATING and not item.caught_locally:
+                    if item.kind in _PROPAGATING and not item.caught_locally and not item.in_lambda and not item.noexcept:
                         report.propagated.append(PropagatedExit(item.kind, item.detail, callee, item.line, step))
                 if level + 1 < depth:
                     queue.append((callee, step, level + 1))

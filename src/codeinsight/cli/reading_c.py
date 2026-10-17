@@ -12,7 +12,7 @@ from codeinsight.application.navigation_service import NavigationService
 from codeinsight.cli.common import CliError, emit_json, safe, warn_if_stale
 from codeinsight.domain import Language
 
-_HINT_LABELS = {"fallthrough": "case の落ち込み", "error-return": "エラー値の戻り", "constant-condition": "定数の条件", "infinite-loop": "終わらないループの可能性"}
+_HINT_LABELS = {"fallthrough": "case の落ち込み", "error-return": "エラー値の戻り", "constant-condition": "定数の条件", "infinite-loop": "終わらないループの可能性", "noexcept-throw": "noexcept の関数の throw"}
 _EXIT_LABELS = {
     "terminate": "プロセスを終了する呼び出し",
     "longjmp": "非局所ジャンプ（longjmp）",

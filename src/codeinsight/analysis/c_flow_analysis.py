@@ -275,6 +275,59 @@ def _function_refs_for(expression: ci.Cursor) -> list[ci.Cursor]:
     return [node] if node.kind == CK.DECL_REF_EXPR and node.referenced is not None and node.referenced.kind == CK.FUNCTION_DECL else []
 
 
+def _lambda_ranges(function: CFunction) -> list[tuple[int, int]]:
+    """関数の中のラムダ式の、ソース上の範囲（開始・終了のオフセット）。ラムダの本体は、定義した関数の実行ではなく、呼ばれたときに実行される。"""
+
+    return [(n.extent.start.offset, n.extent.end.offset) for n in function.cursor.walk_preorder() if n.kind == CK.LAMBDA_EXPR]
+
+
+def _in_ranges(node: ci.Cursor, ranges: list[tuple[int, int]]) -> bool:
+    offset = node.extent.start.offset
+    return any(start <= offset < end for start, end in ranges)
+
+
+def _walk_without_lambdas(cursor: ci.Cursor):
+    """`walk_preorder` と同じ順で、ラムダ式の本体の中には入らない（ラムダ式そのものは返す）。"""
+
+    yield cursor
+    if cursor.kind == CK.LAMBDA_EXPR:
+        return
+    for child in cursor.get_children():
+        yield from _walk_without_lambdas(child)
+
+
+def _initializer_list(function: CFunction) -> list[tuple[str, ci.Cursor]]:
+    """C++ のコンストラクタの初期化子リスト `: a_(x), b_(y)` の、(メンバ名, 初期化の式)。基底クラスの初期化は含めない。"""
+
+    if function.cursor.kind != CK.CONSTRUCTOR:
+        return []
+    pairs: list[tuple[str, ci.Cursor]] = []
+    member: str | None = None
+    for child in _children(function.cursor):
+        if child.kind == CK.COMPOUND_STMT:
+            break
+        if child.kind == CK.PARM_DECL:
+            continue
+        if child.kind == CK.MEMBER_REF:
+            member = child.spelling
+        elif child.kind == CK.TYPE_REF:
+            member = None
+        elif member is not None:
+            pairs.append((member, child))
+            member = None
+    return pairs
+
+
+def _is_noexcept(function: CFunction) -> bool:
+    """`noexcept`（`noexcept(true)` を含む）・`throw()` の関数。例外が外へ出ると std::terminate になる。"""
+
+    try:
+        kind = function.cursor.exception_specification_kind
+    except (AttributeError, ValueError):
+        return False
+    return kind.name in ("BASIC_NOEXCEPT", "DYNAMIC_NONE")
+
+
 def text(function: CFunction, cursor: ci.Cursor, limit: int = 80) -> str:
     """カーソルの範囲のソースを、空白をまとめた1行で返す。"""
 
@@ -459,8 +512,9 @@ def analyze_return_values(function: CFunction) -> tuple[list[int], bool]:
 
     values: set[int] = set()
     unknown = False
+    lambdas = _lambda_ranges(function)
     for node in function.cursor.walk_preorder():
-        if node.kind != CK.RETURN_STMT:
+        if node.kind != CK.RETURN_STMT or (lambdas and _in_ranges(node, lambdas)):  # ラムダの return は、ラムダのもの
             continue
         parts = _children(node)
         if not parts:
@@ -498,8 +552,11 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
         """文に含まれる式から、終了呼び出しと三項演算子を拾う（入れ子の文には入らない）。"""
 
         nonlocal decisions
-        for node in cursor.walk_preorder():
-            if node.kind == CK.CALL_EXPR:
+        for node in _walk_without_lambdas(cursor):
+            if node.kind == CK.LAMBDA_EXPR:  # 本体は、定義した関数の構造に含めない（呼ばれたときに実行される）
+                header = " ".join(function.source[node.extent.start.offset:node.extent.end.offset].decode("utf-8", errors="replace").split()).split("{", 1)[0].strip()
+                add("lambda", node, depth, header[:60] + ("…" if len(header) > 60 else ""))
+            elif node.kind == CK.CALL_EXPR:
                 name = call_name(node)
                 kind = _is_exit_call(name)
                 if kind:
@@ -653,6 +710,10 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
 
     if body is not None:
         visit(body, 0)
+    if _is_noexcept(function):
+        for exit_ in analyze_exits(function):
+            if exit_.kind == "throw" and exit_.noexcept:
+                summary.hints.append(fa.Hint("noexcept-throw", exit_.line, f"noexcept の関数の中で {exit_.detail.split('（')[0]} が、関数の外へ出うる（出ると std::terminate）"))
     summary.hints.sort(key=lambda h: h.line)
     kinds = counts
     summary.metrics = {
@@ -856,6 +917,9 @@ def analyze_variables(function: CFunction) -> dict[str, CVariable]:
         for child in _children(cursor):
             visit(child)
 
+    for member, expression in _initializer_list(function):  # 初期化子リスト: 引数・変数の使用と、メンバへの流れ
+        visit(expression)
+        flow_sources(expression, "attr_store", expression.extent.start.line, f"this->{member}")
     for child in _children(root):
         if child.kind == CK.COMPOUND_STMT:
             visit(child)
@@ -1029,8 +1093,11 @@ def analyze_state(function: CFunction) -> CState:
         return _scope_of(declaration, root) if declaration is not None else "local"
 
     aliases = _pointer_aliases(function)
+    lambda_depth = [0]  # ラムダの中の書き込みは、定義した関数の実行ではなく、呼ばれたときに起きる
 
     def record_write(target_expr: ci.Cursor, line: int, detail: str, mode: str = "write") -> None:
+        if lambda_depth[0]:
+            detail = f"（ラムダの中。呼ばれたときに実行）{detail}"
         base = _root_variable(target_expr)
         if base is None and _this_member(target_expr) is not None:
             # C++: メンバ変数への書き込み（`this->x = ...` と、暗黙の this による `x = ...`）。呼び出し元のオブジェクトの変更
@@ -1056,6 +1123,12 @@ def analyze_state(function: CFunction) -> CState:
 
     def visit(cursor: ci.Cursor) -> None:
         kind = cursor.kind
+        if kind == CK.LAMBDA_EXPR:
+            lambda_depth[0] += 1
+            for child in _children(cursor):
+                visit(child)
+            lambda_depth[0] -= 1
+            return
         if kind in (CK.BINARY_OPERATOR, CK.COMPOUND_ASSIGNMENT_OPERATOR):
             operator = _operator(cursor)
             parts = _children(cursor)
@@ -1087,6 +1160,9 @@ def analyze_state(function: CFunction) -> CState:
         for child in _children(cursor):
             visit(child)
 
+    for member, expression in _initializer_list(function):  # C++: 初期化子リストでの、メンバの初期化（このオブジェクトの状態の変更）
+        state.parameter_mutations.append(CParameterMutation("this", expression.extent.start.line, "field_store", f"初期化子リスト: {member}({text(function, expression, 40)})"))
+        visit(expression)
     for child in _children(root):
         if child.kind == CK.COMPOUND_STMT:
             visit(child)
@@ -1111,6 +1187,8 @@ class CExit:
     line: int
     detail: str
     caught_locally: bool = False  # throw: 同じ関数の try の catch で捕捉されうる（型の一致か catch(...)。呼び出し元の catch は考慮しない）
+    in_lambda: bool = False  # ラムダの中（定義した関数の実行ではなく、呼ばれたときに起きる。呼び出し先を経由した連鎖には含めない）
+    noexcept: bool = False  # noexcept の関数の中の throw（例外は外へ出ず、std::terminate になる。連鎖には、terminate として示す）
 
 
 def _bare_type(spelling: str) -> str:
@@ -1141,7 +1219,11 @@ def _try_scopes(function: CFunction) -> list[tuple[int, int, list[str]]]:
 def analyze_exits(function: CFunction) -> list[CExit]:
     exits: list[CExit] = []
     scopes = _try_scopes(function)
+    lambdas = _lambda_ranges(function)
+    noexcept = _is_noexcept(function)
+    escaping_throw = False
     for node in function.cursor.walk_preorder():
+        deferred = bool(lambdas) and _in_ranges(node, lambdas)
         if node.kind == CK.CXX_THROW_EXPR:
             operands = _children(node)
             thrown = _bare_type(operands[0].type.spelling) if operands else ""
@@ -1150,29 +1232,38 @@ def analyze_exits(function: CFunction) -> list[CExit]:
             if not operands:  # `throw;`: 捕捉した例外の再送出
                 local = False
             label = f"throw {operands[0].type.spelling}" if operands else "throw;（捕捉した例外の再送出）"
-            exits.append(CExit("throw", node.extent.start.line, label + ("（同じ関数の catch で捕捉されうる）" if local else ""), local))
+            suffix = "（同じ関数の catch で捕捉されうる）" if local else ""
+            if deferred:
+                suffix += "（ラムダの中。呼ばれたときに送出）"
+            elif noexcept and not local:
+                suffix += "（noexcept の関数の中。外へは出ず std::terminate になる）"
+                escaping_throw = True
+            exits.append(CExit("throw", node.extent.start.line, label + suffix, local, deferred, noexcept and not deferred and not local))
         elif node.kind == CK.CALL_EXPR:
             name = call_name(node)
             kind = _is_exit_call(name)
             if kind:
-                exits.append(CExit(kind, node.extent.start.line, f"{name}()"))
-        elif node.kind == CK.RETURN_STMT:
+                exits.append(CExit(kind, node.extent.start.line, f"{name}()" + ("（ラムダの中）" if deferred else ""), in_lambda=deferred))
+        elif node.kind == CK.RETURN_STMT and not deferred:
             parts = _children(node)
             expression = text(function, parts[0]) if parts else ""
             if expression and _ERROR_RETURN.match(expression):
                 exits.append(CExit("error_return", node.extent.start.line, f"return {expression}"))
-        elif node.kind == CK.BINARY_OPERATOR and _operator(node) == "=":
+        elif node.kind == CK.BINARY_OPERATOR and _operator(node) == "=" and not deferred:
             parts = _children(node)
             if parts and _unwrap(parts[0]).kind == CK.DECL_REF_EXPR and parts[0].spelling == "errno":
                 exits.append(CExit("errno", node.extent.start.line, text(function, node, 50)))
+    if escaping_throw:  # noexcept の関数から例外が出ると std::terminate: 呼び出し元からは、プロセスの終了として見える
+        exits.append(CExit("terminate", function.cursor.extent.start.line, "noexcept の関数の中の throw が、関数の外へ出ると std::terminate（プロセスの終了）"))
     exits.sort(key=lambda e: (e.line, e.kind))
     return exits
 
 
 def return_statements(function: CFunction) -> list[tuple[int, str]]:
     result = []
+    lambdas = _lambda_ranges(function)
     for node in function.cursor.walk_preorder():
-        if node.kind == CK.RETURN_STMT:
+        if node.kind == CK.RETURN_STMT and not (lambdas and _in_ranges(node, lambdas)):
             parts = _children(node)
             result.append((node.extent.start.line, text(function, parts[0]) if parts else ""))
     return result
