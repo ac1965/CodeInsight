@@ -31,6 +31,8 @@ _CONTROLS = """<div id="controls">
     <option value="both">両方（Depends On / Depended On By）</option><option value="out">Depends On（出る）</option><option value="in">Depended On By（入る）</option>
   </select>
   <label>深さ <input id="depth" type="number" min="0" max="10" value="2" style="width:4em"></label>
+  <label title="動的解析の実行で観測された呼び出しを重ねます（この1回の実行の記録）"><input id="ov-observed" type="checkbox"> 観測</label>
+  <label title="保存済みのAIの推測を、確定ではない辺として重ねます（既定は切）"><input id="ov-ai" type="checkbox"> AIの推測</label>
   <button id="draw" type="button">描画</button>
   </span>
   <span id="message" class="notes" role="status"></span>
@@ -162,13 +164,15 @@ _BOOT = r"""
   function draw() {
     var kind = $("kind").value, root = $("q").value.trim();
     var params = { kind: kind, direction: $("direction").value, depth: $("depth").value };
+    var overlay = []; if ($("ov-observed").checked) overlay.push("observed"); if ($("ov-ai").checked) overlay.push("ai");
+    if (overlay.length && kind === "call") params.overlay = overlay.join(",");
     if (root) params.root = root;
     // 古いリクエストの応答が、新しい描画を上書きしないようにする
     var ticket = ++drawCount;
     say("読み込み中…");
     return api("/api/graph", params).then(function (data) {
       if (ticket !== drawCount) return;
-      say(data.nodes.length + " ノード / " + data.edges.length + " 辺");
+      say(data.nodes.length + " ノード / " + data.edges.length + " 辺" + (data.overlay && data.overlay.notes.length ? "  ※ " + data.overlay.notes.join(" ") : ""));
       window.renderGraph(data, { onNode: onNode });
     }).catch(function (e) {
       if (ticket !== drawCount) return;
@@ -621,6 +625,8 @@ _BOOT = r"""
   $("q").onkeydown = function (ev) { if (ev.key === "Enter") draw(); };
   $("q").onchange = draw;  // 候補（datalist）の選択・入力の確定
   $("kind").onchange = draw;
+  $("ov-observed").onchange = draw;
+  $("ov-ai").onchange = draw;
   $("direction").onchange = draw;
   $("depth").onchange = draw;
   var drawTimer = null;

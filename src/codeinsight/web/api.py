@@ -196,7 +196,87 @@ class ViewerApi:
         model = GraphService.annotate(model, self._project, self._stale)
         if len(model.nodes) > 2000:
             raise ApiError(413, f"ノードが{len(model.nodes)}個あり、多すぎます。root と depth で絞り込んでください")
-        return model_to_dict(model)
+        data = model_to_dict(model)
+        overlays = {o for o in (_text(params, "overlay") or "").split(",") if o in ("observed", "ai")}
+        if overlays and kind == "call":
+            self._overlay(data, overlays)
+        return data
+
+    def _hashes_current(self, hashes: dict[str, str]) -> bool:
+        files = {p: self._index.file_by_path(p) for p in hashes}
+        return all(f is not None and f.content_hash == h for (p, h), f in ((item, files[item[0]]) for item in hashes.items()))
+
+    def _observed_edges(self) -> tuple[dict[tuple[str, str], int], str | None]:
+        """最新の動的解析の実行（完了・異常終了。実行後にソースが変わっていないもの）で観測された呼び出しの辺。解析結果とは別の区分。"""
+
+        for run in self._repository.list_dynamic_runs(self._project.project_id):
+            if run.status.value not in ("completed", "failed"):
+                continue
+            if not self._hashes_current(run.source_hashes):
+                continue  # 実行後に変わったソース: 古い観測は、重ねない
+            counts: dict[tuple[str, str], int] = {}
+            for observation in self._repository.list_dynamic_observations(run.run_id):
+                if observation.kind.value == "call" and observation.symbol_id and observation.target_symbol_id:
+                    key = (observation.symbol_id, observation.target_symbol_id)
+                    counts[key] = counts.get(key, 0) + observation.count
+            return counts, run.run_id
+        return {}, None
+
+    def _ai_edges(self) -> list[tuple[str, str, str, str]]:
+        """保存済みで、根拠が変わっていないAIの推測から、「関数 → 推測された呼び出し先」（【推論】の行に、バッククォートで書かれた、プロジェクトの関数）。解析結果ではない。"""
+
+        by_name: dict[str, list] = defaultdict(list)
+        for symbol in self._index.symbols.values():
+            if symbol.kind.value in ("function", "method"):
+                by_name[symbol.name].append(symbol)
+                if symbol.qualified_name != symbol.name:
+                    by_name[symbol.qualified_name].append(symbol)
+        by_qualified = {s.qualified_name: s for s in self._index.symbols.values()}
+        edges: list[tuple[str, str, str, str]] = []
+        seen: set[str] = set()
+        for explanation in self._repository.list_explanations(self._project.project_id, "inference"):
+            if explanation.target in seen:
+                continue
+            seen.add(explanation.target)
+            caller = by_qualified.get(explanation.target)
+            if caller is None or not self._hashes_current(explanation.source_hashes):
+                continue
+            candidates = set()
+            for line in explanation.text.splitlines():
+                if "【推論】" in line:
+                    candidates |= set(re.findall(r"`([A-Za-z_][\w:.]*)`", line))
+            for name in sorted(candidates):
+                found = by_name.get(name, [])
+                if len(found) == 1 and found[0].symbol_id != caller.symbol_id:
+                    edges.append((caller.symbol_id, found[0].symbol_id, explanation.explanation_id, explanation.status.value))
+        return edges
+
+    def _overlay(self, data: dict, overlays: set[str]) -> None:
+        """グラフの辺に、観測・AIの推測を重ねる（解析結果の辺とは別の区分。混ぜない）。どちらも、グラフに含まれるノードの間の辺だけ。"""
+
+        ids = {n["id"] for n in data["nodes"]}
+        notes: list[str] = []
+        existing = {(e["source"], e["target"]): e for e in data["edges"] if e["kind"] == "call"}
+        if "observed" in overlays:
+            counts, run_id = self._observed_edges()
+            if run_id is None:
+                notes.append("重ねられる観測がありません（動的解析の実行が無い、または実行後にソースが変わっています）。")
+            for (source, target), count in counts.items():
+                if (source, target) in existing:
+                    existing[(source, target)]["observed"] = count
+                elif source in ids and target in ids:
+                    data["edges"].append({"source": source, "target": target, "kind": "call", "style": "observed_only", "label": "", "evidence": [], "count": count, "observed": count,
+                                          "note": "観測のみ: この実行で観測されたが、静的な確定済みの辺には無い。観測は、この1回の実行で起きたことの記録です。"})
+            notes.append("観測は、この1回の実行で起きたことの記録です。観測されなかった辺は、呼ばれないことを意味しません。")
+        if "ai" in overlays:
+            added = 0
+            for source, target, inference_id, status in self._ai_edges():
+                if source in ids and target in ids and (source, target) not in existing:
+                    data["edges"].append({"source": source, "target": target, "kind": "call", "style": "ai", "label": "AI", "evidence": [], "count": 1,
+                                          "note": f"AIの推測（確定ではありません。検証状態: {status}。推測ID: {inference_id[:8]}）。解析結果の解決状態は、変わりません。"})
+                    added += 1
+            notes.append(f"AIの推測の辺: {added}本（確定ではない。解析の辺とは別の区分）。")
+        data["overlay"] = {"observed": "observed" in overlays, "ai": "ai" in overlays, "notes": notes}
 
     def _source(self, params: Params) -> dict:
         path = _text(params, "path", required=True) or ""

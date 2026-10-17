@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,78 @@ def test_inference_list_and_detail_are_read_only_views_of_saved_explanations(gui
     unresolved = _api(httpd, "/api/unresolved")[1]
     assert next(r for r in unresolved["functions"] if r["function"] == "via_two")["inference"]["id"] == listing[0]["id"]  # 受信箱に、保存済みの推測を示す
     assert _api(httpd, "/api/inference?id=nope")[0] == 404
+
+
+def _by_name(index):
+    return {s.qualified_name: s for s in index.symbols.values()}
+
+
+def test_graph_overlays_are_off_by_default_and_kept_apart_from_static_edges(gui, monkeypatch) -> None:
+    httpd, _, db = gui
+    from datetime import datetime
+
+    from codeinsight.ai import provider as provider_module
+    from codeinsight.domain.observation import DynamicRun, Observation, ObservationKind, RunStatus
+
+    repo = AnalysisRepository(Path(db))
+    project = repo.list_projects()[0]
+    from codeinsight.application import NavigationService
+
+    index = NavigationService(repo).load_index(project)
+    ids = {n: s.symbol_id for n, s in _by_name(index).items()}
+    hashes = {f.relative_path: f.content_hash for f in index.files.values()}
+    run = DynamicRun("r1", project.project_id, datetime.now(UTC), ("x",), {}, {}, "c-gcov+c-instrument", "1", RunStatus.COMPLETED, source_hashes=hashes)
+    observations = [
+        Observation("o1", "r1", ObservationKind.CALL, symbol_id=ids["main"], target_symbol_id=ids["apply"], count=3),
+        Observation("o2", "r1", ObservationKind.CALL, symbol_id=ids["main"], target_symbol_id=ids["add"], count=2),  # 静的な確定済みの辺には無い
+    ]
+    repo.save_dynamic_run(run, observations)
+    repo.close()
+
+    plain = _api(httpd, "/api/graph?kind=call")[1]
+    assert "overlay" not in plain and not any(e.get("observed") for e in plain["edges"])  # 既定は重ねない
+    data = _api(httpd, "/api/graph?kind=call&overlay=observed")[1]
+    edges = {(e["source"], e["target"]): e for e in data["edges"]}
+    assert edges[(ids["main"], ids["apply"])]["observed"] == 3 and edges[(ids["main"], ids["apply"])]["style"] != "observed_only"
+    only = edges[(ids["main"], ids["add"])]
+    assert only["style"] == "observed_only" and "静的な確定済みの辺には無い" in only["note"]
+    assert data["overlay"]["observed"] is True and "呼ばれないことを意味しません" in " ".join(data["overlay"]["notes"])
+    assert _api(httpd, "/api/graph?kind=call")[1]["edges"] == plain["edges"]  # 重ねは、保存された解析結果を変えない
+
+    class Fake:
+        name, model = "fake", "fake-model"
+
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def complete(self, messages, *, temperature=0.1, max_tokens=None):
+            return provider_module.Completion("## 処理の詳細\n【推論】`op` は `add` か `sub`。[app.c:6-6]", "fake-model")
+
+    monkeypatch.setattr("codeinsight.ai.service.OpenAICompatibleProvider", Fake)
+    assert main(["infer", "via_two", "--db", db, "--ai-model", "m"]) == 0
+    ai = _api(httpd, "/api/graph?kind=call&overlay=ai")[1]
+    ai_edges = [e for e in ai["edges"] if e["style"] == "ai"]
+    assert {(e["source"], e["target"]) for e in ai_edges} == {(ids["via_two"], ids["add"])}  # sub はグラフに無い（辺の両端がグラフにある場合だけ重ねる）
+    assert all("確定ではありません" in e["note"] for e in ai_edges)
+    assert not any(e["style"] == "ai" for e in _api(httpd, "/api/graph?kind=call")[1]["edges"])
+
+
+def test_stale_observation_is_not_overlaid(gui) -> None:
+    httpd, root, db = gui
+    from datetime import datetime
+
+    from codeinsight.application import NavigationService
+    from codeinsight.domain.observation import DynamicRun, Observation, ObservationKind, RunStatus
+
+    repo = AnalysisRepository(Path(db))
+    project = repo.list_projects()[0]
+    index = NavigationService(repo).load_index(project)
+    ids = {n: s.symbol_id for n, s in _by_name(index).items()}
+    run = DynamicRun("r2", project.project_id, datetime.now(UTC), ("x",), {}, {}, "c-gcov", "1", RunStatus.COMPLETED, source_hashes={"app.c": "0" * 64})  # 実行後にソースが変わった
+    repo.save_dynamic_run(run, [Observation("o9", "r2", ObservationKind.CALL, symbol_id=ids["main"], target_symbol_id=ids["add"], count=1)])
+    repo.close()
+    data = _api(httpd, "/api/graph?kind=call&overlay=observed")[1]
+    assert not any(e["style"] == "observed_only" for e in data["edges"]) and "重ねられる観測がありません" in " ".join(data["overlay"]["notes"])
 
 
 def test_new_endpoints_require_the_token_and_only_accept_get(gui) -> None:

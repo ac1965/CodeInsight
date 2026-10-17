@@ -47,6 +47,9 @@ button:hover { background:var(--panel); }
 .edge.inferred { stroke-dasharray:6 4; }
 .edge.unresolved { stroke:var(--warn); stroke-dasharray:2 4; }
 .edge.external { stroke:var(--ext); stroke-dasharray:2 4; }
+.edge.observed { stroke:#16a34a; stroke-width:2.6; }
+.edge.observed_only { stroke:#16a34a; stroke-dasharray:1 3; stroke-width:2.2; }
+.edge.ai { stroke:#7c3aed; stroke-dasharray:1 5; stroke-width:2.2; }
 .edgeg.dim { opacity:0.12; }
 .edge-label { fill:var(--muted); font-size:10px; text-anchor:middle; pointer-events:none; }
 .node.root rect { fill:var(--hit); stroke:var(--warn); stroke-width:3; }
@@ -156,7 +159,10 @@ function renderGraph(data, hooks) {
   var legend = document.getElementById("legend");
   legend.textContent = "";
   document.getElementById("graph").textContent = "";
-  [["confirmed", "確定"], ["inferred", "推定"], ["unresolved", "未解決"], ["external", "外部"]].forEach(function (item) {
+  var legendItems = [["confirmed", "確定"], ["inferred", "推定"], ["unresolved", "未解決"], ["external", "外部"]];
+  if (data.overlay && data.overlay.observed) legendItems.push(["observed", "観測（この実行で確認）"], ["observed_only", "観測のみ（静的に無い）"]);
+  if (data.overlay && data.overlay.ai) legendItems.push(["ai", "AIの推測（確定ではない）"]);
+  legendItems.forEach(function (item) {
     var span = document.createElement("span");
     var svg = document.createElementNS(NS, "svg");
     var line = document.createElementNS(NS, "line");
@@ -303,7 +309,7 @@ function renderGraph(data, hooks) {
     rows.forEach(function (r) { row(dl, r[0], r[1]); });
     detail.appendChild(dl);
   }
-  var STYLE_LABEL = { confirmed: "確定", inferred: "推定", unresolved: "未解決", external: "外部" };
+  var STYLE_LABEL = { confirmed: "確定", inferred: "推定", unresolved: "未解決", external: "外部", observed_only: "観測のみ（静的な確定済みの辺に無い）", ai: "AIの推測（確定ではない。解析結果ではない）" };
 
   var edgeEls = [];
   edges.forEach(function (e) {
@@ -324,7 +330,7 @@ function renderGraph(data, hooks) {
     } else {
       path.setAttribute("d", "M" + x1 + "," + y1 + " C" + mid + "," + y1 + " " + mid + "," + y2 + " " + x2 + "," + y2);
     }
-    path.setAttribute("class", "edge " + e.style);
+    path.setAttribute("class", "edge " + e.style + (e.observed ? " observed" : ""));
     path.setAttribute("marker-end", "url(#arrow)");
     path.style.cursor = "pointer";
     var group = document.createElementNS(NS, "g");
@@ -336,6 +342,7 @@ function renderGraph(data, hooks) {
         ["呼び出し先/依存先", data.nodes[ids[e.target]].label],
         ["ラベル", e.label],
         ["回数", e.count],
+        ["観測された回数", e.observed || ""],
         ["根拠位置", e.evidence.join("\\n")],
         ["注記", e.note]
       ]);
