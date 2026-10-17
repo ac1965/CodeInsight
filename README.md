@@ -89,9 +89,11 @@ make image                                             # イメージを明示�
 `<対象>` は、解析したいリポジトリの絶対パスです（例: `/Users/me/Projects/music2score`）。対象は読み取り専用で割り当てられ、変更されません。出力先（`OUT`）は、対象の外にしてください。
 
 ```bash
-# 0. 準備（初回のみ。AIの推測を使う場合は、ホストで Ollama を起動してモデルを入れる）
+# 0. 準備（AIの推測を使う場合のみ、ホストで Ollama を起動してモデルを入れる。起動済み・取得済みなら何もしない）
 docker info >/dev/null && echo "Docker OK"
-ollama pull qwen3-coder:latest
+MODEL=qwen3-coder:latest
+curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 || { nohup ollama serve >/dev/null 2>&1 & sleep 3; }   # 起動していなければ、バックグラウンドで起動
+ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL" || ollama pull "$MODEL"                                    # 取得済みでなければ、pull
 
 # 1. 解析 → 資料一式（図・PDFを含む）
 make analyze TARGET=<対象>
@@ -99,7 +101,7 @@ make reading TARGET=<対象> OUT=$HOME/reading-out/<名前> SERVE=0
 
 # 2. ビューアー（操作モードが既定）。表示された http://127.0.0.1:8765/?token=… をブラウザで開く
 make serve TARGET=<対象> OUT=$HOME/reading-out/<名前>
-CODEINSIGHT_AI_MODEL=qwen3-coder:latest make serve TARGET=<対象>   # AIの推測も使う場合
+CODEINSIGHT_AI_MODEL=$MODEL make serve TARGET=<対象>                # AIの推測も使う場合
 make serve TARGET=<対象> ACTIONS=0                                 # 読み取り専用（「操作」タブが出ない）
 ```
 
