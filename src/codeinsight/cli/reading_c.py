@@ -12,7 +12,7 @@ from codeinsight.application.navigation_service import NavigationService
 from codeinsight.cli.common import CliError, emit_json, safe, warn_if_stale
 from codeinsight.domain import Language
 
-_HINT_LABELS = {"fallthrough": "case の落ち込み", "error-return": "エラー値の戻り"}
+_HINT_LABELS = {"fallthrough": "case の落ち込み", "error-return": "エラー値の戻り", "constant-condition": "定数の条件", "infinite-loop": "終わらないループの可能性"}
 _EXIT_LABELS = {
     "terminate": "プロセスを終了する呼び出し",
     "longjmp": "非局所ジャンプ（longjmp）",
@@ -95,6 +95,7 @@ def flow(args: argparse.Namespace, project, index, navigation: NavigationService
         emit_json({
             "symbol": symbol.qualified_name, "path": path, "language": index.files[symbol.file_id].language.value, "metrics": summary.metrics,
             "items": [vars(i) for i in summary.items], "hints": [vars(h) for h in summary.hints], "macros": macros,
+            "return_constants": list(service.return_values(project, index, symbol)[0]), "return_has_non_constant": service.return_values(project, index, symbol)[1],
         })
         return 0
     m = summary.metrics
@@ -113,6 +114,9 @@ def flow(args: argparse.Namespace, project, index, navigation: NavigationService
         print("注意して読む箇所の手がかり（構文からの推定）:")
         for hint in summary.hints:
             print(f"  L{hint.line:<5} {_HINT_LABELS.get(hint.kind, hint.kind)}: {safe(hint.detail)}")
+    values, unknown = service.return_values(project, index, symbol)
+    if values:
+        print("戻り値の定数（値を考慮した近似。マクロ・enum・定数式は評価）: " + ", ".join(str(v) for v in values) + ("、ほかに定数に決まらない値" if unknown else "（return はすべて定数）"))
     own = [m for m in macros if not m["system"]]
     if own:
         print("使っているマクロ（展開の内部は上の構造に含まれません。定義を示します）:")

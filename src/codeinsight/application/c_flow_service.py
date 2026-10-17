@@ -145,6 +145,10 @@ class CFlowService:
         return cf.analyze_control_flow(self.load(project, index, symbol))
 
     @_guarded
+    def return_values(self, project: Project, index: ProjectIndex, symbol: Symbol) -> tuple[list[int], bool]:
+        return cf.analyze_return_values(self.load(project, index, symbol))
+
+    @_guarded
     def macros(self, project: Project, index: ProjectIndex, symbol: Symbol) -> list[cf.CMacroUse]:
         return cf.macros_used(self.load(project, index, symbol))
 

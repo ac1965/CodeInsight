@@ -392,6 +392,70 @@ def _is_exit_call(name: str) -> str:
 # --- 制御フロー ---
 
 
+_EVAL_READY: list[bool] = []
+
+
+def _eval_int(cursor: ci.Cursor) -> int | None:
+    """式が、コンパイル時に決まる整数なら、その値（libclang の定数評価）。マクロ・enum・`sizeof`・定数式を含む。決まらなければ None。"""
+
+    import ctypes
+
+    try:
+        lib = ci.conf.lib
+        if not _EVAL_READY:
+            lib.clang_Cursor_Evaluate.argtypes = [ci.Cursor]
+            lib.clang_Cursor_Evaluate.restype = ctypes.c_void_p
+            lib.clang_EvalResult_getKind.argtypes = [ctypes.c_void_p]
+            lib.clang_EvalResult_getKind.restype = ctypes.c_int
+            lib.clang_EvalResult_getAsLongLong.argtypes = [ctypes.c_void_p]
+            lib.clang_EvalResult_getAsLongLong.restype = ctypes.c_longlong
+            lib.clang_EvalResult_dispose.argtypes = [ctypes.c_void_p]
+            lib.clang_EvalResult_dispose.restype = None
+            _EVAL_READY.append(True)
+        handle = lib.clang_Cursor_Evaluate(cursor)
+        if not handle:
+            return None
+        try:
+            return int(lib.clang_EvalResult_getAsLongLong(handle)) if lib.clang_EvalResult_getKind(handle) == 1 else None  # CXEval_Int
+        finally:
+            lib.clang_EvalResult_dispose(handle)
+    except Exception:  # noqa: BLE001 - 定数評価が使えない libclang では、定数として扱わない（確認できなかっただけ）
+        return None
+
+
+def _can_leave(body: ci.Cursor) -> bool:
+    """ループの本体から抜ける手段（break・return・goto・exit 系の呼び出し・throw）があるか。"""
+
+    for node in body.walk_preorder():
+        if node.kind in (CK.BREAK_STMT, CK.RETURN_STMT, CK.GOTO_STMT, CK.CXX_THROW_EXPR):
+            return True
+        if node.kind == CK.CALL_EXPR and _is_exit_call(call_name(node)) in ("terminate", "longjmp"):
+            return True
+    return False
+
+
+def analyze_return_values(function: CFunction) -> tuple[list[int], bool]:
+    """関数の `return` の値のうち、定数に決まるものの一覧と、定数に決まらない `return` があるか（値を考慮した近似）。
+
+    マクロ・enum・定数式は評価する。`return;`（値なし）は数えない。条件・呼び出しの結果などで決まる値は「決まらない」。
+    """
+
+    values: set[int] = set()
+    unknown = False
+    for node in function.cursor.walk_preorder():
+        if node.kind != CK.RETURN_STMT:
+            continue
+        parts = _children(node)
+        if not parts:
+            continue
+        value = _eval_int(parts[0])
+        if value is None:
+            unknown = True
+        else:
+            values.add(value)
+    return sorted(values), unknown
+
+
 def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
     summary = fa.ControlFlowSummary()
     counts: dict[str, int] = {}
@@ -439,6 +503,13 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
         condition, then = parts[0], parts[1]
         decisions += 1
         add("elif" if elif_ else "if", cursor, depth, text(function, condition))
+        constant = _eval_int(condition)
+        if constant is not None:
+            where = cursor.extent.start.line
+            if constant:
+                summary.hints.append(fa.Hint("constant-condition", where, f"if ({text(function, condition, 50)}) は常に真（定数 {constant}）。else 側は実行されない"))
+            else:
+                summary.hints.append(fa.Hint("constant-condition", where, f"if ({text(function, condition, 50)}) は常に偽（定数 0）。本体は実行されない"))
         expressions(condition, depth + 1)
         visit(then, depth + 1)
         if len(parts) > 2:
@@ -489,6 +560,12 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
             body_cursor = parts[-1] if parts else cursor
             decisions += 1
             add("while" if kind == CK.WHILE_STMT else "for", cursor, depth, header_text(cursor, body_cursor))
+            if kind == CK.WHILE_STMT and parts:
+                constant = _eval_int(parts[0])
+                if constant == 0:
+                    summary.hints.append(fa.Hint("constant-condition", cursor.extent.start.line, f"while ({text(function, parts[0], 50)}) は常に偽。本体は実行されない"))
+                elif constant is not None and not _can_leave(body_cursor):
+                    summary.hints.append(fa.Hint("infinite-loop", cursor.extent.start.line, f"while ({text(function, parts[0], 50)}) は常に真で、本体に break・return・goto・exit 系・throw が無い（終わらない可能性）"))
             for part in parts[:-1]:
                 expressions(part, depth + 1)
             visit(body_cursor, depth + 1)
