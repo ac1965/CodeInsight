@@ -124,6 +124,10 @@ class CFlowService:
         return cf.analyze_control_flow(self.load(project, index, symbol))
 
     @_guarded
+    def macros(self, project: Project, index: ProjectIndex, symbol: Symbol) -> list[cf.CMacroUse]:
+        return cf.macros_used(self.load(project, index, symbol))
+
+    @_guarded
     def variables(self, project: Project, index: ProjectIndex, symbol: Symbol) -> dict[str, cf.CVariable]:
         return cf.analyze_variables(self.load(project, index, symbol))
 

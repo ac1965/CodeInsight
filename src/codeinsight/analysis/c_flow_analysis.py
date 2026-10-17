@@ -106,6 +106,64 @@ def find_function(translation_unit: ci.TranslationUnit, target_path: str, name: 
     return None
 
 
+@dataclass(frozen=True)
+class CMacroUse:
+    name: str
+    line: int  # 最初の使用の行
+    count: int
+    definition_path: str  # マクロの定義のあるファイル（絶対パス。取れなければ空）
+    definition_line: int
+    body: str  # 定義のソース上の文字（引数リスト・本体。長ければ切り詰める）
+    system: bool  # システムヘッダーで定義されたマクロ（標準ライブラリなど）
+
+
+def macros_used(function: CFunction) -> list[CMacroUse]:
+    """関数の中で使われているマクロ（呼び出し・展開される識別子）と、その定義。
+
+    展開の内部（マクロが生む `if`・呼び出し・代入）は、展開後のASTに基づく位置で記録されるため、定義側の位置と対応しない。
+    このため、**マクロの定義のソースを示して、展開の内容を読めるようにする**（展開結果そのものは作らない）。
+    """
+
+    tu = function.cursor.translation_unit
+    file = function.cursor.location.file
+    if file is None:
+        return []
+    target = _resolved(file.name)
+    start, end = function.cursor.extent.start.line, function.cursor.extent.end.line
+    found: dict[str, CMacroUse] = {}
+    for node in tu.cursor.get_children():
+        try:
+            if node.kind != CK.MACRO_INSTANTIATION:
+                continue
+        except ValueError:
+            continue
+        location = node.location
+        if location.file is None or _resolved(location.file.name) != target or not start <= location.line <= end:
+            continue
+        definition = node.referenced
+        path, line, body, system = "", 0, "", False
+        if definition is not None:
+            if definition.location.file is not None:
+                path, line = _resolved(definition.location.file.name), definition.location.line
+            try:
+                system = bool(definition.location.is_in_system_header)
+            except (AttributeError, ValueError):
+                system = False
+            tokens = list(definition.get_tokens())[1:]  # 先頭は名前
+            pieces: list[str] = []
+            previous_end = None
+            for token in tokens:  # ソース上の空白の有無を保って、つなぐ
+                if previous_end is not None and token.extent.start.offset > previous_end:
+                    pieces.append(" ")
+                pieces.append(token.spelling)
+                previous_end = token.extent.end.offset
+            body = "".join(pieces).strip()
+            body = body if len(body) <= 120 else body[:119] + "…"
+        previous = found.get(node.spelling)
+        found[node.spelling] = CMacroUse(node.spelling, previous.line if previous else location.line, (previous.count if previous else 0) + 1, path, line, body, system)
+    return sorted(found.values(), key=lambda m: (m.system, m.line, m.name))
+
+
 def text(function: CFunction, cursor: ci.Cursor, limit: int = 80) -> str:
     """カーソルの範囲のソースを、空白をまとめた1行で返す。"""
 

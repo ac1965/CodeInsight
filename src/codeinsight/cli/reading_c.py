@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.flow_service import FlowAnalysisError
@@ -23,6 +24,22 @@ _EXIT_LABELS = {
 _SCOPE_LABELS = {"param": "引数", "local": "ローカル変数", "global": "グローバル変数", "static": "静的変数"}
 
 
+def _macro_rows(service: CFlowService, project, index, symbol) -> list[dict]:
+    try:
+        uses = service.macros(project, index, symbol)
+    except FlowAnalysisError:
+        return []
+    root = project.root_path.resolve()
+    rows = []
+    for use in uses:
+        try:
+            shown = f"{Path(use.definition_path).resolve().relative_to(root).as_posix()}:{use.definition_line}" if use.definition_path else "（不明）"
+        except ValueError:
+            shown = f"{use.definition_path}:{use.definition_line}"
+        rows.append({"name": use.name, "line": use.line, "count": use.count, "definition": shown, "body": use.body, "system": use.system})
+    return rows
+
+
 def flow(args: argparse.Namespace, project, index, navigation: NavigationService, symbol, stale) -> int:
     service = CFlowService(navigation)
     try:
@@ -30,10 +47,11 @@ def flow(args: argparse.Namespace, project, index, navigation: NavigationService
     except FlowAnalysisError as exc:
         raise CliError(str(exc)) from exc
     path = index.path_of(symbol.file_id)
+    macros = _macro_rows(service, project, index, symbol)
     if args.format == "json":
         emit_json({
-            "symbol": symbol.qualified_name, "path": path, "language": "c", "metrics": summary.metrics,
-            "items": [vars(i) for i in summary.items], "hints": [vars(h) for h in summary.hints],
+            "symbol": symbol.qualified_name, "path": path, "language": index.files[symbol.file_id].language.value, "metrics": summary.metrics,
+            "items": [vars(i) for i in summary.items], "hints": [vars(h) for h in summary.hints], "macros": macros,
         })
         return 0
     m = summary.metrics
@@ -52,8 +70,15 @@ def flow(args: argparse.Namespace, project, index, navigation: NavigationService
         print("注意して読む箇所の手がかり（構文からの推定）:")
         for hint in summary.hints:
             print(f"  L{hint.line:<5} {_HINT_LABELS.get(hint.kind, hint.kind)}: {safe(hint.detail)}")
+    own = [m for m in macros if not m["system"]]
+    if own:
+        print("使っているマクロ（展開の内部は上の構造に含まれません。定義を示します）:")
+        for m in own[:15]:
+            print(f"  L{m['line']:<5} {safe(m['name'])} ×{m['count']}  定義 {safe(m['definition'])}  → {safe(m['body']) or '（本体なし）'}")
+    if any(m["system"] for m in macros):
+        print("  システムヘッダーのマクロ: " + ", ".join(safe(m["name"]) for m in macros if m["system"])[:200])
     warn_if_stale(stale)
-    print("※ 構文から確認できた構造です。実行時にどの経路を通るかは示しません。マクロ展開の内部と、条件付きコンパイルで除外された箇所は含みません。", file=sys.stderr)
+    print("※ 構文から確認できた構造です。実行時にどの経路を通るかは示しません。マクロ展開の内部（定義は上に示した）と、条件付きコンパイルで除外された箇所は含みません。", file=sys.stderr)
     return 0
 
 
