@@ -156,6 +156,8 @@ uv run codeinsight effects <関数>       # 副作用の候補(直接と、呼�
 ```bash
 uv run codeinsight import-sarif results.sarif                   # SARIFの指摘（ツール名・版・取り込み時のハッシュつき。ソースが変われば「古い」）
 uv run codeinsight import-scip index.scip                       # SCIPの索引
+uv run codeinsight import-r2 funcs.json --callgraph callgraph.json     # radare2 の出力（バイナリの関数・呼び出し。radare2 は利用者が実行）
+uv run codeinsight compare-r2                                   # ソースの解析結果との比較（バイナリのみ・ソースのみ・解決候補）
 uv run codeinsight compare-scip                                 # 自身の参照解決との比較（食い違いは並べて示し、どちらも黙って採用しない）
 uv run codeinsight dynamic-plan -- main.py                      # 実行しない計画（許可・隔離・収集器の確認）
 uv run codeinsight dynamic-run --allow-run -- main.py           # Pythonをコンテナで実行して観測（取得済みのイメージが必要。--image）

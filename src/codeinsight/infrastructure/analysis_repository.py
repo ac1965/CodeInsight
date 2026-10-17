@@ -39,6 +39,7 @@ from codeinsight.infrastructure.schema import (
     V7_TABLES,
     V8_TABLES,
     V9_COLUMNS,
+    V10_TABLES,
 )
 
 _PROJECT_COLUMNS = (
@@ -126,6 +127,7 @@ class AnalysisRepository:
         connection.executescript(V6_TABLES)
         connection.executescript(V7_TABLES)
         connection.executescript(V8_TABLES)
+        connection.executescript(V10_TABLES)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
 
@@ -200,6 +202,7 @@ class AnalysisRepository:
         self._connection.execute("DELETE FROM explanations WHERE project_id = ?", (project_id,))
         self._connection.execute("DELETE FROM external_findings WHERE project_id = ?", (project_id,))
         self.delete_external_indexes(project_id, commit=False)
+        self.delete_external_binaries(project_id, commit=False)
         self.delete_dynamic_runs(project_id)
         self._connection.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
         self._commit()
@@ -640,6 +643,63 @@ class AnalysisRepository:
         for index_id in ids:
             for table in ("external_index_occurrences", "external_index_symbols", "external_index_files", "external_indexes"):
                 self._connection.execute(f"DELETE FROM {table} WHERE index_id = ?", (index_id,))
+        if commit:
+            self._commit()
+        return len(ids)
+
+    # --- 外部ツール radare2 の結果（バイナリの関数・呼び出し。解析結果とは別に管理する） ---
+
+    def replace_external_binary(
+        self, project_id: str, meta: dict, files: dict[str, str], functions: Iterable[tuple], calls: Iterable[tuple[str, str]]
+    ) -> None:
+        """同じ入力（内容のハッシュが同じ）、または同じ名前で作り直した取り込み済みデータを、置き換える。"""
+
+        self.delete_external_binaries(project_id, source_sha256=meta["source_sha256"], commit=False)
+        self.delete_external_binaries(project_id, tool=meta["tool"], source_name=meta["source_name"], commit=False)
+        binary_id = meta["binary_id"]
+        self._connection.execute(
+            "INSERT INTO external_binaries (binary_id, project_id, tool, tool_version, source_name, source_sha256, imported_at, binary_path, "
+            "binary_sha256, arch, os, stripped, functions, calls) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (binary_id, project_id, meta["tool"], meta["tool_version"], meta["source_name"], meta["source_sha256"], meta["imported_at"],
+             meta["binary_path"], meta["binary_sha256"], meta["arch"], meta["os"], meta["stripped"], meta["functions"], meta["calls"]),
+        )
+        self._connection.executemany("INSERT INTO external_binary_files (binary_id, path, content_hash) VALUES (?, ?, ?)", [(binary_id, p, h) for p, h in files.items()])
+        self._connection.executemany(
+            "INSERT INTO external_binary_functions (binary_id, name, addr, size, file, signature, nbbs, indegree, outdegree) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ((binary_id, *row) for row in functions),
+        )
+        self._connection.executemany("INSERT INTO external_binary_calls (binary_id, caller, callee) VALUES (?, ?, ?)", ((binary_id, a, b) for a, b in calls))
+        self._commit()
+
+    def list_external_binaries(self, project_id: str) -> list[sqlite3.Row]:
+        return self._connection.execute("SELECT * FROM external_binaries WHERE project_id = ? ORDER BY imported_at", (project_id,)).fetchall()
+
+    def external_binary_files(self, binary_id: str) -> dict[str, str]:
+        return {row["path"]: row["content_hash"] for row in self._connection.execute("SELECT path, content_hash FROM external_binary_files WHERE binary_id = ?", (binary_id,))}
+
+    def external_binary_functions(self, binary_id: str) -> list[sqlite3.Row]:
+        return self._connection.execute(
+            "SELECT name, addr, size, file, signature, nbbs, indegree, outdegree FROM external_binary_functions WHERE binary_id = ?", (binary_id,)
+        ).fetchall()
+
+    def external_binary_calls(self, binary_id: str) -> list[tuple[str, str]]:
+        return [(row["caller"], row["callee"]) for row in self._connection.execute("SELECT caller, callee FROM external_binary_calls WHERE binary_id = ?", (binary_id,))]
+
+    def delete_external_binaries(self, project_id: str, tool: str | None = None, source_sha256: str | None = None, source_name: str | None = None, commit: bool = True) -> int:
+        query, params = "SELECT binary_id FROM external_binaries WHERE project_id = ?", [project_id]
+        if tool is not None:
+            query += " AND tool = ?"
+            params.append(tool)
+        if source_sha256 is not None:
+            query += " AND source_sha256 = ?"
+            params.append(source_sha256)
+        if source_name is not None:
+            query += " AND source_name = ?"
+            params.append(source_name)
+        ids = [row["binary_id"] for row in self._connection.execute(query, params)]
+        for binary_id in ids:
+            for table in ("external_binary_calls", "external_binary_functions", "external_binary_files", "external_binaries"):
+                self._connection.execute(f"DELETE FROM {table} WHERE binary_id = ?", (binary_id,))
         if commit:
             self._commit()
         return len(ids)

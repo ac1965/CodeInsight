@@ -12,6 +12,7 @@ from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.external_service import CATEGORY_LABELS
 from codeinsight.application.graph_builder import Traversal
 from codeinsight.application.risk_service import RULES as RISK_RULES
+from codeinsight.cli.binary_commands import cmd_compare_r2, cmd_import_r2
 from codeinsight.cli.common import OPENED, CliError
 from codeinsight.cli.explore import (
     cmd_analyze,
@@ -188,6 +189,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare_scip = add("compare-scip", "取り込んだSCIPの索引と、CodeInsight自身の参照解決を比較する（一致・食い違い・自身が解決できないもの）", cmd_compare_scip)
     compare_scip.add_argument("--limit", type=int, default=15, help="種類ごとの表示件数")
+
+    import_r2 = add("import-r2", "外部ツール radare2 が出力したJSON（aflj・agCj・ij）を読み込み、別の区分で保存する（radare2 は実行しない）", cmd_import_r2, exclude=False)
+    import_r2.add_argument("file", nargs="?", help="関数の一覧（`r2 -q -c 'aaa; aflj' <バイナリ>` の出力。--clear の場合は不要）")
+    import_r2.add_argument("--callgraph", help="呼び出しグラフ（`agCj` の出力）")
+    import_r2.add_argument("--info", help="バイナリの情報（`ij` の出力）")
+    import_r2.add_argument("--binary", help="解析したバイナリのパス（内容のハッシュを記録し、取り込み後の変更を判定する）")
+    import_r2.add_argument("--tool-version", help="radare2 の版（`r2 -v`）。結果に併記する")
+    import_r2.add_argument("--clear", action="store_true", help="取り込み済みの radare2 の結果を削除する")
+
+    compare_r2 = add("compare-r2", "取り込んだ radare2 の結果（バイナリの関数・呼び出し）と、CodeInsight自身の解析結果を比較する（一致・バイナリのみ・ソースのみ）", cmd_compare_r2)
+    compare_r2.add_argument("--limit", type=int, default=15, help="種類ごとの表示件数")
 
     extract = add("extract", "呼び出しグラフの範囲（呼び出し先・呼び出し元を深さまで）の関数のソースを、根拠位置・解決状態つきで切り出す（コードリーディング用）", cmd_extract, ("markdown", "text", "json"), exclude=False)
     extract.add_argument("name", help="起点の関数・メソッドの名前または修飾名")

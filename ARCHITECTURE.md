@@ -125,7 +125,7 @@ src/codeinsight/
     ├── project.py         プロジェクト全体の洞察（externals / effects / architecture / config / boundaries / environment / docs-check / history / tests / impact / unused）
     ├── reading.py         関数の読解（flow / dataflow / state / exceptions / risks / understand）
     ├── reading_c.py       Cの関数の読解コマンド（flow / dataflow / exceptions / state）の表示
-    ├── index_commands.py  外部ツールの取り込みと、ビューアー・MCPの起動（import-sarif / import-scip / compare-scip / extract / serve / mcp）
+    ├── index_commands.py  外部ツールの取り込みと、ビューアー・MCPの起動（import-sarif / import-scip / compare-scip / import-r2 / compare-r2 / extract / serve / mcp）
     ├── reading_el.py      Emacs Lispの関数の読解コマンド（flow / exceptions / state）の表示
     ├── report.py          reading-report（成果物を1ファイルのPDF/HTMLにまとめる）
     ├── dynamic_commands.py 動的解析のコマンド（dynamic-plan / dynamic-run / dynamic-runs / observed）
@@ -196,6 +196,8 @@ cli ──> ai ──────────> application
 
 AIの説明文は、解析結果とは別に管理する方針（AGENTS.md §1.2-2）であり、専用の `explanations` テーブルに保存する。解析結果のテーブル（シンボル・参照・依存関係）には書き込まず、再解析でも解説は消えない（根拠にしたファイルが変わると「古い解説」と示す）。
 
+* v10: `external_binaries` / `external_binary_files` / `external_binary_functions` / `external_binary_calls`（`import-r2` で取り込んだ radare2 の結果。解析結果とは別）。
+* v9: `references_.slot_key`（Cの関数ポインタの置き場）、`symbols.is_generator`（Pythonのジェネレータ）。
 * v8: `dynamic_runs` / `dynamic_observations`（`dynamic-run` の実行の記録と観測。許可の内容・収集器・実行時のファイルのハッシュを持つ。静的解析の事実とは別。観測されなかったことは、存在しないことを意味しない）。
 * v7: `external_indexes` / `external_index_files` / `external_index_occurrences` / `external_index_symbols`（`import-scip` で取り込んだSCIPの索引）。
 * v6: `external_findings`（`import-sarif` で取り込んだ外部ツールの指摘。再解析でも消えず、ファイルが変わると「古い」と示す）。

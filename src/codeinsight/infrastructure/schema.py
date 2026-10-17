@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # スキーマのバージョン。変更時は analysis_repository.py の _MIGRATIONS に移行処理を追加する。
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Phase1（バージョン未設定=0）と共通のテーブル。
 BASE_SCHEMA = """
@@ -229,4 +229,50 @@ CREATE TABLE IF NOT EXISTS dynamic_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_dynamic_obs_run ON dynamic_observations(run_id, kind);
 CREATE INDEX IF NOT EXISTS idx_dynamic_obs_symbol ON dynamic_observations(symbol_id);
+"""
+
+
+# v10: 外部ツール radare2 の結果（バイナリの関数・呼び出し）。解析結果（事実）とは別のテーブルに保存する。
+# 関数の名前・シグネチャは、バイナリ由来の信頼できない文字列（データとして扱う）。
+V10_TABLES = """
+CREATE TABLE IF NOT EXISTS external_binaries (
+    binary_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(project_id),
+    tool TEXT NOT NULL,
+    tool_version TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    binary_path TEXT NOT NULL,
+    binary_sha256 TEXT NOT NULL,
+    arch TEXT NOT NULL,
+    os TEXT NOT NULL,
+    stripped INTEGER,
+    functions INTEGER NOT NULL,
+    calls INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS external_binary_files (
+    binary_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY (binary_id, path)
+);
+CREATE TABLE IF NOT EXISTS external_binary_functions (
+    binary_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    addr INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    file TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    nbbs INTEGER NOT NULL,
+    indegree INTEGER NOT NULL,
+    outdegree INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_binary_functions ON external_binary_functions(binary_id, name);
+CREATE TABLE IF NOT EXISTS external_binary_calls (
+    binary_id TEXT NOT NULL,
+    caller TEXT NOT NULL,
+    callee TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_binary_calls ON external_binary_calls(binary_id, caller);
 """
