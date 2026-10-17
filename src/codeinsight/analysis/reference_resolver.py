@@ -174,27 +174,49 @@ class ReferenceResolver:
         根拠は「プロジェクトの中で、その置き場に関数のアドレスが代入・初期化されている」ことだけ。実行時にどれが入っているか
         （再代入・プロジェクト外のコードによる代入・ポインタのコピー）は分からないため、候補が1つでも**確定にはしない（推定）**。
         候補が複数なら曖昧（どれか1つを選ばない）、代入が見つからなければ未解決のまま。
-        関数名でない値（変数・戻り値・引数の転送など）も代入されている置き場は、見つかった関数だけが候補とは言えないため、1つに絞らず曖昧にする。"""
+        関数名でない値（変数・戻り値など）も代入されている置き場は、見つかった関数だけが候補とは言えないため、1つに絞らず曖昧にする。
+        別の置き場の値をそのまま渡す「転送」（`apply(g, x)` の `g`、`op = h`）は、転送元の置き場の候補を引き継ぐ（推移的。循環は1回で止める）。"""
 
         bindings: dict[str, dict[str, Symbol]] = defaultdict(dict)
         unknown_sources: set[str] = set()  # 関数名でない値が代入・渡されている置き場
+        links: dict[str, set[str]] = defaultdict(set)  # 置き場 → 値を転送してくる置き場
         for reference in references:
             if not reference.slot_key or reference.reference_kind not in (ReferenceKind.FUNCTION_REF, ReferenceKind.SLOT_SOURCE):
                 continue
             if reference.reference_kind == ReferenceKind.SLOT_SOURCE:
-                unknown_sources.add(reference.slot_key)
+                key = reference.target_key or ""
+                if key.startswith("slot:"):
+                    links[reference.slot_key].add(key[len("slot:"):])
+                else:
+                    unknown_sources.add(reference.slot_key)
             elif reference.resolution_status == ResolutionStatus.RESOLVED and reference.target_symbol_id:
                 target = self._symbols_by_id.get(reference.target_symbol_id)
                 if target is not None and target.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD):
                     bindings[reference.slot_key][target.symbol_id] = target
+        def reachable(slot: str) -> set[str]:
+            """転送をたどって、値を受け取りうる置き場（自分を含む。循環に注意）。"""
+
+            found = {slot}
+            stack = [slot]
+            while stack:
+                for upstream in links.get(stack.pop(), ()):
+                    if upstream not in found:
+                        found.add(upstream)
+                        stack.append(upstream)
+            return found
+
         for reference in references:
             if not (reference.slot_key and reference.reference_kind == ReferenceKind.CALL and reference.target_key is None):
                 continue
+            slots = reachable(reference.slot_key)
+            merged: dict[str, Symbol] = {}
+            for member in slots:
+                merged.update(bindings.get(member, {}))
             base = reference.note.split(_CANDIDATES_MARK)[0]
             where = _SLOT_PHRASES[next((k for k in _SLOT_PHRASES if reference.slot_key.startswith(k)), "")]
-            candidates = sorted(bindings.get(reference.slot_key, {}).values(), key=lambda s: (s.qualified_name, s.symbol_id))
+            candidates = sorted(merged.values(), key=lambda s: (s.qualified_name, s.symbol_id))
             reference.target_symbol_id = None
-            unknown = reference.slot_key in unknown_sources
+            unknown = bool(slots & unknown_sources)
             if not candidates and unknown:
                 self._set(reference, ResolutionStatus.UNRESOLVED, f"{base}{_CANDIDATES_MARK}代入・渡されているのは、関数名でない値（変数・戻り値・引数の転送など）だけ］")
             elif not candidates:

@@ -133,13 +133,52 @@ def test_local_with_several_assignments_is_ambiguous(local_calls) -> None:
 def test_parameter_function_pointer_is_resolved_from_callers(local_calls) -> None:
     of, _ = local_calls
     applied = of("apply", "f")
-    assert applied.resolution_status == ResolutionStatus.AMBIGUOUS  # 呼び出し元が渡す: mul・add・strcmp_like（転送された g は追わない）
-    for name in ("mul", "add", "strcmp_like"):
-        assert name in applied.note
-    assert "この引数に、呼び出し元が渡している関数" in applied.note and "sub" not in applied.note.split("［候補")[1]  # forward 経由で渡る sub は、転送なので追えない
+    assert applied.resolution_status == ResolutionStatus.AMBIGUOUS  # 呼び出し元が渡す: mul・add・strcmp_like と、forward が転送する g（forward の呼び出し元が渡す sub）
+    for name in ("mul", "add", "strcmp_like", "sub"):
+        assert name in applied.note.split("［候補")[1]
+    assert "この引数に、呼び出し元が渡している関数" in applied.note and "ほかに" not in applied.note  # 転送は、転送元の候補を引き継ぐ（関数名でない値ではない）
 
 
-def test_forwarded_and_unknown_sources_stay_unresolved(local_calls) -> None:
+def test_local_copy_of_a_parameter_follows_the_forwarding(local_calls) -> None:
     of, _ = local_calls
     unknown = of("unknown_local", "op")
-    assert unknown.resolution_status == ResolutionStatus.UNRESOLVED  # 引数 h からのコピー: 転送は追わない
+    assert unknown.resolution_status == ResolutionStatus.UNRESOLVED  # `op = h`（h は引数）。unknown_local は、プロジェクトの中で呼ばれないため、h に渡される関数が無い
+
+
+FORWARD_SOURCE = """\
+static int a(void) { return 1; }
+static int b(void) { return 2; }
+static int c(void) { return 3; }
+int run(int (*f)(void)) { return f(); }
+int mid(int (*g)(void)) { return run(g); }
+int top(int (*h)(void)) { return mid(h); }
+int loop_a(int (*p)(void), int n);
+int loop_b(int (*q)(void), int n) { return n ? loop_a(q, n - 1) : q(); }
+int loop_a(int (*p)(void), int n) { return loop_b(p, n); }
+int unknown_arg(int (*get(void))(void)) { return run(get()); }
+int main(void) { return top(a) + mid(b) + loop_a(c, 2); }
+"""
+
+
+def test_forwarding_is_followed_transitively_and_cycles_terminate(tmp_path: Path) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "fw.c").write_text(FORWARD_SOURCE, encoding="utf-8")
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(root), "--db", db]) == 0
+    repository = AnalysisRepository(Path(db))
+    project = repository.list_projects()[0]
+    index = NavigationService(repository).load_index(project)
+    by_name = {s.qualified_name: s for s in index.symbols.values()}
+
+    def call(function: str, target: str):
+        (found,) = [r for r in index.references if r.source_symbol_id == by_name[function].symbol_id and r.reference_kind == ReferenceKind.CALL and r.target_name == target]
+        return found
+
+    run = call("run", "f")  # run ← mid(g) ← top(h) ← main の a、mid ← main の b、unknown_arg が関数の戻り値を渡す
+    assert run.resolution_status == ResolutionStatus.AMBIGUOUS
+    note = run.note.split("［候補")[1]
+    assert all(name in note for name in ("a", "b")) and "ほかに" in note  # 2段の転送も引き継ぐ。戻り値（get()）が渡されるので、全部は列挙できない
+    cycle = call("loop_b", "q")  # loop_a ⇄ loop_b の循環を、止まって解決する（main が loop_a に c を渡す）
+    assert cycle.resolution_status == ResolutionStatus.RESOLVED and index.symbols[cycle.target_symbol_id].name == "c"
+    repository.close()

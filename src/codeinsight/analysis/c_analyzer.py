@@ -252,23 +252,38 @@ def _is_null(node: cindex.Cursor) -> bool:
     return False
 
 
-def _classify_value(expression: cindex.Cursor) -> tuple[list[cindex.Cursor], bool]:
-    """関数ポインタへ代入される式の、(関数の名前の参照の一覧, 関数名でない値（変数・戻り値・引数の転送など）を含むか)。
-    `c ? f : g` は枝ごとに分け、NULL は無視する。"""
+def _is_function_pointer_type(node: cindex.Cursor) -> bool:
+    canonical = node.type.get_canonical()
+    return canonical.kind == cindex.TypeKind.POINTER and canonical.get_pointee().kind in (cindex.TypeKind.FUNCTIONPROTO, cindex.TypeKind.FUNCTIONNOPROTO)
+
+
+def _classify_value(expression: cindex.Cursor) -> tuple[list[cindex.Cursor], bool, list[str]]:
+    """関数ポインタへ代入される式の、(関数の名前の参照の一覧, 追えない値（戻り値・配列の要素など）を含むか, 転送元の置き場)。
+
+    `c ? f : g` は枝ごとに分け、NULL は無視する。別の関数ポインタの置き場（引数・変数・フィールド）の値をそのまま渡す場合は、
+    「転送」として置き場を返す（解決器が、その置き場の候補を引き継ぐ）。"""
 
     node = _strip_wrappers(expression)
     if node.kind == cindex.CursorKind.CONDITIONAL_OPERATOR:
         refs: list[cindex.Cursor] = []
         unknown = False
+        links: list[str] = []
         for branch in list(node.get_children())[1:]:
-            branch_refs, branch_unknown = _classify_value(branch)
+            branch_refs, branch_unknown, branch_links = _classify_value(branch)
             refs += branch_refs
             unknown = unknown or branch_unknown
-        return refs, unknown
+            links += branch_links
+        return refs, unknown, links
     refs = _function_refs_in(node)
     if refs:
-        return refs, False
-    return [], not _is_null(node)
+        return refs, False, []
+    if _is_null(node):
+        return [], False, []
+    if node.kind in (cindex.CursorKind.DECL_REF_EXPR, cindex.CursorKind.MEMBER_REF_EXPR) and _is_function_pointer_type(node):
+        slot = _slot_of(node)
+        if slot:
+            return [], False, [slot]
+    return [], True, []
 
 
 def _field_usrs_in_order(init_list: cindex.Cursor) -> list[str]:
@@ -570,9 +585,16 @@ class CAnalyzer:
         def hint_slot(slot: str | None, value: cindex.Cursor) -> None:
             if not slot:
                 return
-            refs, unknown = _classify_value(value)
+            refs, unknown, links = _classify_value(value)
             for function_ref in refs:
                 slot_hints[(function_ref.extent.start.line, function_ref.extent.start.column)] = slot
+            if current_source[0] is not None:
+                for source_slot in links:
+                    if source_slot != slot:  # 自分自身への代入は、転送ではない
+                        add_reference(
+                            ReferenceKind.SLOT_SOURCE, value, current_source[0], "<転送>", f"slot:{source_slot}", ResolutionStatus.UNRESOLVED,
+                            "別の関数ポインタの置き場の値が渡されている（転送）", slot,
+                        )
             if unknown and current_source[0] is not None:
                 # 関数名でない値が代入されている（変数・戻り値・引数の転送）。置き場の全部の候補は列挙できないため、目印の参照を残す
                 add_reference(
