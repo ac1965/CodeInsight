@@ -103,7 +103,7 @@ pip版の libclang は、コンパイラが暗黙に行うシステムヘッダ�
 
 **新しい構文を解析したいとき（`CODEINSIGHT_LIBCLANG`）**: PyPI の `libclang` は 18.1.1 が最新で、C23 以降の構文（`__builtin_c23_va_start`、`constexpr` など）で失敗することがあります。計算機に新しい LLVM / Xcode があれば、環境変数 `CODEINSIGHT_LIBCLANG` にその共有ライブラリのパス（例: `/Library/Developer/CommandLineTools/usr/lib/libclang.dylib`、Homebrew の `llvm/lib/libclang.dylib`、Linux の `/usr/lib/llvm-N/lib/libclang.so`）を指定すると、同じ Python バインディングのまま使えます。**自動では選びません**（版で結果が変わるため）。指定が無効なときは、警告して同梱のものに戻します。指定を変えると、変更のないファイルも再解析されます。**新しいほど良いとは限りません**: emacs での実測では、C23/C2y の構文は解析できる一方、新しい clang は GCC 向けのコードに厳しく、解析に失敗した C ファイルは、同梱の 389 件に対し 428 件に増えました（同じ条件での比較。TESTING.md）。自分の対象で、両方を試して選んでください。
 
-規格（`-std=`）を指定できない場合（`compile_commands.json` が無い・コマンドに規格が無い）は、既定の C11 で解析し、**構文エラーになったファイルだけ C23 で解析し直します**（成功したら、警告に「C23 として解析しました（推定）」と残します。C23 でも失敗すれば、元のエラーを残します）。
+規格（`-std=`）を指定できない場合（`compile_commands.json` が無い・コマンドに規格が無い）は、既定の gnu11 で解析し、**構文エラーになったファイルだけ gnu23 で解析し直します**（成功したら、警告に「C23 として解析しました（推定）」と残します。C23 でも失敗すれば、元のエラーを残します）。
 
 ---
 

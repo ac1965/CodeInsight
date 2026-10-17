@@ -23,8 +23,8 @@ from codeinsight.domain import (
     SymbolKind,
 )
 
-_DEFAULT_ARGS = ["-std=c11"]
-_C23_ARG = "-std=c23"
+_DEFAULT_ARGS = ["-std=gnu11"]  # GNU 拡張を許す（`-std=c11` の厳密モードでは、glibc が setenv・getopt などの POSIX 関数を宣言せず、実際のCのコードが解析に失敗する）
+_C23_ARG = "-std=gnu23"
 _MISSING_HEADER_HINT = (
     "ヘッダーが見つからないため解析できません。ビルドで生成されるヘッダー（config.h など）が無いか、このホストに無いシステムヘッダーの可能性があります。"
     "対象の configure とビルドを（別の場所で）実行し、compile_commands.json を渡すと解決することがあります（自動では実行しません）。"
