@@ -144,3 +144,14 @@ def test_new_endpoints_require_the_token_and_only_accept_get(gui) -> None:
     for path in ("/api/card?symbol=main", "/api/marks?path=app.c", "/api/unresolved", "/api/status", "/api/config", "/api/boundaries", "/api/inferences"):
         assert _request(httpd, path)[0] == 401
         assert _request(httpd, path, method="POST", headers={TOKEN_HEADER: httpd.token})[0] == 405  # 操作モードでない既定は、GET以外を受け付けない
+
+
+def test_page_has_the_new_views_and_never_uses_innerhtml(gui) -> None:
+    httpd, _, _ = gui
+    status, _, body = _request(httpd, f"/?token={httpd.token}")
+    page = body.decode("utf-8")
+    assert status == 200
+    for needle in ("view-unresolved", "view-explore", "view-status", "tab-card", "/api/marks", "/api/card", "/api/unresolved", "/api/status"):
+        assert needle in page
+    assert "innerHTML" not in page and "insertAdjacentHTML" not in page  # 解析対象由来の文字列は、DOM（textContent）だけで反映する
+    assert "eval(" not in page and "document.write" not in page
