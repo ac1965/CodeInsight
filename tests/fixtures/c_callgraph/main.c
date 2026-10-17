@@ -7,7 +7,7 @@ static int helper(int x) {
 
 int main(void) {
     struct Calculator calc = {add, 0};
-    binary_op op = calc.op;
+    binary_op op = *(binary_op *)&calc.total;
     int r = op(2, 3);
     apply(&calc, helper(r));
     printf("%d\n", fib(5));
