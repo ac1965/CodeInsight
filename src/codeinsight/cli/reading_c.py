@@ -77,6 +77,13 @@ def _print_trace(trace, prefix: str = "", top: bool = True) -> None:
             _print_trace(child, prefix + ("    " if last else "│   ") + "   ", top=False)
 
 
+def _print_upstream(nodes, prefix: str = "") -> None:
+    for position, node in enumerate(nodes):
+        last = position == len(nodes) - 1
+        print(f"{prefix}{'└── ' if last else '├── '}{safe(node.path)}:{node.line}  {safe(node.caller.qualified_name)}  ← {safe(node.argument)}")
+        _print_upstream(node.children, prefix + ("    " if last else "│   "))
+
+
 def dataflow(args: argparse.Namespace, project, index, navigation: NavigationService, symbol, stale) -> int:
     service = CFlowService(navigation)
     try:
@@ -88,10 +95,16 @@ def dataflow(args: argparse.Namespace, project, index, navigation: NavigationSer
             print("変数名を指定すると、値の行き先をたどります（例: dataflow <シンボル> <変数名>）。")
             warn_if_stale(stale)
             return 0
-        if args.upstream:
-            raise CliError("--upstream（呼び出し元の実引数の追跡）は、Cでは未対応です。")
         trace = service.trace_variable(project, index, symbol, args.variable, args.depth)
         _print_trace(trace)
+        if args.upstream:
+            if not trace.is_param:
+                raise CliError(f"--upstream は引数にのみ使えます: {safe(args.variable)}")
+            print("\n呼び出し元から渡される実引数（解決済みの呼び出しのみ）:")
+            upstream = service.upstream(project, index, symbol, args.variable, args.depth)
+            _print_upstream(upstream)
+            if not upstream:
+                print("  確認できる呼び出し元がありません")
     except FlowAnalysisError as exc:
         raise CliError(str(exc)) from exc
     warn_if_stale(stale)

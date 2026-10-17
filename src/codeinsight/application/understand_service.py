@@ -184,6 +184,14 @@ class UnderstandService:
             ConfigItem("env", name or "<動的な名前>", result.path, line, symbol.qualified_name, detail=call)
             for line, name, call in facts["environment"]
         ]
+        for parameter in facts["parameters"]:  # 呼び出し元が実際に渡す引数（解決済みの呼び出しのみ。式のソース上の文字）
+            try:
+                nodes = self._c.upstream(project, index, symbol, parameter.name, depth=0)
+            except FlowAnalysisError:
+                continue
+            distinct = list(dict.fromkeys(n.argument for n in nodes))
+            if distinct:
+                result.caller_arguments[parameter.name] = distinct
         state = self._c.state(project, index, symbol)
         scope_label = {"global": "グローバル変数", "static": "静的変数（ファイル内）"}
         for access in state.accesses:

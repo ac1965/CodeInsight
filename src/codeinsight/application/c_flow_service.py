@@ -13,11 +13,13 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import clang.cindex as ci
+
 from codeinsight.analysis import c_flow_analysis as cf
 from codeinsight.analysis import flow_analysis as fa
 from codeinsight.analysis.c_analyzer import CAnalyzer, CppAnalyzer
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
-from codeinsight.application.flow_service import FlowAnalysisError, TraceFlow, VariableTrace
+from codeinsight.application.flow_service import FlowAnalysisError, TraceFlow, UpstreamNode, VariableTrace
 from codeinsight.application.navigation_service import NavigationService
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.risk_service import RULES, Finding
@@ -183,6 +185,49 @@ class CFlowService:
             "parameters": cf.parameters(function), "return_type": cf.return_type(function),
             "returns": cf.return_statements(function), "environment": cf.environment_reads(function),
         }
+
+    # --- 引数の実引数（呼び出し元から渡される値の式） ---
+
+    @_guarded
+    def upstream(self, project: Project, index: ProjectIndex, symbol: Symbol, parameter: str, depth: int = 2) -> list[UpstreamNode]:
+        """仮引数に渡される実引数を、呼び出し元の呼び出し箇所から調べる（解決済みの呼び出しのみ。実引数の式のソース上の文字）。
+
+        実引数が、呼び出し元自身の引数そのものなら、`depth` 段まで、その呼び出し元の呼び出し元へたどる。関数ポインタ経由・
+        曖昧な呼び出しは、呼び出し元として確定できないため含まれない。可変引数（`...`）は、位置で対応づけられない。
+        """
+
+        return self._upstream(project, index, symbol, parameter, depth, set())
+
+    def _upstream(self, project, index, symbol, parameter, depth, visited) -> list[UpstreamNode]:
+        names = [p.name for p in cf.parameters(self.load(project, index, symbol))]
+        if parameter not in names:
+            raise FlowAnalysisError(f"{symbol.qualified_name} に引数 '{parameter}' がありません。")
+        position = names.index(parameter)
+        nodes: list[UpstreamNode] = []
+        for hit in self._navigation.callers(index, symbol):
+            caller = hit.source
+            source_file = index.files.get(caller.file_id)
+            if source_file is None or source_file.language not in C_FAMILY or caller.kind not in _CALLABLE:
+                continue
+            try:
+                caller_function = self.load(project, index, caller)
+            except FlowAnalysisError:
+                continue
+            line = hit.reference.source_location.start_line
+            for call in caller_function.cursor.walk_preorder():
+                if call.kind != ci.CursorKind.CALL_EXPR or call.extent.start.line != line or cf.call_name(call) != symbol.name:
+                    continue
+                arguments = cf._call_arguments(call)
+                if position >= len(arguments):
+                    continue  # 可変引数・既定の引数など、位置で対応づけられない
+                argument = arguments[position]
+                node = UpstreamNode(caller, hit.path, line, cf.text(caller_function, argument, 70))
+                inner = cf._unwrap(argument)
+                caller_names = [p.name for p in cf.parameters(caller_function)]
+                if depth > 0 and inner.kind == ci.CursorKind.DECL_REF_EXPR and inner.spelling in caller_names and (caller.symbol_id, inner.spelling) not in visited:
+                    node.children = self._upstream(project, index, caller, inner.spelling, depth - 1, visited | {(symbol.symbol_id, parameter)})
+                nodes.append(node)
+        return nodes
 
     # --- 変数の追跡（引数を介した呼び出し先まで） ---
 
