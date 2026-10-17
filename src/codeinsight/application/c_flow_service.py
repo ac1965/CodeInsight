@@ -46,6 +46,24 @@ def _guarded(method):
 
 
 @dataclass(frozen=True)
+class FieldUse:
+    path: str
+    line: int
+    function: str  # 含む関数の修飾名（関数の外なら空）
+    owner: str
+    mode: str
+    text: str
+
+
+@dataclass
+class FieldReport:
+    uses: list[FieldUse] = field(default_factory=list)
+    owners: set[str] = field(default_factory=set)  # その名前のフィールドを持つ構造体・クラス
+    scanned: int = 0  # 構文解析して調べたファイル（名前が現れるもの）
+    skipped: list[str] = field(default_factory=list)  # 解析後に変更された・構文解析できず、調べられなかったファイル
+
+
+@dataclass(frozen=True)
 class PropagatedExit:
     """呼び出し先を経由して終了しうる経路（静的な呼び出しの連鎖。条件によっては実際には通らない）。"""
 
@@ -88,6 +106,9 @@ class CFlowService:
         source_file = index.files[symbol.file_id]
         if source_file.language not in C_FAMILY:
             raise FlowAnalysisError(f"{source_file.language.value} のシンボルは、C・C++の解析の対象ではありません。")
+        return self._parse_file(project, source_file, symbol.file_id)
+
+    def _parse_file(self, project: Project, source_file, file_id: str):
         key = (project.project_id, source_file.relative_path)
         if key not in self._parsed:
             absolute = project.root_path / source_file.relative_path
@@ -99,7 +120,7 @@ class CFlowService:
                 raise FlowAnalysisError(
                     f"{source_file.relative_path} は解析後に変更されています。再解析（codeinsight analyze）してから実行してください。"
                 )
-            unit = SourceUnit(symbol.file_id, absolute, source_file.relative_path, data)
+            unit = SourceUnit(file_id, absolute, source_file.relative_path, data)
             result = FileAnalysis()
             translation_unit = self._analyzer(project, source_file.language).parse(unit, result)
             if translation_unit is None:
@@ -189,6 +210,47 @@ class CFlowService:
             "parameters": cf.parameters(function), "return_type": cf.return_type(function),
             "returns": cf.return_statements(function), "environment": cf.environment_reads(function),
         }
+
+    # --- フィールド単位の読み書き（プロジェクト全体） ---
+
+    def field_uses(self, project: Project, index: ProjectIndex, field_name: str, owner: str | None = None) -> FieldReport:
+        """構造体・クラスのフィールドを、プロジェクト全体で、読み書きしている箇所を、含む関数とともに示す。
+
+        名前が（単語として）現れるC/C++のファイルだけを構文解析する。マクロの定義の中だけでフィールドが使われ、使う側のファイルに名前が
+        現れない場合は、見つけられない。位置による初期化（`{a, b}`）は、どのフィールドに入るかを追わない。
+        """
+
+        import re
+
+        report = FieldReport()
+        word = re.compile(rb"\b" + re.escape(field_name.encode("utf-8")) + rb"\b")
+        callables_by_file: dict[str, list[Symbol]] = defaultdict(list)
+        for symbol in index.symbols.values():
+            if symbol.kind in _CALLABLE:
+                callables_by_file[symbol.file_id].append(symbol)
+        for file_id, source_file in sorted(index.files.items(), key=lambda item: item[1].relative_path):
+            if source_file.language not in C_FAMILY:
+                continue
+            try:
+                data = (project.root_path / source_file.relative_path).read_bytes()
+            except OSError:
+                report.skipped.append(f"{source_file.relative_path}（読み込めない）")
+                continue
+            if not word.search(data):
+                continue
+            try:
+                translation_unit, source, absolute = self._parse_file(project, source_file, file_id)
+                accesses = cf.field_accesses(translation_unit, absolute, source, field_name, owner)
+            except (FlowAnalysisError, ValueError) as exc:
+                report.skipped.append(f"{source_file.relative_path}（{str(exc).split('。')[0][:60]}）")
+                continue
+            report.scanned += 1
+            for access in accesses:
+                inside = [s for s in callables_by_file.get(file_id, []) if s.start_line <= access.line <= s.end_line]
+                function = min(inside, key=lambda s: s.end_line - s.start_line).qualified_name if inside else ""
+                report.uses.append(FieldUse(source_file.relative_path, access.line, function, access.owner, access.mode, access.text))
+                report.owners.add(access.owner)
+        return report
 
     # --- 引数の実引数（呼び出し元から渡される値の式） ---
 

@@ -34,7 +34,7 @@ from codeinsight.cli.explore import (
 from codeinsight.cli.graph import cmd_graph
 from codeinsight.cli.index_commands import cmd_compare_scip, cmd_extract, cmd_import_scip, cmd_mcp, cmd_serve
 from codeinsight.cli.project import cmd_architecture, cmd_boundaries, cmd_config, cmd_docs_check, cmd_effects, cmd_environment, cmd_externals, cmd_history, cmd_impact, cmd_tests, cmd_unused
-from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
+from codeinsight.cli.reading import cmd_dataflow, cmd_exceptions, cmd_fields, cmd_flow, cmd_import_sarif, cmd_risks, cmd_state, cmd_understand
 from codeinsight.domain import SymbolKind
 
 # --- パーサー ---
@@ -161,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
     dataflow.add_argument("--depth", type=int, default=2, help="呼び出し先・代入先をたどる深さ")
     dataflow.add_argument("--upstream", action="store_true", help="引数に渡される実引数を、呼び出し元から調べる")
     dataflow.add_argument("--file")
+
+    fields = add("fields", "C/C++ の構造体のフィールドを、プロジェクト全体で読み書きしている箇所（含む関数つき。フィールド単位のデータフロー）", cmd_fields, ("text", "json"))
+    fields.add_argument("name", help="フィールド名、または 構造体.フィールド（例: Calculator.total）")
+    fields.add_argument("--limit", type=int, default=30, help="種類ごとの表示件数")
 
     state = add("state", "クラスの属性（self.<属性>）・モジュール変数の書き込み/変更/読み取りを表示する", cmd_state)
     state.add_argument("name", help="クラスまたはモジュールの名前または修飾名")

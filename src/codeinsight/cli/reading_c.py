@@ -24,6 +24,49 @@ _EXIT_LABELS = {
 _SCOPE_LABELS = {"param": "引数", "local": "ローカル変数", "global": "グローバル変数", "static": "静的変数"}
 
 
+_MODE_LABELS = {"read": "読み取り", "write": "書き込み", "readwrite": "読み書き（複合代入・++/--）", "address": "アドレスを取る（書き換えられうる）", "init": "初期化（.field = 値）"}
+
+
+def fields(args: argparse.Namespace, project, index, navigation: NavigationService, stale) -> int:
+    name = args.name
+    owner = None
+    for separator in ("::", "."):
+        if separator in name:
+            owner, _, name = name.rpartition(separator)
+            owner = owner.split("::")[-1].split(".")[-1]
+            break
+    service = CFlowService(navigation)
+    report = service.field_uses(project, index, name, owner)
+    modes = {"write", "readwrite", "address", "init"}
+    if args.format == "json":
+        emit_json({
+            "field": name, "owner": owner, "owners": sorted(report.owners), "scanned_files": report.scanned, "skipped": report.skipped,
+            "uses": [vars(u) for u in report.uses],
+        })
+        return 0
+    label = f"{owner}.{name}" if owner else name
+    if not report.uses:
+        print(f"フィールド {safe(label)} の読み書きは、確認できませんでした（調べたファイル {report.scanned}件）。")
+        print("  ※ そのフィールドが無い・名前が違う・マクロの中だけで使われている可能性があります。")
+    else:
+        writers = [u for u in report.uses if u.mode in modes]
+        print(f"フィールド {safe(label)}（構造体・クラス: {safe(', '.join(sorted(report.owners)))}）: 書き込み系 {len(writers)}件 / 読み取り {len(report.uses) - len(writers)}件（構文解析したファイル {report.scanned}件）")
+        if len(report.owners) > 1 and owner is None:
+            print("  ※ 同じ名前のフィールドが、複数の構造体にあります。`構造体.フィールド` で絞り込めます。")
+        for title, group in (("書き込み系", writers), ("読み取り", [u for u in report.uses if u.mode not in modes])):
+            print(f"\n■ {title}（{len(group)}件）")
+            for use in group[: args.limit]:
+                where = f"  {safe(use.function)}()" if use.function else ""
+                print(f"  {safe(use.path)}:{use.line}{where}  [{_MODE_LABELS[use.mode]}] {safe(use.owner)}  {safe(use.text)}")
+            if len(group) > args.limit:
+                print(f"  …ほか{len(group) - args.limit}件（--limit で変更）")
+    if report.skipped:
+        print(f"\n  ※ 調べられなかったファイル: {', '.join(safe(s) for s in report.skipped[:5])}" + (" …" if len(report.skipped) > 5 else ""))
+    warn_if_stale(stale)
+    print("※ 構文から確認できた読み書きです。ポインタ経由の別名・マクロの内部・位置による初期化は追えません。", file=sys.stderr)
+    return 0
+
+
 def _macro_rows(service: CFlowService, project, index, symbol) -> list[dict]:
     try:
         uses = service.macros(project, index, symbol)

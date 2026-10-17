@@ -163,6 +163,13 @@ def cmd_dataflow(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fields(args: argparse.Namespace) -> int:
+    """C/C++ の構造体のフィールドを、プロジェクト全体で、読み書きしている箇所（フィールド単位のデータフロー）。"""
+
+    project, index, navigation, _service, stale = _flow_service(args)
+    return reading_c.fields(args, project, index, navigation, stale)
+
+
 def cmd_state(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)

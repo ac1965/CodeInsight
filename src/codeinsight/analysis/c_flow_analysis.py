@@ -164,6 +164,100 @@ def macros_used(function: CFunction) -> list[CMacroUse]:
     return sorted(found.values(), key=lambda m: (m.system, m.line, m.name))
 
 
+@dataclass(frozen=True)
+class CFieldAccess:
+    owner: str  # フィールドを持つ構造体・共用体・クラスの名前（無名なら <匿名>）
+    line: int
+    mode: str  # read / write / readwrite（複合代入・++/--）/ address（&で取られた。書き換えられうる）/ init（指示付き初期化 `.f = v`）
+    text: str
+
+
+def field_accesses(translation_unit: ci.TranslationUnit, target_path: str, source: bytes, field: str, owner: str | None = None) -> list[CFieldAccess]:
+    """ファイルの中の、フィールド `field`（`owner` の指定があればその構造体のもの）の読み書き。
+
+    書き込み: `=` の左辺（`p->f`・`s.f`・`p->f[i]` を含む）、複合代入・`++`/`--`（readwrite）、`&p->f`（address）、`.f = v` の初期化（init）。
+    読み取り: それ以外の参照。位置による初期化（`{a, b}`）は、どのフィールドに入るかの対応を、ここでは追わない。
+    """
+
+    results: list[CFieldAccess] = []
+
+    def line_text(cursor: ci.Cursor) -> str:
+        start, end = cursor.extent.start.offset, cursor.extent.end.offset
+        snippet = " ".join(source[start:end].decode("utf-8", errors="replace").split())
+        return snippet if len(snippet) <= 80 else snippet[:79] + "…"
+
+    def matches(node: ci.Cursor) -> str | None:
+        declaration = node.referenced
+        if declaration is None or declaration.kind != CK.FIELD_DECL or declaration.spelling != field:
+            return None
+        parent = declaration.semantic_parent
+        name = parent.spelling if parent is not None and parent.spelling else "<匿名>"
+        return name if owner is None or name == owner else None
+
+    def visit(cursor: ci.Cursor, context: str, statement: ci.Cursor) -> None:
+        kind = cursor.kind
+        if kind == CK.MEMBER_REF_EXPR:
+            name = matches(cursor)
+            if name is not None:
+                results.append(CFieldAccess(name, cursor.location.line, context, line_text(statement)))
+            for child in _children(cursor):
+                visit(child, "read", statement)
+            return
+        children = _children(cursor)
+        if kind in (CK.BINARY_OPERATOR, CK.COMPOUND_ASSIGNMENT_OPERATOR) and len(children) == 2:
+            operator = _operator(cursor)
+            if operator == "=" or operator in _COMPOUND_OPS:
+                visit(children[0], "write" if operator == "=" else "readwrite", cursor)
+                visit(children[1], "read", cursor)
+                return
+        if kind == CK.UNARY_OPERATOR and children:
+            operator = _operator(cursor)
+            if operator in ("++", "--"):
+                visit(children[0], "readwrite", cursor)
+                return
+            if operator == "&":
+                visit(children[0], "address", cursor)
+                return
+        if kind == CK.INIT_LIST_EXPR:
+            for item in children:
+                parts = _children(item)
+                if parts and parts[0].kind == CK.MEMBER_REF and len(parts) == 2:  # 指示付き初期化 `.f = v`
+                    declaration = parts[0].referenced
+                    if declaration is not None and declaration.kind == CK.FIELD_DECL and declaration.spelling == field:
+                        parent = declaration.semantic_parent
+                        name = parent.spelling if parent is not None and parent.spelling else "<匿名>"
+                        if owner is None or name == owner:
+                            results.append(CFieldAccess(name, parts[0].location.line, "init", line_text(item)))
+                    visit(parts[1], "read", item)
+                else:
+                    visit(item, "read", item)
+            return
+        if kind in (CK.UNEXPOSED_EXPR, CK.PAREN_EXPR, CK.CSTYLE_CAST_EXPR, CK.ARRAY_SUBSCRIPT_EXPR) and context != "read" and children:
+            visit(children[0], context, statement)  # `p->f[i] = v`・`(T)p->f` のように、書き込み先を包む式を通り抜ける
+            for extra in children[1:]:
+                visit(extra, "read", statement)
+            return
+        for child in children:
+            visit(child, "read", cursor if kind in (CK.CALL_EXPR, CK.RETURN_STMT, CK.DECL_STMT, CK.IF_STMT) else statement)
+
+    for top in translation_unit.cursor.get_children():
+        try:
+            location = top.location.file
+        except ValueError:
+            continue
+        if location is None or _resolved(location.name) != target_path:
+            continue
+        visit(top, "read", top)
+    seen: set[tuple[int, str, str]] = set()
+    unique = []
+    for access in sorted(results, key=lambda a: (a.line, a.mode)):
+        key = (access.line, access.mode, access.owner)
+        if key not in seen:
+            seen.add(key)
+            unique.append(access)
+    return unique
+
+
 def text(function: CFunction, cursor: ci.Cursor, limit: int = 80) -> str:
     """カーソルの範囲のソースを、空白をまとめた1行で返す。"""
 
