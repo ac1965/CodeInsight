@@ -292,6 +292,7 @@ make lint          # ruff と mypy(CIと同じ)
 * [ANALYSIS.md](docs/ANALYSIS.md) — 解析方式と既知の制約
 * [REQUIREMENTS.md](docs/REQUIREMENTS.md) — 要件に対する実装状況の要約
 * [TESTING.md](docs/TESTING.md) — テスト方法と実行結果
+* [GUI.md](docs/GUI.md) — GUI（Webビューアーの発展）の設計と決定事項（操作モード・AIの推測の見せ方）
 * [DYNAMIC_ANALYSIS.md](docs/DYNAMIC_ANALYSIS.md) — 動的解析の設計と現状（機能案・許可モデル・隔離・データモデル・段階的な導入。段階1のPython実行を実装済み）
 * [OPERATIONS.md](docs/OPERATIONS.md) — 運用ガイド（導入・日常の運用・言語別の手順・資料の作成・AI解説の安全な運用・結果の読み方・トラブルシューティング・保守）
 * [CHANGELOG.md](docs/CHANGELOG.md) — 変更履歴
