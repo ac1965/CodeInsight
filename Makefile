@@ -30,10 +30,10 @@
 # ホストの uv で動かすときは RUNTIME=local を付ける（環境変数でも可。開発用の setup・test・lint・check は、常にホストで動く）。
 #   - 初回と、ソース・Dockerfile を変えたあとは、イメージを自動で作り直す（make image で明示的にも作れる）。
 #   - 対象（TARGET）は、ホストと同じパスに読み取り専用で割り当てる（変更しない）。解析結果のDBは、ホストの ~/.codeinsight（DOCKER_DATA=）を共有する。
-#   - ビューアー（reading-serve / serve）は、ホストの 127.0.0.1:PORT にだけ公開する。ACTIONS=1 で操作モード（--allow-actions）。OPEN=1 は、Docker では使えない（表示されたURLを開く）。
+#   - ビューアー（reading-serve / serve）は、ホストの 127.0.0.1:PORT にだけ公開する。操作モードが既定（ACTIONS=0 で読み取り専用）。OPEN=1 は、Docker では使えない（表示されたURLを開く）。
 #   - AIは、ホストの Ollama（DOCKER_AI_URL。既定 http://host.docker.internal:11434/v1）。動的解析（dynamic-run）と reading-c-build・ai-eval は、ホストで実行する（RUNTIME=local）。
 #   make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1    # Docker で資料一式（AI解説つき）
-#   make serve TARGET=../my-repo ACTIONS=1                               # Docker でビューアー（操作モード）
+#   make serve TARGET=../my-repo                                        # Docker でビューアー（操作モードが既定。ACTIONS=0 で読み取り専用）
 #   make analyze TARGET=../my-repo RUNTIME=local                         # ホストの uv で実行
 
 RUNTIME ?= docker
@@ -374,14 +374,14 @@ reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] �
 reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビューアーを起動する（TARGET 必須。PORT=、OPEN=1。127.0.0.1 のみ・読み取り専用。Ctrl-C で終了）
 	@$(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN)
 
-serve: reading-serve ## ビューアーを起動する（reading-serve の別名。TARGET 必須。ACTIONS=1 で操作モード）
+serve: reading-serve ## ビューアーを起動する（reading-serve の別名。TARGET 必須。ACTIONS=0 で読み取り専用）
 
 reading-serve-run:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-serve TARGET=../my-repo))
 	@$(RCI) status $(RFLAGS) > /dev/null 2>&1 || { echo "解析結果がありません（make analyze TARGET=$(TARGET) か make reading-serve TARGET=$(TARGET) で解析してください）"; exit 2; }
 	@echo "Webビューアーを起動します（Ctrl-C で終了）。表示されたURLをブラウザで開いてください。URLにはトークンが含まれます。共有しないでください。"
 	@$(if $(and $(USE_DOCKER),$(filter 1,$(OPEN))),echo "OPEN=1 は Docker では使えません（表示されたURLを、ホストのブラウザで開いてください）")
-	$(RCI) serve $(RFLAGS) --reading-dir $(OUT) --port $(PORT) $(if $(USE_DOCKER),--host 0.0.0.0) $(if $(filter 1,$(ACTIONS)),--allow-actions) $(if $(and $(filter 1,$(OPEN)),$(if $(USE_DOCKER),,1)),--open)
+	$(RCI) serve $(RFLAGS) --reading-dir $(OUT) --port $(PORT) $(if $(USE_DOCKER),--host 0.0.0.0) $(if $(filter 0,$(ACTIONS)),--read-only) $(if $(and $(filter 1,$(OPEN)),$(if $(USE_DOCKER),,1)),--open)
 
 reading-c-build: reading-check ## [資料] （ホストで実行）autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）
 	$(if $(filter 1,$(ALLOW_BUILD)),,$(error 対象の configure と make を実行します（対象のコードは変更しませんが、ビルドの手順を動かします）。許可する場合は ALLOW_BUILD=1 を付けてください))

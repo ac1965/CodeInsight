@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 操作モードを既定にする
+
+* `serve` の既定を操作モードにした（`--read-only` で読み取り専用。`--allow-actions` は互換のため残す）。Makefile は `ACTIONS=0`、compose は `ACTIONS=0` で読み取り専用。AGENTS.md §3.14 を改訂した。ループバックのみ・トークン・Host・Originの検査、動的解析の計画の確認・コンテナ・ネットワーク遮断は、既定のままでも変わらない。
+
 ## Docker を既定の実行環境にする
 
 * Makefile の既定を `RUNTIME=docker` にした。`make reading / serve / analyze / status / overview / understand / explain*` は、イメージ `codeinsight:local` のコンテナで動く（イメージは、無い・ソース・Dockerfile・uv.lock の変更で自動で作り直す。`make image`）。対象は読み取り専用、DBは `~/.codeinsight` を共有、ビューアーはホストの 127.0.0.1 にだけ公開。`ACTIONS=1` で操作モード。`RUNTIME=local` でホストの uv。`setup`・`check`・`test`・`lint`・`ai-eval`・`reading-c-build` は常にホスト。コンテナの中では、Docker を入れ子にしない。

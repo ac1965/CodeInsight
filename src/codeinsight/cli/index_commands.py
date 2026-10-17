@@ -120,7 +120,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         raise CliError(f"--reading-dir がディレクトリではありません: {reading_dir}")
     api = ViewerApi(repository, project, reading_dir)
     runner = None
-    if args.allow_actions:
+    if not args.read_only:  # 操作モードが既定（AGENTS.md §3.14）。--read-only で、読み取り専用
         from codeinsight.cli.common import resolve_db_path
         from codeinsight.web.actions import ActionRunner
 

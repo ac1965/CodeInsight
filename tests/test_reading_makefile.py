@@ -197,9 +197,10 @@ def test_docker_is_the_default_runtime_and_local_is_opt_in(tmp_path: Path, monke
     analyze = _make("-n", "analyze", f"TARGET={target}", f"DOCKER_DATA={tmp_path / 'data'}").stdout
     assert "docker run" in analyze and f"-v {target}:{target}:ro" in analyze and f"{tmp_path / 'data'}:/data" in analyze and "codeinsight:local analyze" in analyze
     assert "--user" in analyze and "uv run" not in analyze  # ホストの利用者の権限で動く
-    serve = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "PORT=9123", "ACTIONS=1").stdout
-    assert "-p 127.0.0.1:9123:9123" in serve and "--host 0.0.0.0" in serve and "--allow-actions" in serve and f"-v {out}:{out}" in serve  # ホストの 127.0.0.1 にだけ公開
+    serve = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "PORT=9123").stdout
+    assert "-p 127.0.0.1:9123:9123" in serve and "--host 0.0.0.0" in serve and "--read-only" not in serve and f"-v {out}:{out}" in serve  # ホストの 127.0.0.1 にだけ公開
     assert "0.0.0.0:9123" not in serve
+    assert "--read-only" in _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "ACTIONS=0").stdout  # 読み取り専用にもできる
     no_open = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "OPEN=1").stdout
     assert "OPEN=1 は Docker では使えません" in no_open and "--open" not in no_open.split("codeinsight:local")[-1]
     local = _make("-n", "analyze", f"TARGET={target}", "RUNTIME=local").stdout

@@ -103,7 +103,7 @@ def _flag(params: Params, name: str, default: bool = False) -> bool:
 
 class ViewerApi:
     def __init__(self, repository: AnalysisRepository, project: Project, reading_dir: Path | None = None) -> None:
-        self.actions: Any = None  # 操作モード（serve --allow-actions）の実行器。None なら読み取り専用
+        self.actions: Any = None  # 操作モード（serve --allow-actions）の実行器。None なら読み取り専用（--read-only）
         self._repository = repository
         self._project = project
         self._reading_dir = reading_dir.resolve() if reading_dir is not None else None
@@ -556,7 +556,7 @@ class ViewerApi:
         }
 
     def _actions_status(self, params: Params) -> dict:
-        return self.actions.status() if self.actions is not None else {"enabled": False, "note": "読み取り専用です（操作モードは、serve --allow-actions で有効にします）。"}
+        return self.actions.status() if self.actions is not None else {"enabled": False, "note": "読み取り専用です（serve --read-only）。操作モードは、--read-only なしで起動します。"}
 
     def _external(self, params: Params) -> dict:
         """外部ツールの取り込み結果（SARIF・SCIP・radare2）と、CodeInsight自身の結果との比較。外部の結果は事実ではなく、食い違いは並べて示す（採用しない）。"""

@@ -105,7 +105,7 @@ src/codeinsight/
 │   ├── service.py         ExplanationService（同意の確認→根拠→生成→検証→別テーブルへ保存。explain_symbols: 問い合わせだけ並列・保存済みの再利用・再試行・打ち切り）
 │   └── evaluation.py      評価ケース（eval/ai_cases.toml）の読み込み・実行・機械的な採点（保存はしない。モデル・プロンプトの比較用）
 │
-├── web/               ローカルのWebビューアー（標準ライブラリのみ。127.0.0.1。既定は読み取り専用・GETのみ。`--allow-actions` の操作モードは actions.py のPOSTだけ）
+├── web/               ローカルのWebビューアー（標準ライブラリのみ。127.0.0.1。既定は操作モード（actions.py のPOSTだけ）。`--read-only` ではGETのみ）
 │   ├── server.py          HTTPサーバー（トークン・Host検査・CSP。コンテナの中に限り 0.0.0.0 を許可）
 │   ├── api.py             API（HTTPに依存せず、(パス, クエリ) から辞書を返す。グラフ・ソース・切り出し・資料・使い方）
 │   ├── app_page.py        1ページのアプリ（HTML/JS。Markdownの描画、分割バー、資料、使い方）

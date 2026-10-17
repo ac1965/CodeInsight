@@ -75,7 +75,7 @@ C言語解析にはlibclang(PyPIパッケージに同梱)を使用します。�
 
 ```bash
 make reading TARGET=../my-repo                         # 資料一式（図・PDFを含む）→ ビューアー（表示されたトークン付きURLを開く）
-make serve TARGET=../my-repo                           # 解析 → ビューアーだけ（ホストの 127.0.0.1 にだけ公開）。ACTIONS=1 で操作モード
+make serve TARGET=../my-repo                           # 解析 → ビューアーだけ（ホストの 127.0.0.1 にだけ公開）。操作モードが既定（ACTIONS=0 で読み取り専用）
 make analyze TARGET=../my-repo                         # 解析だけ（対象は読み取り専用で割り当て。変更しない。DBは ~/.codeinsight を共有）
 make overview TARGET=../my-repo                        # 全体像（status / understand NAME=main なども同じ）
 make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1   # AI解説つき（ホストの Ollama を使う）

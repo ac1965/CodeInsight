@@ -495,10 +495,10 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 
 解析・ビューアー・AI解説・資料生成は、**既定でコンテナで動きます**（`Dockerfile`・`Makefile`・`compose.yaml`）。
 
-* **既定は `make`（`RUNTIME=docker`）**: `make reading TARGET=…`・`make serve TARGET=…`（`ACTIONS=1` で操作モード）・`make analyze`・`status`・`overview`・`understand`・`explain` などが、イメージ `codeinsight:local`（`IMAGE=`）で動きます。イメージは、無い・ソース・`Dockerfile`・`uv.lock` が変わったときに自動で作ります（`make image`）。対象は読み取り専用、DBは `~/.codeinsight`（`DOCKER_DATA=`）、資料の出力は `OUT`、ビューアーはホストの `127.0.0.1:PORT` にだけ公開します。AIは、ホストの Ollama（`DOCKER_AI_URL=`。既定 `http://host.docker.internal:11434/v1`）。`OPEN=1` は使えません（表示されたURLを開く）。
+* **既定は `make`（`RUNTIME=docker`）**: `make reading TARGET=…`・`make serve TARGET=…`（操作モードが既定。`ACTIONS=0` で読み取り専用）・`make analyze`・`status`・`overview`・`understand`・`explain` などが、イメージ `codeinsight:local`（`IMAGE=`）で動きます。イメージは、無い・ソース・`Dockerfile`・`uv.lock` が変わったときに自動で作ります（`make image`）。対象は読み取り専用、DBは `~/.codeinsight`（`DOCKER_DATA=`）、資料の出力は `OUT`、ビューアーはホストの `127.0.0.1:PORT` にだけ公開します。AIは、ホストの Ollama（`DOCKER_AI_URL=`。既定 `http://host.docker.internal:11434/v1`）。`OPEN=1` は使えません（表示されたURLを開く）。
 * **ホストの uv で動かす**: `RUNTIME=local`（環境変数でも可）。`setup`・`check`・`test`・`lint` は常にホスト。**動的解析・`reading-c-build`・`ai-eval` は、ホストで実行します**（コンテナの中に Docker を入れ子にしない・対象の configure を実行する・評価ケースを使うため）。
 * イメージの依存は `uv.lock` の固定した版です（ビルド時だけネットワークを使う）。
-* 操作モード（`ACTIONS=1`）をコンテナで動かすと、再解析・AIの推測は使えますが、動的解析の実行は、コンテナの中に Docker が無いため、できません（画面にその旨が出ます）。ホストで `RUNTIME=local make serve ACTIONS=1` とすれば、動的解析も使えます。
+* 操作モード（既定）をコンテナで動かすと、再解析・AIの推測は使えますが、動的解析の実行は、コンテナの中に Docker が無いため、できません（画面にその旨が出ます）。ホストで `RUNTIME=local make serve` とすれば、動的解析も使えます。
 
 * **必要な個別ソフトウェアは、すべてイメージに入れてあります**: git（変更履歴）、Go（Goアダプターの補助プログラムを作る）、build-essential（Cの標準ヘッダー）、graphviz（図）、Chromium（資料のPDF。コンテナ用に `--no-sandbox` の包み）、make（`make reading`）。ホストに入れる必要はありません。
 * **Ollama はコンテナに含めず、ホスト（macOS など）で動いているものを使います**（コンテナから `http://host.docker.internal:11434/v1`。Ollama の既定の設定（127.0.0.1 で待ち受け）のままで届くことを、macOS の Docker Desktop で確認済み）。
@@ -542,7 +542,7 @@ make reading-serve TARGET=../my-repo                         # 解析して、�
 * **ローカルからのみ**: `127.0.0.1`（`localhost`・`::1`）にだけバインドします。外部のホストへ公開する指定は、拒否します。
 * **トークン**: 起動ごとにランダムなトークンを作り、表示するURLに含めます。ページはトークンを保持してAPIへ送り（URLからは消します）、トークンのないリクエストは拒否します。**URLを共有しないでください**。Hostヘッダーも検査します（DNSリバインディング対策）。GET以外と、CORSは許可しません。
 * **境界の移動**: グラフと、下のソース・切り出しの間の境界（灰色の帯）を、ドラッグで上下に動かせます（上下キー、Shift で大きく。ダブルクリックで元に戻る）。高さは、このブラウザに記憶します（記憶できない環境でも動作します）。
-* **操作モード（`--allow-actions`）**: `serve --allow-actions` で起動すると、「操作」画面から、再解析・AIの推測・動的解析を実行できます（既定の読み取り専用は変わりません）。
+* **操作モード（既定）**: `serve` は、既定で操作モードです。「操作」画面から、再解析・AIの推測・動的解析を実行できます（ループバックのみ・トークン・Host・Originの検査は変わりません）。読み取り専用にするには、`serve --read-only`（`make serve ACTIONS=0`）。
   * 再解析: `analyze` と同じ（対象は変更しません。取り消せません）。完了後、ビューアーが新しい結果を読みます。
   * AIの推測: 関数を指定、または未解決の多い順に一括（最大50件。取り消せます）。**許可の確認はしません**（AGENTS.md §3.9の例外）。送信先（この計算機の内か外か）・モデルを、画面に常に表示します。dry-run で、送らずに内容を確認できます。結果は解析結果とは別に保存され、根拠は検証されます。モデルは `CODEINSIGHT_AI_MODEL` などで指定します。
   * 動的解析: コマンド（1つの引数を1行。シェルを介さない）・収集器・時間・環境変数の名前を指定し、まず「計画を表示」で、コマンド・イメージ・ネットワーク遮断・隔離などを確認します。確認の後、同じ内容でだけ実行できます（確認コード）。ネットワークの許可・隔離なしの実行は、操作モードでは指定できません。イメージは自動では取得しません。
