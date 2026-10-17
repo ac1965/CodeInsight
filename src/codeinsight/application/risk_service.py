@@ -13,7 +13,7 @@ from codeinsight.domain import Project
 SEVERITIES = ("low", "medium", "high")
 RULES = {
     "bare-except": ("medium", "例外の型を指定しない except（KeyboardInterrupt等も捕捉する）"),
-    "swallowed-exception": ("medium", "例外を捕捉して何もしない（握りつぶし）"),
+    "swallowed-exception": ("medium", "例外を捕捉して何もしない（握りつぶし。Python・C++）"),
     "mutable-default": ("medium", "可変オブジェクトを引数の既定値にしている（呼び出し間で共有される）"),
     "eval-exec": ("high", "eval/exec による動的なコード実行"),
     "shell-true": ("high", "shell=True でコマンドを実行している（コマンドインジェクションの恐れ）"),

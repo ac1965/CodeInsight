@@ -12,7 +12,7 @@ from typing import Any
 
 from codeinsight.analysis.call_graph import CallNode, Direction
 from codeinsight.application import NavigationService
-from codeinsight.application.c_flow_service import CFlowService
+from codeinsight.application.c_flow_service import C_FAMILY, CFlowService
 from codeinsight.application.elisp_flow_service import ElispFlowService
 from codeinsight.application.extract_service import DIRECTIONS, ExtractService
 from codeinsight.application.flow_service import FlowAnalysisError, FlowService
@@ -265,7 +265,7 @@ class CodeInsightTools:
         symbol = self._resolve(arguments)
         language = self._index.files[symbol.file_id].language
         try:
-            if language == Language.C:
+            if language in C_FAMILY:
                 summary = CFlowService(self._navigation).control_flow(self._project, self._index, symbol)
             elif language == Language.ELISP:
                 summary = ElispFlowService(self._navigation).control_flow(self._project, self._index, symbol)

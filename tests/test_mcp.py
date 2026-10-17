@@ -166,7 +166,7 @@ def test_understand_and_control_flow_redact_source_fragments_unless_allowed(anal
     assert any(item["detail"] for item in flow_open["items"])
 
 
-def test_control_flow_supports_c_and_rejects_unsupported_languages(setup, analyzed, tmp_path: Path) -> None:
+def test_control_flow_supports_c_cpp_and_rejects_unsupported_languages(setup, analyzed, tmp_path: Path) -> None:
     repository, project, _ = setup
     server = McpServer(CodeInsightTools(repository, project))
     flow, error = _call(server, "control_flow", {"symbol": "main"})
@@ -179,4 +179,12 @@ def test_control_flow_supports_c_and_rejects_unsupported_languages(setup, analyz
     _, cpp_project, _ = analyzed(root)
     cpp_server = McpServer(CodeInsightTools(AnalysisRepository(tmp_path / "db1.sqlite"), cpp_project))
     payload, error = _call(cpp_server, "control_flow", {"symbol": "twice"})
-    assert error and "対応していません" in payload["error"]  # C++の関数単位の制御フローは、未対応と明示する
+    assert not error and payload["language"] == "cpp" and payload["metrics"]["returns"] == 1  # C++ も、Cと同じ解析に対応した
+    if shutil.which("go"):
+        go_root = tmp_path / "go"
+        go_root.mkdir()
+        (go_root / "a.go").write_text("package main\n\nfunc twice(x int) int { return x * 2 }\n", encoding="utf-8")
+        _, go_project, _ = analyzed(go_root)
+        go_server = McpServer(CodeInsightTools(AnalysisRepository(tmp_path / "db2.sqlite"), go_project))
+        payload, error = _call(go_server, "control_flow", {"symbol": "twice"})
+        assert error and "対応していません" in payload["error"]  # Goの関数単位の制御フローは、未対応と明示する

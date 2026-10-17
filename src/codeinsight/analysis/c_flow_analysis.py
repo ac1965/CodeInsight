@@ -73,12 +73,28 @@ def _resolved(path: str) -> str:
     return str(Path(path).resolve())
 
 
-def find_function(translation_unit: ci.TranslationUnit, target_path: str, name: str, start_line: int, source: bytes) -> CFunction | None:
-    """ファイル内の、名前と開始行が一致する関数定義を探す。"""
+_FUNCTION_KINDS = frozenset(
+    {CK.FUNCTION_DECL, CK.CXX_METHOD, CK.CONSTRUCTOR, CK.DESTRUCTOR, CK.CONVERSION_FUNCTION, CK.FUNCTION_TEMPLATE}
+)
+_CONTAINER_KINDS = frozenset({CK.NAMESPACE, CK.CLASS_DECL, CK.STRUCT_DECL, CK.CLASS_TEMPLATE, CK.LINKAGE_SPEC, CK.UNION_DECL})
 
-    for cursor in translation_unit.cursor.get_children():  # 関数定義はファイル直下にある（ヘッダーの内部までは走査しない）
+
+def find_function(translation_unit: ci.TranslationUnit, target_path: str, name: str, start_line: int, source: bytes) -> CFunction | None:
+    """ファイル内の、名前と開始行が一致する関数定義を探す。
+
+    C は、関数定義がファイル直下にある（ヘッダーの内部までは走査しない）。C++ は、名前空間・クラス（メソッド・コンストラクタ・
+    デストラクタ・演算子・関数テンプレートを含む）の中も探す。
+    """
+
+    stack = list(reversed(list(translation_unit.cursor.get_children())))
+    while stack:
+        cursor = stack.pop()
         try:
-            if cursor.kind != CK.FUNCTION_DECL or not cursor.is_definition() or cursor.spelling != name:
+            kind = cursor.kind
+            if kind in _CONTAINER_KINDS:
+                stack.extend(reversed(list(cursor.get_children())))
+                continue
+            if kind not in _FUNCTION_KINDS or not cursor.is_definition() or cursor.spelling != name:
                 continue
         except ValueError:
             continue  # Python版libclangが知らない種類のカーソル（ライブラリのバージョン差）。関数定義ではない
@@ -255,6 +271,8 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
                 kind = _is_exit_call(name)
                 if kind:
                     add("exit" if kind != "assert" else "assert", node, depth, f"{name}()")
+            elif node.kind == CK.CXX_THROW_EXPR:
+                add("raise", node, depth, text(function, node, 60))  # C++: throw（`throw;` は再送出）
             elif node.kind == CK.BINARY_OPERATOR and _operator(node) in ("&&", "||"):
                 decisions += 1  # 条件に限らず、式の中の短絡評価も分岐として数える（拡張された循環的複雑度）
             elif _is_ternary(node):
@@ -314,14 +332,30 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
                 visit(child, depth)
         elif kind == CK.IF_STMT:
             visit_if(cursor, depth, False)
-        elif kind in (CK.FOR_STMT, CK.WHILE_STMT):
+        elif kind in (CK.FOR_STMT, CK.WHILE_STMT, CK.CXX_FOR_RANGE_STMT):
             parts = _children(cursor)
             body_cursor = parts[-1] if parts else cursor
             decisions += 1
-            add("for" if kind == CK.FOR_STMT else "while", cursor, depth, header_text(cursor, body_cursor))
+            add("while" if kind == CK.WHILE_STMT else "for", cursor, depth, header_text(cursor, body_cursor))
             for part in parts[:-1]:
                 expressions(part, depth + 1)
             visit(body_cursor, depth + 1)
+        elif kind == CK.CXX_TRY_STMT:  # C++: try / catch（catch は、例外の型で選ばれる分岐として数える）
+            parts = _children(cursor)
+            add("try", cursor, depth)
+            if parts:
+                visit(parts[0], depth + 1)
+            for handler in parts[1:]:
+                if handler.kind != CK.CXX_CATCH_STMT:
+                    continue
+                decisions += 1
+                inner = _children(handler)
+                declaration = next((c for c in inner if c.kind == CK.VAR_DECL), None)
+                caught = " ".join(declaration.type.spelling.split()) if declaration is not None else "..."
+                add("except", handler, depth, caught)
+                for part in inner:
+                    if part.kind != CK.VAR_DECL:
+                        visit(part, depth + 1)
         elif kind == CK.DO_STMT:
             parts = _children(cursor)
             decisions += 1
@@ -383,6 +417,9 @@ def analyze_control_flow(function: CFunction) -> fa.ControlFlowSummary:
         "ternaries": kinds.get("ternary", 0), "returns": kinds.get("return", 0), "exits": kinds.get("exit", 0), "asserts": kinds.get("assert", 0),
         "cyclomatic": decisions + 1, "max_depth": max_depth,
     }
+    for label, key in (("try", "try_blocks"), ("except", "handlers"), ("raise", "raises")):
+        if kinds.get(label):  # C++ の例外処理がある場合だけ載せる（C の結果に 0 を並べない）
+            summary.metrics[key] = kinds[label]
     return summary
 
 
@@ -431,6 +468,30 @@ def _root_variable(cursor: ci.Cursor) -> ci.Cursor | None:
                 return None
             node = children[0]
         elif node.kind == CK.UNARY_OPERATOR and _operator(node) in ("*", "&"):
+            children = _children(node)
+            if not children:
+                return None
+            node = children[0]
+        else:
+            return None
+    return None
+
+
+def _this_member(cursor: ci.Cursor) -> ci.Cursor | None:
+    """`x`・`this->x`・`x.y`・`x[i]`・`*x` の書き込み先が、メソッド自身のオブジェクトのメンバなら、そのメンバへの参照。"""
+
+    node = cursor
+    for _ in range(40):
+        node = _unwrap(node)
+        if node.kind == CK.MEMBER_REF_EXPR:
+            children = _children(node)
+            if not children:  # 暗黙の this
+                return node if node.referenced is not None and node.referenced.kind == CK.FIELD_DECL else None
+            first = _unwrap(children[0])
+            if first.kind == CK.CXX_THIS_EXPR:
+                return node
+            node = children[0]
+        elif node.kind in (CK.ARRAY_SUBSCRIPT_EXPR,) or (node.kind == CK.UNARY_OPERATOR and _operator(node) == "*"):
             children = _children(node)
             if not children:
                 return None
@@ -679,6 +740,10 @@ def analyze_state(function: CFunction) -> CState:
 
     def record_write(target_expr: ci.Cursor, line: int, detail: str, mode: str = "write") -> None:
         base = _root_variable(target_expr)
+        if base is None and _this_member(target_expr) is not None:
+            # C++: メンバ変数への書き込み（`this->x = ...` と、暗黙の this による `x = ...`）。呼び出し元のオブジェクトの変更
+            state.parameter_mutations.append(CParameterMutation("this", line, "field_store", detail))
+            return
         if base is None or base.referenced is None:
             return
         scope = classify(base)
@@ -748,15 +813,51 @@ def analyze_state(function: CFunction) -> CState:
 
 @dataclass(frozen=True)
 class CExit:
-    kind: str  # terminate / longjmp / assert / error_return / errno
+    kind: str  # terminate / longjmp / assert / error_return / errno / throw（C++）
     line: int
     detail: str
+    caught_locally: bool = False  # throw: 同じ関数の try の catch で捕捉されうる（型の一致か catch(...)。呼び出し元の catch は考慮しない）
+
+
+def _bare_type(spelling: str) -> str:
+    """catch・throw の型の比較用（const・参照・空白を除く）。"""
+
+    return re.sub(r"\bconst\b|[&\s]", "", spelling)
+
+
+def _try_scopes(function: CFunction) -> list[tuple[int, int, list[str]]]:
+    """関数内の try ブロックの (本体の開始位置, 終了位置, catch する型の一覧)。`catch (...)` は "..."。"""
+
+    scopes = []
+    for node in function.cursor.walk_preorder():
+        if node.kind != CK.CXX_TRY_STMT:
+            continue
+        parts = _children(node)
+        if not parts:
+            continue
+        caught = []
+        for handler in parts[1:]:
+            if handler.kind == CK.CXX_CATCH_STMT:
+                declaration = next((c for c in _children(handler) if c.kind == CK.VAR_DECL), None)
+                caught.append(_bare_type(declaration.type.spelling) if declaration is not None else "...")
+        scopes.append((parts[0].extent.start.offset, parts[0].extent.end.offset, caught))
+    return scopes
 
 
 def analyze_exits(function: CFunction) -> list[CExit]:
     exits: list[CExit] = []
+    scopes = _try_scopes(function)
     for node in function.cursor.walk_preorder():
-        if node.kind == CK.CALL_EXPR:
+        if node.kind == CK.CXX_THROW_EXPR:
+            operands = _children(node)
+            thrown = _bare_type(operands[0].type.spelling) if operands else ""
+            enclosing = [caught for start, end, caught in scopes if start <= node.extent.start.offset < end]
+            local = bool(thrown) and any("..." in c or thrown in c for c in enclosing)
+            if not operands:  # `throw;`: 捕捉した例外の再送出
+                local = False
+            label = f"throw {operands[0].type.spelling}" if operands else "throw;（捕捉した例外の再送出）"
+            exits.append(CExit("throw", node.extent.start.line, label + ("（同じ関数の catch で捕捉されうる）" if local else ""), local))
+        elif node.kind == CK.CALL_EXPR:
             name = call_name(node)
             kind = _is_exit_call(name)
             if kind:
@@ -830,6 +931,15 @@ def scan_risks(function: CFunction) -> list[CRiskHit]:
                 argument = arguments[_FORMAT_POSITION[name]]
                 if not _is_literal_format(argument):
                     hits.append(CRiskHit("format-string", line, f"{name}() の書式が文字列リテラルでない: {text(function, argument) or '（マクロの内部）'}"))
+        elif node.kind == CK.CXX_CATCH_STMT:  # C++: 例外の握りつぶし（本体が空、または catch (...) が再送出していない）
+            inner = _children(node)
+            declaration = next((c for c in inner if c.kind == CK.VAR_DECL), None)
+            body = next((c for c in inner if c.kind == CK.COMPOUND_STMT), None)
+            caught = " ".join(declaration.type.spelling.split()) if declaration is not None else "..."
+            if body is not None and not _children(body):
+                hits.append(CRiskHit("swallowed-exception", node.extent.start.line, f"catch ({caught}) の本体が空（例外を握りつぶしている）"))
+            elif declaration is None and body is not None and not any(n.kind == CK.CXX_THROW_EXPR for n in body.walk_preorder()):
+                hits.append(CRiskHit("swallowed-exception", node.extent.start.line, "catch (...) が、再送出（throw;）せずに例外を捕捉している（意図的な場合あり）"))
         elif node.kind == CK.VAR_DECL or (node.kind == CK.BINARY_OPERATOR and _operator(node) == "="):
             parts = _children(node)
             target_name = node.spelling if node.kind == CK.VAR_DECL else (parts[0].spelling if parts else "")

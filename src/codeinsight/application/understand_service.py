@@ -154,8 +154,8 @@ class UnderstandService:
         # --- 8. なぜ現在の実装か ---
         result.history = HistoryService().symbol_history(project, index, symbol)
 
-        if source_file.language not in (Language.PYTHON, Language.C, Language.ELISP):
-            result.limitations.append(f"入力・変更・戻り値・失敗時の挙動の解析は、{source_file.language.value} には未対応です（Python・C・Emacs Lispのみ）。")
+        if source_file.language not in (Language.PYTHON, Language.C, Language.CPP, Language.ELISP):
+            result.limitations.append(f"入力・変更・戻り値・失敗時の挙動の解析は、{source_file.language.value} には未対応です（Python・C・C++・Emacs Lispのみ）。")
             return result
         if not callable_symbol:
             result.limitations.append(f"{symbol.kind.value} のため、入力・戻り値・失敗時の解析は対象外です（関数・メソッドのみ）。")
@@ -193,7 +193,12 @@ class UnderstandService:
                 result.state_changes.append(f"L{access.line} {scope_label[access.scope]} {access.name} を{verb}{detail}")
         how_label = {"field_store": "構造体のフィールドに書き込む", "deref_store": "ポインタ経由で書き込む", "subscript_store": "配列の要素に書き込む", "libc_call": "書き込み先として渡す"}
         result.parameter_mutations = [
-            f"L{m.line} 引数 {m.parameter} を通じて、呼び出し元のデータを変更する（{how_label.get(m.how, m.how)}: {m.detail}）" for m in state.parameter_mutations
+            (
+                f"L{m.line} このオブジェクトのメンバ（this）を変更する（{m.detail}）"
+                if m.parameter == "this"
+                else f"L{m.line} 引数 {m.parameter} を通じて、呼び出し元のデータを変更する（{how_label.get(m.how, m.how)}: {m.detail}）"
+            )
+            for m in state.parameter_mutations
         ]
         result.c_exit_report = self._c.exit_report(project, index, symbol, depth + 1)
         result.c_exits = result.c_exit_report.direct

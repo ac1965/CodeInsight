@@ -15,7 +15,7 @@ from pathlib import Path
 
 from codeinsight.analysis import c_flow_analysis as cf
 from codeinsight.analysis import flow_analysis as fa
-from codeinsight.analysis.c_analyzer import CAnalyzer
+from codeinsight.analysis.c_analyzer import CAnalyzer, CppAnalyzer
 from codeinsight.analysis.language_adapter import FileAnalysis, SourceUnit
 from codeinsight.application.flow_service import FlowAnalysisError, TraceFlow, VariableTrace
 from codeinsight.application.navigation_service import NavigationService
@@ -23,7 +23,8 @@ from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.risk_service import RULES, Finding
 from codeinsight.domain import Language, Project, ReferenceKind, ResolutionStatus, Symbol, SymbolKind
 
-_CALLABLE = (SymbolKind.FUNCTION,)
+_CALLABLE = (SymbolKind.FUNCTION, SymbolKind.METHOD)
+C_FAMILY = (Language.C, Language.CPP)  # Clang AST で関数単位の解析ができる言語（C++ は、C と同じ近似に、try/catch/throw・範囲for・this 経由の状態を加える）
 
 
 _UNKNOWN_AST = "このlibclangが認識できない種類のASTノードがあり、解析できません（libclangのバージョン差）"
@@ -62,27 +63,29 @@ class ExitReport:
     truncated: bool = False  # 深さの上限で打ち切った
 
 
-_PROPAGATING = ("terminate", "longjmp")  # assert は NDEBUG で消えるため、伝播させない
+_PROPAGATING = ("terminate", "longjmp", "throw")  # assert は NDEBUG で消えるため、伝播させない。throw は、呼び出し先の同じ関数の catch で捕捉されるものを除く
 
 
 class CFlowService:
     def __init__(self, navigation: NavigationService) -> None:
         self._navigation = navigation
-        self._analyzers: dict[str | None, CAnalyzer] = {}
+        self._analyzers: dict[tuple[Language, str | None], CAnalyzer] = {}
         self._parsed: dict[tuple[str, str], tuple] = {}
 
     # --- 読み込み ---
 
-    def _analyzer(self, project: Project) -> CAnalyzer:
+    def _analyzer(self, project: Project, language: Language = Language.C) -> CAnalyzer:
         directory = project.configuration.compile_commands_dir
-        if directory not in self._analyzers:
-            self._analyzers[directory] = CAnalyzer(compile_commands_dir=Path(directory) if directory else None)
-        return self._analyzers[directory]
+        key = (language, directory)
+        if key not in self._analyzers:
+            analyzer_class = CppAnalyzer if language == Language.CPP else CAnalyzer
+            self._analyzers[key] = analyzer_class(compile_commands_dir=Path(directory) if directory else None)
+        return self._analyzers[key]
 
     def _translation_unit(self, project: Project, index: ProjectIndex, symbol: Symbol):
         source_file = index.files[symbol.file_id]
-        if source_file.language != Language.C:
-            raise FlowAnalysisError(f"{source_file.language.value} のシンボルは、C言語の解析の対象ではありません。")
+        if source_file.language not in C_FAMILY:
+            raise FlowAnalysisError(f"{source_file.language.value} のシンボルは、C・C++の解析の対象ではありません。")
         key = (project.project_id, source_file.relative_path)
         if key not in self._parsed:
             absolute = project.root_path / source_file.relative_path
@@ -96,7 +99,7 @@ class CFlowService:
                 )
             unit = SourceUnit(symbol.file_id, absolute, source_file.relative_path, data)
             result = FileAnalysis()
-            translation_unit = self._analyzer(project).parse(unit, result)
+            translation_unit = self._analyzer(project, source_file.language).parse(unit, result)
             if translation_unit is None:
                 reason = result.errors[0] if result.errors else "原因不明"
                 raise FlowAnalysisError(f"{source_file.relative_path} を構文解析できません（{reason}）。コンパイル設定が必要な場合は analyze --compile-commands を使ってください。")
@@ -152,7 +155,7 @@ class CFlowService:
                     continue
                 callee = hit.target
                 source_file = index.files.get(callee.file_id)
-                if callee.symbol_id in visited or source_file is None or source_file.language != Language.C or callee.kind not in _CALLABLE:
+                if callee.symbol_id in visited or source_file is None or source_file.language not in C_FAMILY or callee.kind not in _CALLABLE:
                     continue
                 visited.add(callee.symbol_id)
                 step = (*chain, (callee, reference.source_location.start_line))
@@ -162,7 +165,7 @@ class CFlowService:
                     report.skipped.append(callee.qualified_name)
                     continue
                 for item in callee_exits:
-                    if item.kind in _PROPAGATING:
+                    if item.kind in _PROPAGATING and not item.caught_locally:
                         report.propagated.append(PropagatedExit(item.kind, item.detail, callee, item.line, step))
                 if level + 1 < depth:
                     queue.append((callee, step, level + 1))
@@ -256,7 +259,7 @@ class CFlowService:
         by_file: dict[str, list[Symbol]] = defaultdict(list)
         for symbol in index.symbols.values():
             source_file = index.files.get(symbol.file_id)
-            if source_file is None or source_file.language != Language.C or symbol.kind not in _CALLABLE:
+            if source_file is None or source_file.language not in C_FAMILY or symbol.kind not in _CALLABLE:
                 continue
             if only_paths is not None and source_file.relative_path not in only_paths:
                 continue

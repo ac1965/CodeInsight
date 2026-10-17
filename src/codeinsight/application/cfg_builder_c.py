@@ -37,6 +37,7 @@ class CCfgBuilder(CfgBase):
                 "Clang ASTの構文から作った制御フローの近似です。実行時に通る経路・到達可能性は示しません。",
                 "条件の中の && ・ || ・三項演算子（短絡評価）は分解しません。マクロの展開内部、関数ポインタの呼び出し先、setjmp/longjmp は示しません。",
                 "exit・abort などの終了呼び出しは、終了へつなぎます。case が break なしで続く箇所は「落ち込み」の辺で示します。",
+                "C++: throw は、囲む try の catch（無ければ「例外で終了」）へつなぎます。try から各 catch への「送出されれば」の辺は、呼び出しが例外を送出しうることの目印で、送出される保証はありません。",
             ],
             meta={"function": function.name, "path": path},
         )
@@ -97,12 +98,35 @@ class CCfgBuilder(CfgBase):
             else:
                 exits.append((decision, "False"))
             return exits
-        if kind in (CK.WHILE_STMT, CK.FOR_STMT) and parts:
+        if kind in (CK.WHILE_STMT, CK.FOR_STMT, CK.CXX_FOR_RANGE_STMT) and parts:
             body = parts[-1]
             header = " ".join(self._function.source[statement.extent.start.offset:body.extent.start.offset].decode("utf-8", errors="replace").split())
             head = self._node("decision", f"L{statement.extent.start.line}: {header[:50] + ('…' if len(header) > 50 else '')}", statement.extent.start.line)
             self._connect(entering, head)
             return self._loop(head, body, [(head, "繰り返す")], head)
+        if kind == CK.CXX_THROW_EXPR:  # C++: throw。囲む try の catch へ、無ければ「例外で終了」へつなぐ（呼び出しが送出する例外の辺は示さない）
+            node = self._node("block", self._label(statement), statement.extent.start.line)
+            self._connect(entering, node)
+            self._terminate_raise(node, "throw")
+            return []
+        if kind == CK.CXX_TRY_STMT and parts:
+            try_node = self._node("block", f"L{statement.extent.start.line}: try", statement.extent.start.line)
+            self._connect(entering, try_node)
+            catches = [c for c in parts[1:] if c.kind == CK.CXX_CATCH_STMT]
+            handler_nodes = []
+            for catch in catches:
+                declaration = next((c for c in cf._children(catch) if c.kind == CK.VAR_DECL), None)
+                caught = " ".join(declaration.type.spelling.split()) if declaration is not None else "..."
+                handler_nodes.append(self._node("decision", f"L{catch.extent.start.line}: catch ({caught})", catch.extent.start.line))
+            self._handlers.append(handler_nodes)
+            exits = self._block(self._as_list(parts[0]), [(try_node, "")])
+            self._handlers.pop()
+            for handler in handler_nodes:
+                self._edge(try_node, handler, "送出されれば")
+            for catch, handler in zip(catches, handler_nodes, strict=True):
+                body = [c for c in cf._children(catch) if c.kind != CK.VAR_DECL]
+                exits += self._block(self._as_list(body[0]) if body else [], [(handler, "")])
+            return exits
         if kind == CK.DO_STMT and len(parts) >= 2:
             start = self._node("block", f"L{statement.extent.start.line}: do", statement.extent.start.line)
             self._connect(entering, start)
@@ -189,4 +213,4 @@ class CCfgBuilder(CfgBase):
 
 
 _CONTROL = frozenset({CK.COMPOUND_STMT, CK.IF_STMT, CK.WHILE_STMT, CK.FOR_STMT, CK.DO_STMT, CK.SWITCH_STMT, CK.CASE_STMT, CK.DEFAULT_STMT,
-                      CK.RETURN_STMT, CK.BREAK_STMT, CK.CONTINUE_STMT, CK.GOTO_STMT, CK.LABEL_STMT})
+                      CK.RETURN_STMT, CK.BREAK_STMT, CK.CONTINUE_STMT, CK.GOTO_STMT, CK.LABEL_STMT, CK.CXX_FOR_RANGE_STMT, CK.CXX_TRY_STMT, CK.CXX_THROW_EXPR})

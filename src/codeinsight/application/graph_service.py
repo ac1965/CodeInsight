@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from codeinsight.application.architecture_service import ArchitectureService
-from codeinsight.application.c_flow_service import CFlowService
+from codeinsight.application.c_flow_service import C_FAMILY, CFlowService
 from codeinsight.application.cfg_builder import CfgBuilder
 from codeinsight.application.cfg_builder_c import CCfgBuilder
 from codeinsight.application.cfg_builder_lisp import LispCfgBuilder
@@ -71,7 +71,7 @@ class GraphService:
         language = index.files[symbol.file_id].language
         path = index.path_of(symbol.file_id)
         try:
-            if language == Language.C:
+            if language in C_FAMILY:
                 return CCfgBuilder().build(CFlowService(self._navigation).load(project, index, symbol), path, symbol.qualified_name)
             if language == Language.ELISP:
                 return LispCfgBuilder().build(ElispFlowService(self._navigation).load(project, index, symbol), path, symbol.qualified_name)

@@ -33,7 +33,7 @@ def _flow_symbol(args, navigation, index, project):
 
 
 def _is_c(index, symbol) -> bool:
-    return index.files[symbol.file_id].language == Language.C
+    return index.files[symbol.file_id].language in (Language.C, Language.CPP)  # C++ も Clang AST の同じ解析（_is_c は、C・C++）
 
 
 def _is_elisp(index, symbol) -> bool:
@@ -166,7 +166,7 @@ def cmd_dataflow(args: argparse.Namespace) -> int:
 def cmd_state(args: argparse.Namespace) -> int:
     project, index, navigation, service, stale = _flow_service(args)
     symbol = _flow_symbol(args, navigation, index, project)
-    if _is_c(index, symbol) and symbol.kind == SymbolKind.FUNCTION:
+    if _is_c(index, symbol) and symbol.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD):
         return reading_c.state(args, project, index, navigation, symbol, stale)
     if _is_elisp(index, symbol) and symbol.kind in (SymbolKind.FUNCTION, SymbolKind.MACRO):
         return reading_el.state(args, project, index, navigation, symbol, stale)
@@ -302,7 +302,7 @@ def cmd_risks(args: argparse.Namespace) -> int:
     order = ("low", "medium", "high")
     findings = [f for f in findings if order.index(f.severity) >= order.index(args.min_severity)]
     external = [(f, old) for f, old in ExternalFindingsService(repository).with_staleness(project) if args.tool is None or f.tool == args.tool]
-    covered = (Language.PYTHON, Language.C, Language.ELISP)
+    covered = (Language.PYTHON, Language.C, Language.CPP, Language.ELISP)
     note = coverage_note(index, "リスクの検出", covered=covered)
     if args.format == "json":
         emit_json({

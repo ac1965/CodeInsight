@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## C++ の関数単位の解析
+
+* C と同じ Clang AST の近似を、C++ に広げた（`flow`・`dataflow`・`state`・`exceptions`・`risks`・`understand`・`graph flow`・MCP の `control_flow`）。名前空間・クラスの中のメソッド・コンストラクタ・デストラクタ・演算子・関数テンプレートを検索できる。
+* C++ の構文: 範囲for、try/catch/throw（制御構造・循環的複雑度・制御フロー図）、this 経由のメンバへの書き込み（状態）、`throw` の一覧（同じ関数の catch で捕捉されうるものの印・再送出・呼び出し先を経由した送出の連鎖）、握りつぶし（空の catch・再送出しない `catch (...)` を `swallowed-exception` として検出）。
+* 追えないもの: コンストラクタの初期化子リスト内の書き込み、ラムダの本体、`noexcept`、途中の関数の catch（送出の連鎖で考慮しない）。
+
 ## Python のインスタンス変数・ジェネレータ
 
 * **インスタンス変数をシンボルにした**（`instance_variable`）: メソッドの中の `self.X = ...` を、`X` ごとに最初の代入の位置で抽出（tuple 代入・注釈つき・複合代入・`for`・`with as` を含む。`staticmethod`/`classmethod`/ネストした関数の中、クラス直下に同名の定義がある名前は除く）。narou_dl で 71 件。

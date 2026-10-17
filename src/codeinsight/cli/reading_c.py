@@ -9,6 +9,7 @@ from codeinsight.application.c_flow_service import CFlowService
 from codeinsight.application.flow_service import FlowAnalysisError
 from codeinsight.application.navigation_service import NavigationService
 from codeinsight.cli.common import CliError, emit_json, safe, warn_if_stale
+from codeinsight.domain import Language
 
 _HINT_LABELS = {"fallthrough": "case の落ち込み", "error-return": "エラー値の戻り"}
 _EXIT_LABELS = {
@@ -17,6 +18,7 @@ _EXIT_LABELS = {
     "assert": "assert（条件が偽なら異常終了）",
     "error_return": "エラー値の候補を返す",
     "errno": "errno を設定する",
+    "throw": "例外の送出（throw。C++）",
 }
 _SCOPE_LABELS = {"param": "引数", "local": "ローカル変数", "global": "グローバル変数", "static": "静的変数"}
 
@@ -105,17 +107,20 @@ def exceptions(args: argparse.Namespace, project, index, navigation: NavigationS
         raise CliError(str(exc)) from exc
     if args.format == "json":
         emit_json({
-            "symbol": symbol.qualified_name, "language": "c", "depth": args.depth, "exits": [vars(e) for e in report.direct],
+            "symbol": symbol.qualified_name, "language": index.files[symbol.file_id].language.value, "depth": args.depth, "exits": [vars(e) for e in report.direct],
             "propagated": [propagated_dict(p) for p in report.propagated],
             "unresolved_calls": report.unresolved_calls, "skipped": report.skipped, "truncated": report.truncated,
         })
         return 0
-    print(f"{safe(symbol.qualified_name)} の終了・失敗の経路（Cには例外が無いため、終了呼び出し・エラー値の戻り・errno の手がかり）:")
+    if index.files[symbol.file_id].language == Language.CPP:
+        print(f"{safe(symbol.qualified_name)} の終了・失敗の経路（C++: throw・終了呼び出し・エラー値の戻り・errno の手がかり）:")
+    else:
+        print(f"{safe(symbol.qualified_name)} の終了・失敗の経路（Cには例外が無いため、終了呼び出し・エラー値の戻り・errno の手がかり）:")
     for item in report.direct:
         print(f"  L{item.line:<5} {_EXIT_LABELS[item.kind]}: {safe(item.detail)}")
     if not report.direct:
         print("  この関数の中には確認できませんでした")
-    print(f"\n呼び出し先を経由して終了しうる経路（解決済みの呼び出しを深さ {args.depth} まで。静的な連鎖で、条件によっては実際には通りません）:")
+    print(f"\n呼び出し先を経由して終了・送出しうる経路（解決済みの呼び出しを深さ {args.depth} まで。静的な連鎖で、条件によっては実際には通りません。途中の関数の catch は考慮しません）:")
     for item in report.propagated:
         print(f"  {_route(symbol, item)}")
         print(f"      → {safe(item.origin.qualified_name)}:L{item.line} で {safe(item.detail)}（{_EXIT_LABELS[item.kind]}）")
@@ -170,9 +175,10 @@ def state(args: argparse.Namespace, project, index, navigation: NavigationServic
             if lines:
                 print(f"    {modes[mode]}: " + ", ".join(f"L{a.line}" for a in lines[:10]) + (" …" if len(lines) > 10 else ""))
     if result.parameter_mutations:
-        print("\n  引数を通じた呼び出し元のデータの変更:")
+        print("\n  引数（C++ は this）を通じた呼び出し元のデータの変更:")
         for m in result.parameter_mutations:
-            print(f"    L{m.line} 引数 {safe(m.parameter)}  {safe(m.detail)}")
+            owner = "このオブジェクトのメンバ（this）" if m.parameter == "this" else f"引数 {safe(m.parameter)}"
+            print(f"    L{m.line} {owner}  {safe(m.detail)}")
     if not names and not result.parameter_mutations:
         print("  確認できませんでした")
     warn_if_stale(stale)

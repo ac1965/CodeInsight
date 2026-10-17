@@ -249,7 +249,7 @@ libclang が未対応の C23 構文やGCC固有の属性（`CODEINSIGHT_LIBCLANG
 
 ### 6.4 C++
 
-`.cc`・`.cpp`・`.hpp` など（`.h` はCとして扱う）を、Cと同じ仕組み（libclang）で解析します。名前空間・クラス・メソッド・テンプレート・呼び出し・継承まで。仮想関数・テンプレート特殊化への呼び出しは推定です。`compile_commands.json` があれば使います。関数単位の制御フロー・データフローは未対応です。
+`.cc`・`.cpp`・`.hpp` など（`.h` はCとして扱う）を、Cと同じ仕組み（libclang）で解析します。名前空間・クラス・メソッド・テンプレート・呼び出し・継承まで。仮想関数・テンプレート特殊化への呼び出しは推定です。`compile_commands.json` があれば使います。関数単位の制御フロー・データフロー・状態・例外（throw）・リスク・読解カード・制御フロー図は、Cと同じ仕組みで使えます（`flow`・`dataflow`・`state`・`exceptions`・`risks`・`understand`・`graph flow`。範囲for・try/catch/throw・this 経由の状態を含む。ANALYSIS.md）。コンストラクタの初期化子リスト・ラムダ・`noexcept` は追えません。
 
 ### 6.5 Go
 
