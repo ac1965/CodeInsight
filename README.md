@@ -69,19 +69,34 @@ pip install -e ".[dev]"
 
 C言語解析にはlibclang(PyPIパッケージに同梱)を使用します。追加のClangインストールは不要です。
 
-よく使う操作は `make` から実行できます(`make help` で一覧)。
+### 既定は Docker（`make` がイメージを作って、コンテナで実行する）
+
+解析・資料・ビューアー・AI解説は、**既定で Docker のコンテナの中で動きます**。ホストに必要なのは `docker` と `make` だけです（git・Go・Cの標準ヘッダー・graphviz・Chromium などは、イメージに含まれます。初回とソースの変更後は、イメージを自動で作り直します）。
+
+```bash
+make reading TARGET=../my-repo                         # 資料一式（図・PDFを含む）→ ビューアー（表示されたトークン付きURLを開く）
+make serve TARGET=../my-repo                           # 解析 → ビューアーだけ（ホストの 127.0.0.1 にだけ公開）。ACTIONS=1 で操作モード
+make analyze TARGET=../my-repo                         # 解析だけ（対象は読み取り専用で割り当て。変更しない。DBは ~/.codeinsight を共有）
+make overview TARGET=../my-repo                        # 全体像（status / understand NAME=main なども同じ）
+make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1   # AI解説つき（ホストの Ollama を使う）
+make image                                             # イメージを明示的に作る
+```
+
+ホストの `uv` で動かすときは `RUNTIME=local` を付けます（例: `make analyze TARGET=../my-repo RUNTIME=local`。環境変数でも可）。開発用の `make setup` / `check` / `test` / `lint` は、常にホストで動きます。動的解析（`dynamic-run`）・`reading-c-build`・`ai-eval` は、ホストで実行します。`docker compose` で運用する場合は、下の「`docker compose`」を参照してください。
+
+### ホストで開発・実行する（`uv`）
 
 ```bash
 make setup                              # 依存のインストール
 make check                              # 構文の確認とテスト
-make analyze TARGET=../my-repo          # 解析だけ(対象は変更しない。make reading も最初に同じ解析を行う)
-make overview                           # 全体像(DB=・PROJECT= で解析結果を指定)
-make understand NAME=main               # 関数の読解カード
-make explain-dry NAME=main MODEL=qwen3-coder:latest   # AIへ送る内容の確認(送信しない)
-make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1   # AI解説(送信の許可が必要)
+make analyze TARGET=../my-repo RUNTIME=local          # 解析だけ(対象は変更しない)
+make overview RUNTIME=local                           # 全体像(DB=・PROJECT= で解析結果を指定)
+make understand NAME=main RUNTIME=local               # 関数の読解カード
+make explain-dry NAME=main MODEL=qwen3-coder:latest RUNTIME=local   # AIへ送る内容の確認(送信しない)
+make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1 RUNTIME=local   # AI解説(送信の許可が必要)
 ```
 
-### Docker で動かす(`docker compose up`。Ollama はホストのものを使う)
+### `docker compose`
 
 必要なソフトウェア(git・Go・graphviz・Chromium・make など)はイメージに含まれ、解析結果のDBはホストの `~/.codeinsight` と共有します。
 

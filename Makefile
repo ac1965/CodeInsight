@@ -25,11 +25,41 @@
 #   make reading-pdf OUT=...                                   # 資料の成果物を、1ファイルのPDFにまとめ直す（PDF_NAME= でファイル名）
 #   make reading-clean TARGET=...                              # 成果物（OUT）を削除する（README.md のある場所だけ。対象には触れない）
 #
-# Docker は、このMakefileでは扱わない（docker compose を使う。docs/OPERATIONS.md 10.1c2）。
+# 実行環境: **既定は Docker**（RUNTIME=docker）。解析・資料・ビューアー・AI解説は、イメージ $(IMAGE) の中で動く
+# （git・Go・Cの標準ヘッダー・graphviz・Chromium など、必要なソフトウェアはイメージに含まれる）。ホストに必要なのは docker と make だけ。
+# ホストの uv で動かすときは RUNTIME=local を付ける（環境変数でも可。開発用の setup・test・lint・check は、常にホストで動く）。
+#   - 初回と、ソース・Dockerfile を変えたあとは、イメージを自動で作り直す（make image で明示的にも作れる）。
+#   - 対象（TARGET）は、ホストと同じパスに読み取り専用で割り当てる（変更しない）。解析結果のDBは、ホストの ~/.codeinsight（DOCKER_DATA=）を共有する。
+#   - ビューアー（reading-serve / serve）は、ホストの 127.0.0.1:PORT にだけ公開する。ACTIONS=1 で操作モード（--allow-actions）。OPEN=1 は、Docker では使えない（表示されたURLを開く）。
+#   - AIは、ホストの Ollama（DOCKER_AI_URL。既定 http://host.docker.internal:11434/v1）。動的解析（dynamic-run）と reading-c-build・ai-eval は、ホストで実行する（RUNTIME=local）。
+#   make reading TARGET=../my-repo MODEL=qwen3-coder:latest AI_SEND=1    # Docker で資料一式（AI解説つき）
+#   make serve TARGET=../my-repo ACTIONS=1                               # Docker でビューアー（操作モード）
+#   make analyze TARGET=../my-repo RUNTIME=local                         # ホストの uv で実行
 
+RUNTIME ?= docker
 UV      ?= uv
 PYTEST  ?= $(UV) run pytest
+# コンテナの中（CODEINSIGHT_IN_CONTAINER=1。イメージが設定）では、Docker を入れ子にせず、そのまま実行する
+USE_DOCKER := $(and $(filter docker,$(RUNTIME)),$(if $(CODEINSIGHT_IN_CONTAINER),,1))
+IMAGE        ?= codeinsight:local
+DOCKER       ?= docker
+DOCKER_DATA  ?= $(HOME)/.codeinsight
+DOCKER_AI_URL ?= http://host.docker.internal:11434/v1
+IMAGE_STAMP  := .docker-image.stamp
+ifeq ($(USE_DOCKER),1)
+# 1回のコンテナ起動の共通部分（--init: Ctrl-C を伝える。--user: ホストの利用者の権限で、ホストのDBと出力を書く）
+DOCKER_RUN = $(DOCKER) run --rm -i --init --user $(shell id -u):$(shell id -g) --add-host host.docker.internal:host-gateway \
+  $(shell mkdir -p $(DOCKER_DATA)) -v $(DOCKER_DATA):/data -e CODEINSIGHT_AI_BASE_URL=$(DOCKER_AI_URL) \
+  -e CODEINSIGHT_AI_MODEL -e CODEINSIGHT_AI_API_KEY -e CODEINSIGHT_AI_TIMEOUT -e CODEINSIGHT_AI_MAX_CONTEXT -e CODEINSIGHT_VIEWER_TOKEN \
+  $(if $(TARGET),-v $(TARGET):$(TARGET):ro) $(if $(DB),-v $(dir $(call expand_path,$(DB))):$(dir $(call expand_path,$(DB)))) \
+  $(if $(COMPILE_DB),-v $(COMPILE_DB):$(COMPILE_DB):ro) $(OUT_MOUNT) $(PORT_PUBLISH)
+CODEINSIGHT ?= $(DOCKER_RUN) $(IMAGE)
+PYRUN        = $(DOCKER_RUN) --entrypoint python $(IMAGE)
+else
 CODEINSIGHT ?= $(UV) run codeinsight
+PYRUN        = $(UV) run python
+endif
+LOCAL_CODEINSIGHT = $(UV) run codeinsight
 
 # 読み取り系コマンドに付ける共通オプション（DB・PROJECT は指定されたときだけ）
 # （PROJECT が無く TARGET があれば、TARGET を対象にする。DB は ~ を展開する）
@@ -54,6 +84,9 @@ AI_WORKERS  ?= 2
 # make analyze → make reading の順に実行すると、解析は1回で済む（reading の解析は、変更のないファイルを再解析しない）。
 RDB_OPT      = $(if $(DB),--db $(call expand_path,$(DB)))
 RCI          = $(CODEINSIGHT)
+# 資料の出力先は、Docker では、同じパスで書き込み可能に割り当てる（reading 系のタスクだけ。ビューアーは、ホストの 127.0.0.1 にだけ公開する）
+reading reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-pdf reading-serve reading-serve-run: OUT_MOUNT = -v $(OUT):$(OUT)
+reading-serve-run: PORT_PUBLISH = -p 127.0.0.1:$(PORT):$(PORT)
 RFLAGS       = $(RDB_OPT) --project $(TARGET)
 SERVE       ?= 1
 PORT        ?= 8765
@@ -62,13 +95,30 @@ override BUILD := $(call expand_path,$(BUILD))
 COMPILE_DB  ?= $(if $(wildcard $(BUILD)/compile_commands.json),$(BUILD),)
 override COMPILE_DB := $(call expand_path,$(COMPILE_DB))
 
-.PHONY: help setup test test-fast check compile clean \
+.PHONY: image serve help setup test test-fast check compile clean \
         analyze status overview \
         understand explain-dry explain ai-status ai-eval lint \
         reading reading-serve reading-serve-run reading-pdf reading-check reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-c-build reading-clean
 
 help: ## 使えるタスクの一覧を表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# --- Docker（既定の実行環境） ---
+
+# ソース・Dockerfile・依存を変えたら、イメージを作り直す
+$(IMAGE_STAMP): Dockerfile pyproject.toml uv.lock $(shell find src -type f -not -name '*.pyc' 2>/dev/null)
+	$(DOCKER) build -t $(IMAGE) .
+	@touch $@
+
+image: ## Docker イメージを作る（無い・ソースが変わったときだけ。ほかのタスクも、必要なら自動で作る）
+	@command -v $(DOCKER) >/dev/null 2>&1 || { echo "$(DOCKER) が見つかりません。Docker をインストールするか、RUNTIME=local（ホストの uv）で実行してください"; exit 2; }
+	@$(DOCKER) image inspect $(IMAGE) >/dev/null 2>&1 || rm -f $(IMAGE_STAMP)
+	@$(MAKE) --no-print-directory $(IMAGE_STAMP)
+
+# Docker で実行するタスクは、イメージを先に用意する
+ifeq ($(USE_DOCKER),1)
+analyze status overview understand explain-dry explain ai-status reading-analyze reading-docs reading-graphs reading-functions reading-ai reading-index reading-pdf reading-serve-run: image
+endif
 
 # --- 開発 ---
 
@@ -113,7 +163,7 @@ understand: ## 関数の読解カード（NAME=関数名 が必須）
 # --- AI解説（既定では何も送信しない。送信にはAI_SEND=1が必要） ---
 
 ai-status: ## AIの設定と接続を確認する（ソースは送らない）
-	$(CODEINSIGHT) ai-status $(AI_OPTS) $(if $(DB),--db $(DB))
+	$(CODEINSIGHT) ai-status $(AI_OPTS) $(if $(DB),--db $(call expand_path,$(DB)))
 
 explain-dry: ## AIへ送信される内容を表示する（送信しない。NAME・MODEL が必須）
 	$(if $(NAME),,$(error NAME を指定してください))
@@ -126,10 +176,10 @@ explain: ## AIで解説する（NAME・MODEL・AI_SEND=1 が必須。ローカ�
 	$(if $(filter 1,$(AI_SEND)),,$(error ソースコードをAIへ送信します。許可する場合は AI_SEND=1 を付けてください。内容は make explain-dry で確認できます))
 	$(CODEINSIGHT) explain $(NAME) --allow-send $(AI_OPTS) $(READ_OPTS)
 
-ai-eval: ## AI解説を評価ケース(eval/ai_cases.toml)で採点する（MODEL・AI_SEND=1 が必須。サンプルのみを送信）
+ai-eval: ## AI解説を評価ケース(eval/ai_cases.toml)で採点する（MODEL・AI_SEND=1 が必須。サンプルのみを送信。ホストの uv で実行）
 	$(if $(MODEL),,$(error MODEL を指定してください。例: MODEL=qwen3-coder:latest))
 	$(if $(filter 1,$(AI_SEND)),,$(error サンプルのソースをAIへ送信します。許可する場合は AI_SEND=1 を付けてください。ケースの一覧は codeinsight ai-eval --list))
-	$(CODEINSIGHT) ai-eval --allow-send $(AI_OPTS)
+	$(LOCAL_CODEINSIGHT) ai-eval --allow-send $(AI_OPTS)
 
 
 # ============================================================
@@ -243,7 +293,7 @@ export READING_INDEX
 reading-check:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading TARGET=../my-repo（TARGET の直後は = です。TARGET-… や TARGET ~/… のように、= が抜けていないか確認してください）))
 	@case "$(TARGET)$(OUT)" in *" "*) echo "TARGET / OUT のパスに空白は使えません: $(TARGET) / $(OUT)"; exit 2;; esac
-	@command -v $(firstword $(UV)) >/dev/null 2>&1 || { echo "$(firstword $(UV)) が見つかりません（https://docs.astral.sh/uv/ からインストールするか、UV=... で指定してください）"; exit 2; }
+	@command -v $(if $(USE_DOCKER),$(DOCKER),$(firstword $(UV))) >/dev/null 2>&1 || { echo "$(if $(USE_DOCKER),$(DOCKER) が見つかりません（Docker をインストールするか、RUNTIME=local でホストの uv を使ってください）,$(firstword $(UV)) が見つかりません（https://docs.astral.sh/uv/ からインストールするか、UV=... で指定してください）)"; exit 2; }
 	@test -d "$(TARGET)" || { echo "TARGET がディレクトリではありません: $(TARGET)"; exit 2; }
 	@case "$$(cd "$(TARGET)" && pwd -P)/" in \
 	  "$$(mkdir -p "$(OUT)" && cd "$(OUT)" && pwd -P)/"*) echo "OUT は TARGET の外に指定してください（対象を変更しないため）: $(OUT)"; exit 2;; esac; \
@@ -282,7 +332,7 @@ reading-graphs: reading-analyze ## [資料] 呼び出し・依存・構成の図
 
 reading-functions: reading-docs ## [資料] 主要な関数（上位 TOP 件ずつ）の読解カードを作る
 	@mkdir -p $(OUT)/functions $(OUT)/logs
-	@$(UV) run python -c "$$KEY_FUNCTIONS" $(TOP) < $(OUT)/overview.json > $(OUT)/functions/.names 2>> $(OUT)/logs/functions.log || echo "  ! 主要な関数の一覧を作れませんでした（logs/functions.log）"
+	@$(PYRUN) -c "$$KEY_FUNCTIONS" $(TOP) < $(OUT)/overview.json > $(OUT)/functions/.names 2>> $(OUT)/logs/functions.log || echo "  ! 主要な関数の一覧を作れませんでした（logs/functions.log）"
 	@while IFS="$$(printf '\t')" read -r name path; do \
 	  [ -n "$$name" ] || continue; \
 	  file="$(OUT)/functions/$$(echo "$$name" | sed 's/@\([0-9]*\)$$/_L\1/' | tr -c 'A-Za-z0-9._\n-' '_').txt"; \
@@ -304,16 +354,17 @@ reading-ai: reading-functions ## [資料] AI解説を追記する（AI_SEND=1 �
 reading-index: ## [資料] 目次（README.md）を作る（TARGET 必須）
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-index TARGET=../my-repo))
 	@mkdir -p $(OUT)/logs
-	@$(UV) run python -c "$$READING_INDEX" "$(OUT)" "$(TARGET)" "$(TOP)"
+	@$(PYRUN) -c "$$READING_INDEX" "$(OUT)" "$(TARGET)" "$(TOP)"
 
 reading-pdf: ## [資料] OUT の成果物を、1ファイルのPDFにまとめる（TARGET か OUT が必須。ブラウザが必要。PDF_NAME= でファイル名の基）
 	$(call need_out,reading-pdf)
-	@$(UV) run codeinsight reading-report --out "$(OUT)" $(if $(TARGET),--target "$(TARGET)") $(if $(PDF_NAME),--name $(PDF_NAME))
+	@mkdir -p "$(OUT)"
+	@$(RCI) reading-report --out "$(OUT)" $(if $(TARGET),--target "$(TARGET)") $(if $(PDF_NAME),--name $(PDF_NAME))
 
 reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] 対象のコードリーディング資料一式を OUT に作る（TARGET 必須。PDF=0 でPDFを作らない）
 	@$(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP)
 	@if [ "$(PDF)" != "0" ]; then \
-	  $(UV) run codeinsight reading-report --out "$(OUT)" --target "$(TARGET)" $(if $(PDF_NAME),--name $(PDF_NAME)) || echo "  ! PDFは作れませんでした。他の成果物は作成済みです（HTMLがあればブラウザで印刷→PDF保存もできます）"; \
+	  $(RCI) reading-report --out "$(OUT)" --target "$(TARGET)" $(if $(PDF_NAME),--name $(PDF_NAME)) || echo "  ! PDFは作れませんでした。他の成果物は作成済みです（HTMLがあればブラウザで印刷→PDF保存もできます）"; \
 	  $(MAKE) --no-print-directory reading-index TARGET=$(TARGET) OUT=$(OUT) TOP=$(TOP); \
 	fi
 	@echo "完了: $(OUT)/README.md から読み始められます"
@@ -323,13 +374,16 @@ reading: reading-docs reading-graphs reading-functions reading-ai ## [資料] �
 reading-serve: reading-analyze ## [資料] 解析して、ローカルのWebビューアーを起動する（TARGET 必須。PORT=、OPEN=1。127.0.0.1 のみ・読み取り専用。Ctrl-C で終了）
 	@$(MAKE) --no-print-directory reading-serve-run TARGET=$(TARGET) OUT=$(OUT) PORT=$(PORT) OPEN=$(OPEN)
 
+serve: reading-serve ## ビューアーを起動する（reading-serve の別名。TARGET 必須。ACTIONS=1 で操作モード）
+
 reading-serve-run:
 	$(if $(TARGET),,$(error TARGET を指定してください。例: make reading-serve TARGET=../my-repo))
 	@$(RCI) status $(RFLAGS) > /dev/null 2>&1 || { echo "解析結果がありません（make analyze TARGET=$(TARGET) か make reading-serve TARGET=$(TARGET) で解析してください）"; exit 2; }
 	@echo "Webビューアーを起動します（Ctrl-C で終了）。表示されたURLをブラウザで開いてください。URLにはトークンが含まれます。共有しないでください。"
-	$(RCI) serve $(RFLAGS) --reading-dir $(OUT) --port $(PORT) $(if $(filter 1,$(OPEN)),--open)
+	@$(if $(and $(USE_DOCKER),$(filter 1,$(OPEN))),echo "OPEN=1 は Docker では使えません（表示されたURLを、ホストのブラウザで開いてください）")
+	$(RCI) serve $(RFLAGS) --reading-dir $(OUT) --port $(PORT) $(if $(USE_DOCKER),--host 0.0.0.0) $(if $(filter 1,$(ACTIONS)),--allow-actions) $(if $(and $(filter 1,$(OPEN)),$(if $(USE_DOCKER),,1)),--open)
 
-reading-c-build: reading-check ## [資料] autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）
+reading-c-build: reading-check ## [資料] （ホストで実行）autotools系のC: 別の場所で configure+ビルド記録（ALLOW_BUILD=1 が必須。対象の configure とmakeを実行する）
 	$(if $(filter 1,$(ALLOW_BUILD)),,$(error 対象の configure と make を実行します（対象のコードは変更しませんが、ビルドの手順を動かします）。許可する場合は ALLOW_BUILD=1 を付けてください))
 	@test -x "$(TARGET)/configure" || { echo "$(TARGET)/configure がありません（autoreconf は実行しません。生成済みの configure が必要です）"; exit 2; }
 	@command -v bear >/dev/null || { echo "bear が必要です（brew install bear）"; exit 2; }

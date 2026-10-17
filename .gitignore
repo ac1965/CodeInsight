@@ -14,3 +14,4 @@ venv/
 # CodeInsightの解析結果データ(既定では ~/.codeinsight に保存されるが、念のため)
 .codeinsight/
 .aider*
+.docker-image.stamp

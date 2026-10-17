@@ -493,7 +493,12 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 
 規定は AGENTS.md §3.14（ビューアーの公開範囲・コンテナの中に限る例外）。
 
-解析・ビューアー・AI解説・資料生成を、コンテナで動かせます（`Dockerfile`・`compose.yaml`・`make docker-*`）。
+解析・ビューアー・AI解説・資料生成は、**既定でコンテナで動きます**（`Dockerfile`・`Makefile`・`compose.yaml`）。
+
+* **既定は `make`（`RUNTIME=docker`）**: `make reading TARGET=…`・`make serve TARGET=…`（`ACTIONS=1` で操作モード）・`make analyze`・`status`・`overview`・`understand`・`explain` などが、イメージ `codeinsight:local`（`IMAGE=`）で動きます。イメージは、無い・ソース・`Dockerfile`・`uv.lock` が変わったときに自動で作ります（`make image`）。対象は読み取り専用、DBは `~/.codeinsight`（`DOCKER_DATA=`）、資料の出力は `OUT`、ビューアーはホストの `127.0.0.1:PORT` にだけ公開します。AIは、ホストの Ollama（`DOCKER_AI_URL=`。既定 `http://host.docker.internal:11434/v1`）。`OPEN=1` は使えません（表示されたURLを開く）。
+* **ホストの uv で動かす**: `RUNTIME=local`（環境変数でも可）。`setup`・`check`・`test`・`lint` は常にホスト。**動的解析・`reading-c-build`・`ai-eval` は、ホストで実行します**（コンテナの中に Docker を入れ子にしない・対象の configure を実行する・評価ケースを使うため）。
+* イメージの依存は `uv.lock` の固定した版です（ビルド時だけネットワークを使う）。
+* 操作モード（`ACTIONS=1`）をコンテナで動かすと、再解析・AIの推測は使えますが、動的解析の実行は、コンテナの中に Docker が無いため、できません（画面にその旨が出ます）。ホストで `RUNTIME=local make serve ACTIONS=1` とすれば、動的解析も使えます。
 
 * **必要な個別ソフトウェアは、すべてイメージに入れてあります**: git（変更履歴）、Go（Goアダプターの補助プログラムを作る）、build-essential（Cの標準ヘッダー）、graphviz（図）、Chromium（資料のPDF。コンテナ用に `--no-sandbox` の包み）、make（`make reading`）。ホストに入れる必要はありません。
 * **Ollama はコンテナに含めず、ホスト（macOS など）で動いているものを使います**（コンテナから `http://host.docker.internal:11434/v1`。Ollama の既定の設定（127.0.0.1 で待ち受け）のままで届くことを、macOS の Docker Desktop で確認済み）。

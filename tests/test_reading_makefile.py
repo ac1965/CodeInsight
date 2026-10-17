@@ -188,9 +188,29 @@ def test_make_analyze_and_make_reading_run_the_same_analysis(tmp_path: Path) -> 
     assert db.is_file() and (out / "overview.txt").read_text(encoding="utf-8").strip()
 
 
-def test_makefile_has_no_docker_targets_and_guards_destructive_or_ambiguous_targets(tmp_path: Path) -> None:
-    makefile = (Path(__file__).resolve().parent.parent / "Makefile").read_text(encoding="utf-8")
-    assert "docker run" not in makefile and "docker-" not in makefile  # Docker は docker compose に任せる
+def test_docker_is_the_default_runtime_and_local_is_opt_in(tmp_path: Path, monkeypatch) -> None:
+    """既定の実行環境は Docker。対象は読み取り専用で、DB・出力は割り当て、ビューアーは 127.0.0.1 にだけ公開する。RUNTIME=local でホストの uv。"""
+
+    monkeypatch.delenv("RUNTIME")  # conftest が、他のテストのために local にしているもの
+    target, out = tmp_path / "t", tmp_path / "out"
+    target.mkdir()
+    analyze = _make("-n", "analyze", f"TARGET={target}", f"DOCKER_DATA={tmp_path / 'data'}").stdout
+    assert "docker run" in analyze and f"-v {target}:{target}:ro" in analyze and f"{tmp_path / 'data'}:/data" in analyze and "codeinsight:local analyze" in analyze
+    assert "--user" in analyze and "uv run" not in analyze  # ホストの利用者の権限で動く
+    serve = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "PORT=9123", "ACTIONS=1").stdout
+    assert "-p 127.0.0.1:9123:9123" in serve and "--host 0.0.0.0" in serve and "--allow-actions" in serve and f"-v {out}:{out}" in serve  # ホストの 127.0.0.1 にだけ公開
+    assert "0.0.0.0:9123" not in serve
+    no_open = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "OPEN=1").stdout
+    assert "OPEN=1 は Docker では使えません" in no_open and "--open" not in no_open.split("codeinsight:local")[-1]
+    local = _make("-n", "analyze", f"TARGET={target}", "RUNTIME=local").stdout
+    assert "docker run" not in local and "uv run codeinsight analyze" in local
+    inside = subprocess.run(["make", "--no-print-directory", "-n", "analyze", f"TARGET={target}"], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "CODEINSIGHT_IN_CONTAINER": "1"}).stdout
+    assert "docker run" not in inside  # コンテナの中では、Docker を入れ子にしない
+    for task in ("ai-eval",):  # ホストで動かすタスク
+        assert "docker run" not in _make("-n", task, "MODEL=m", "AI_SEND=1").stdout
+
+
+def test_makefile_guards_destructive_or_ambiguous_targets(tmp_path: Path) -> None:
     # OUT も TARGET も無い reading-pdf / reading-clean は、リポジトリ直下の reading/ を対象にせず、拒否する
     for name in ("reading-pdf", "reading-clean"):
         assert _make(name).returncode != 0

@@ -87,3 +87,4 @@ def _isolate_user_environment(tmp_path_factory: pytest.TempPathFactory, monkeypa
 
     monkeypatch.setenv("CODEINSIGHT_DATA_DIR", str(tmp_path_factory.mktemp("data")))
     monkeypatch.setenv("SERVE", "0")
+    monkeypatch.setenv("RUNTIME", "local")  # Makefile の既定は Docker。テストは、ホストの uv で動かす（Docker の指定は、-n の確認で個別にテストする）

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Docker を既定の実行環境にする
+
+* Makefile の既定を `RUNTIME=docker` にした。`make reading / serve / analyze / status / overview / understand / explain*` は、イメージ `codeinsight:local` のコンテナで動く（イメージは、無い・ソース・Dockerfile・uv.lock の変更で自動で作り直す。`make image`）。対象は読み取り専用、DBは `~/.codeinsight` を共有、ビューアーはホストの 127.0.0.1 にだけ公開。`ACTIONS=1` で操作モード。`RUNTIME=local` でホストの uv。`setup`・`check`・`test`・`lint`・`ai-eval`・`reading-c-build` は常にホスト。コンテナの中では、Docker を入れ子にしない。
+* Dockerfile: 依存を `uv.lock` の固定した版で入れる（`uv export` → `pip install`）。ラベルを追加。compose.yaml: `ACTIONS=1` を追加。実コンテナで、資料一式（PDFを含む）・ビューアー（操作モードの再解析）を確認した。
+
 ## GUI 段階4（操作モード）
 
 * `serve --allow-actions` で、画面（「操作」）から、再解析・AIの推測（単体・一括・取り消し・dry-run。許可は確認せず、送信先を常に表示）・動的解析の計画（表示のみ）と実行（計画の確認コードが必要。コンテナ・ネットワーク遮断・隔離なしは指定不可）を実行できる。未解決の受信箱にも「推測を実行」を追加。既定は読み取り専用のまま。
