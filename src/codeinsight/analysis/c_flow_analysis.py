@@ -650,14 +650,10 @@ class CState:
 
 @dataclass(frozen=True)
 class _Alias:
-    """ローカルのポインタ変数が、関数の中で1回だけ代入された値から指していると分かる先（推定）。"""
+    """ローカルのポインタ変数が、関数の中の代入から指しうる先（流れ非依存の近似）。"""
 
-    name: str  # 指す先の変数名
-    scope: str  # global / static / param
-    how: str  # 代入の式（表示用）
-
-
-_POINTER_NOTE = "ポインタ {pointer} 経由（{pointer} への代入は1箇所だけで、{target} を指すと推定。他の経路での変更は追えない）"
+    targets: tuple[tuple[str, str], ...]  # (指す先の変数名, global / static / param)
+    unknown: bool  # 追えない値（関数の戻り値・フィールドの読み取りなど）も代入されている
 
 
 def _decl_key(declaration: ci.Cursor) -> tuple[str, int]:
@@ -665,10 +661,12 @@ def _decl_key(declaration: ci.Cursor) -> tuple[str, int]:
 
 
 def _pointer_aliases(function: CFunction) -> dict[tuple[str, int], _Alias]:
-    """関数の中で、ローカルのポインタ変数が1回だけ代入され、その先が分かる場合の対応表。
+    """関数の中で、ローカルのポインタ変数が指しうる先の対応表（流れ非依存・フィールド非依存のポインタ解析）。
 
-    次の形だけを扱う: `T *p = &g;` `p = &g.field;` `p = array;`（グローバル・static変数のアドレスや配列）、`p = param;`（ポインタ引数のコピー）。
-    再代入・`p++`・`&p` がある変数、別のポインタのコピーの連鎖、ポインタ値を持つグローバル変数（指す先は不明）は、追えないものとして扱う。
+    代入の左辺・初期化のすべての値を集め、和集合にする（`T *p = &g; ... p = &h;` なら g と h のどちらか）。扱う値: グローバル・static変数の
+    アドレス・配列、ポインタ引数のコピー、別のローカルのポインタのコピー（連鎖をたどる）、`c ? a : b`、ポインタの加減算（同じオブジェクトの中）。
+    NULL は無視する。関数の戻り値・フィールドの読み取り・ポインタ値を持つグローバル変数など、追えない値が1つでもあれば `unknown`
+    （全部の先は列挙できない）。`&p` を取られた変数は、別の経路で書き換えられうるため、追わない。ローカル変数のアドレスは、状態として意味が無いため対象外。
     """
 
     root = function.cursor
@@ -692,38 +690,86 @@ def _pointer_aliases(function: CFunction) -> dict[tuple[str, int], _Alias]:
             parts = _children(node)
             target = _unwrap(parts[0]) if parts else None
             if target is not None and target.kind == CK.DECL_REF_EXPR and local_pointer(target) is not None:
-                declaration = target.referenced
                 if node.kind == CK.BINARY_OPERATOR and _operator(node) == "=" and len(parts) == 2:
-                    assignments.setdefault(_decl_key(declaration), []).append(parts[1])
-                else:
-                    tainted.add(_decl_key(declaration))
-        elif node.kind == CK.UNARY_OPERATOR and _operator(node) in ("++", "--", "&"):
+                    assignments.setdefault(_decl_key(target.referenced), []).append(parts[1])
+                # `p += n`・`p -= n` は、同じオブジェクトの中の移動として、代入には数えない
+        elif node.kind == CK.UNARY_OPERATOR and _operator(node) == "&":
             children = _children(node)
             inner = _unwrap(children[0]) if children else None
             if inner is not None and inner.kind == CK.DECL_REF_EXPR and local_pointer(inner) is not None:
                 tainted.add(_decl_key(inner.referenced))
 
-    aliases: dict[tuple[str, int], _Alias] = {}
-    for key, expressions in assignments.items():
-        if key in tainted or key not in declarations or len(expressions) != 1:
-            continue
-        value = _unwrap(expressions[0])
+    def strip(value: ci.Cursor) -> ci.Cursor:
+        value = _unwrap(value)
         while value.kind == CK.CSTYLE_CAST_EXPR:
             inner = [c for c in _children(value) if c.kind != CK.TYPE_REF]
             if len(inner) != 1:
                 break
             value = _unwrap(inner[0])
-        base = _root_variable(value)
-        if base is None or base.referenced is None:
-            continue
-        scope = _scope_of(base.referenced, root)
+        return value
+
+    def resolve(value: ci.Cursor, seen: frozenset) -> tuple[set[tuple[str, str]], bool]:
+        value = strip(value)
+        if value.kind == CK.CONDITIONAL_OPERATOR:
+            targets: set[tuple[str, str]] = set()
+            unknown = False
+            for branch in _children(value)[1:]:
+                branch_targets, branch_unknown = resolve(branch, seen)
+                targets |= branch_targets
+                unknown = unknown or branch_unknown
+            return targets, unknown
+        if value.kind in (CK.INTEGER_LITERAL, CK.GNU_NULL_EXPR, CK.CXX_NULL_PTR_LITERAL_EXPR):
+            return set(), False
+        if value.kind == CK.BINARY_OPERATOR and _operator(value) in ("+", "-"):
+            operands = _children(value)
+            pointer_operands = [o for o in operands if strip(o).type.kind in (ci.TypeKind.POINTER, ci.TypeKind.CONSTANTARRAY, ci.TypeKind.INCOMPLETEARRAY)]
+            return resolve(pointer_operands[0], seen) if len(pointer_operands) == 1 else (set(), True)
         takes_address = value.kind == CK.UNARY_OPERATOR and _operator(value) == "&"
         is_array = value.type.kind in (ci.TypeKind.CONSTANTARRAY, ci.TypeKind.INCOMPLETEARRAY)
+        if value.kind == CK.DECL_REF_EXPR and local_pointer(value) is not None:  # 別のローカルのポインタのコピー
+            key = _decl_key(value.referenced)
+            if key in seen or key in tainted:
+                return set(), key not in seen
+            found: set[tuple[str, str]] = set()
+            unknown = False
+            for expression in assignments.get(key, []):
+                part_targets, part_unknown = resolve(expression, seen | {key})
+                found |= part_targets
+                unknown = unknown or part_unknown
+            return found, unknown
+        base = _root_variable(value)
+        if base is None or base.referenced is None:
+            return set(), True
+        scope = _scope_of(base.referenced, root)
         if scope in ("global", "static") and (takes_address or is_array):
-            aliases[key] = _Alias(base.spelling, scope, text(function, expressions[0], 40))
-        elif scope == "param" and value.kind == CK.DECL_REF_EXPR and base.referenced.type.kind == ci.TypeKind.POINTER:
-            aliases[key] = _Alias(base.spelling, scope, text(function, expressions[0], 40))
+            return {(base.spelling, scope)}, False
+        if scope == "param" and value.kind == CK.DECL_REF_EXPR and base.referenced.type.kind == ci.TypeKind.POINTER:
+            return {(base.spelling, scope)}, False
+        if scope == "local" and (takes_address or is_array):
+            return set(), False  # ローカル変数・ローカルの配列を指す（状態としては追わない）
+        return set(), True
+
+    aliases: dict[tuple[str, int], _Alias] = {}
+    for key in declarations:
+        if key in tainted or not assignments.get(key):
+            continue
+        targets: set[tuple[str, str]] = set()
+        unknown = False
+        for expression in assignments[key]:
+            found_targets, found_unknown = resolve(expression, frozenset({key}))
+            targets |= found_targets
+            unknown = unknown or found_unknown
+        if targets:
+            aliases[key] = _Alias(tuple(sorted(targets)), unknown)
     return aliases
+
+
+def _pointer_note(pointer: str, alias: _Alias) -> str:
+    names = ", ".join(name for name, _ in alias.targets)
+    if len(alias.targets) == 1 and not alias.unknown:
+        return f"ポインタ {pointer} 経由（{pointer} が指す先は {names} だけと推定。他の経路での変更は追えない）"
+    extra = "。ほかに、追えない値（関数の戻り値・フィールドの読み取りなど）も代入されており、全部は列挙できない" if alias.unknown else ""
+    return f"ポインタ {pointer} 経由（{pointer} は {names} のいずれかを指しうる。流れ非依存のため、実際にどれかは分からない{extra}）"
 
 
 def analyze_state(function: CFunction) -> CState:
@@ -748,17 +794,19 @@ def analyze_state(function: CFunction) -> CState:
             return
         scope = classify(base)
         written_refs.add(base.extent.start.offset)
-        name = base.spelling
         alias = aliases.get(_decl_key(base.referenced)) if scope == "local" and _unwrap(target_expr).kind != CK.DECL_REF_EXPR else None
-        if alias is not None:  # `*p = ...`・`p->f = ...` で、p が1回だけ代入された先への書き込み（推定）
-            scope, name = alias.scope, alias.name
-            detail = f"{detail} [{_POINTER_NOTE.format(pointer=base.spelling, target=alias.name)}]"
-        if scope in ("global", "static"):
-            state.accesses.append(CStateAccess(name, scope, mode, line, detail))
-        elif scope == "param" and name in param_pointers and _unwrap(target_expr).kind != CK.DECL_REF_EXPR:
-            node = _unwrap(target_expr)
-            how = "field_store" if node.kind == CK.MEMBER_REF_EXPR else "subscript_store" if node.kind == CK.ARRAY_SUBSCRIPT_EXPR else "deref_store"
-            state.parameter_mutations.append(CParameterMutation(name, line, how, detail))
+        if alias is not None:  # `*p = ...`・`p->f = ...` で、p が指しうる先への書き込み（推定。複数ならそれぞれ「いずれかを指しうる」）
+            detail = f"{detail} [{_pointer_note(base.spelling, alias)}]"
+            destinations = list(alias.targets)
+        else:
+            destinations = [(base.spelling, scope)]
+        for name, destination_scope in destinations:
+            if destination_scope in ("global", "static"):
+                state.accesses.append(CStateAccess(name, destination_scope, mode, line, detail))
+            elif destination_scope == "param" and name in param_pointers and _unwrap(target_expr).kind != CK.DECL_REF_EXPR:
+                node = _unwrap(target_expr)
+                how = "field_store" if node.kind == CK.MEMBER_REF_EXPR else "subscript_store" if node.kind == CK.ARRAY_SUBSCRIPT_EXPR else "deref_store"
+                state.parameter_mutations.append(CParameterMutation(name, line, how, detail))
 
     def visit(cursor: ci.Cursor) -> None:
         kind = cursor.kind
