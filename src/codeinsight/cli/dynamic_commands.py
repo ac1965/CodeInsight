@@ -139,18 +139,21 @@ def cmd_observed(args: argparse.Namespace) -> int:
         callees = [o for o in observations if o.kind == ObservationKind.CALL and o.symbol_id == symbol.symbol_id]
         callers = [o for o in observations if o.kind == ObservationKind.CALL and o.target_symbol_id == symbol.symbol_id]
         failures = [o for o in observations if o.kind == ObservationKind.FAILURE and o.path == path and symbol.start_line <= (o.start_line or 0) <= symbol.end_line]
-        report.append((run, executed, callers, callees, failures, run.source_hashes.get(path) not in (None, current.get(path))))
+        ios = [o for o in observations if o.kind == ObservationKind.IO and o.symbol_id == symbol.symbol_id]
+        report.append((run, executed, callers, callees, failures, run.source_hashes.get(path) not in (None, current.get(path)), ios))
     if args.format == "json":
         emit_json({"symbol": symbol.qualified_name, "path": path, "runs": [
             {"run_id": r.run_id, "status": r.status.value, "stale": st, "executed_count": sum(o.count for o in ex),
              "callers": [{"name": o.name, "path": o.path, "count": o.count} for o in cr],
              "callees": [{"name": o.target_name, "path": o.target_path, "count": o.count, "in_static": o.target_symbol_id in static_callees} for o in ce],
-             "raised": [{"type": o.detail.get("type"), "line": o.start_line, "count": o.count} for o in fa]}
-            for r, ex, cr, ce, fa, st in report]})
+             "raised": [{"type": o.detail.get("type"), "line": o.start_line, "count": o.count} for o in fa],
+             "io": [{"kind": o.detail.get("kind"), "detail": o.detail.get("detail"), "count": o.count} for o in io]}
+            for r, ex, cr, ce, fa, st, io in report]})
         return 0
     warn_if_stale(stale)
     print(f"観測: {symbol.qualified_name}（{path}:{symbol.start_line}-{symbol.end_line}）— 実行して観測した結果。静的解析の事実とは別です。")
-    for run, executed, callers, callees, failures, is_stale in report:
+    io_labels = {"file_read": "ファイルの読み取り", "file_write": "ファイルの書き込み", "network": "ネットワーク接続", "process": "外部プロセスの起動", "env_read": "環境変数の読み取り"}
+    for run, executed, callers, callees, failures, is_stale, ios in report:
         print(f"\n実行 {run.run_id}（{run.started_at:%Y-%m-%d %H:%M}、{run.status.value}、{safe(' '.join(run.command))}）")
         if is_stale:
             print("  ※ 実行後にこのファイルが変わっているため、位置が対応しない可能性があります（古い観測）。")
@@ -165,6 +168,8 @@ def cmd_observed(args: argparse.Namespace) -> int:
             print(f"  呼び出し先: {safe(o.target_name)} ({o.target_path}) ×{o.count}  [{mark}]")
         for o in failures:
             print(f"  例外: {o.detail.get('type')} L{o.start_line} ×{o.count}")
+        for o in ios:  # 種類だけ。パス・コマンド・値は記録していない（ファイルは、場所の種類。環境変数は、名前）
+            print(f"  入出力: {io_labels.get(o.detail.get('kind'), o.detail.get('kind'))}（{safe(str(o.detail.get('detail')))}）×{o.count}")
     return 0
 
 

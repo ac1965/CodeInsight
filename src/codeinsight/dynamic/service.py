@@ -23,7 +23,7 @@ from codeinsight.dynamic.permission import DynamicPermission
 from codeinsight.dynamic.sandbox import BACKENDS, SandboxPolicy
 from codeinsight.infrastructure.analysis_repository import AnalysisRepository
 
-COLLECTOR_NAMES = {"python": "python-monitoring", "c": "c-gcov"}
+COLLECTOR_NAMES = {"python": "python-monitoring", "c": "c-gcov"}  # Cは、計装の記録が得られた場合は "c-gcov+c-instrument"
 COLLECTOR_LANGUAGES = {"python": {"python"}, "c": {"c", "cpp"}}  # 実行前後のハッシュ照合（対象を変更しない確認）の対象
 COLLECTOR_VERSION = "1"
 
@@ -126,11 +126,16 @@ class DynamicAnalysisService:
             observations = to_observations(run_id, result.observation, SymbolMatcher(index))
             if result.observation.get("dropped_edges"):
                 notes.append(f"呼び出しの辺が上限を超えたため、{result.observation['dropped_edges']}件を記録していません。")
+        collector_name = COLLECTOR_NAMES[permission.collector]
+        if permission.collector == "c" and "instrument" in (result.observation or {}).get("mechanism", ""):
+            collector_name += "+c-instrument"
+        elif permission.collector == "c" and status == RunStatus.COMPLETED:
+            notes.append("呼び出しの辺・入出力は、観測できませんでした（コンテナに ar・addr2line が無い、または計装の層をビルドできなかった）。関数・行の実行回数（gcov）だけです。")
         exit_code = result.observation.get("exit_code") if result.observation else result.returncode
         mechanism = result.observation.get("mechanism", "") if result.observation else ""
         run = DynamicRun(
             run_id, project.project_id, started, permission.command, permission.summary(),
-            SandboxPolicy.from_permission(permission).describe() | {"image": permitted.image, "docker": result.docker_argv}, COLLECTOR_NAMES[permission.collector],
+            SandboxPolicy.from_permission(permission).describe() | {"image": permitted.image, "docker": result.docker_argv}, collector_name,
             f"{COLLECTOR_VERSION}/{mechanism}" if mechanism else COLLECTOR_VERSION, status, project.repository_revision, before,
             exit_code, round(result.duration_seconds, 3), notes,
         )

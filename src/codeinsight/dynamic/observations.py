@@ -67,6 +67,14 @@ def to_observations(run_id: str, data: dict, matcher: SymbolMatcher) -> list[Obs
         out.append(Observation(_oid(run_id, "raise", item["type"], item["file"], item["line"]), run_id, ObservationKind.FAILURE,
                                start_line=item["line"], path=item["file"], name=item["function"], count=item["count"],
                                detail={"what": "raised", "type": item["type"]}))
+    for item in data.get("io", []):  # 入出力の種類（file_read・file_write・network・process・env_read）。パス・コマンド・値は記録されていない
+        caller = item.get("caller")
+        path, name = (caller["file"], caller["qualname"]) if caller else ("", "")
+        io_line: int | None = caller["line"] if caller else None
+        matched = matcher.match(path, name, io_line or 0) if caller else None
+        symbol_id = matched.symbol_id if matched else None
+        out.append(Observation(_oid(run_id, "io", item["kind"], path, name, io_line, item.get("detail", "")), run_id, ObservationKind.IO, symbol_id=symbol_id, start_line=io_line,
+                               path=path, name=name, count=item["count"], detail={"what": "io", "kind": item["kind"], "detail": item.get("detail", "")}))
     uncaught = data.get("uncaught")
     if uncaught:
         out.append(Observation(_oid(run_id, "uncaught"), run_id, ObservationKind.FAILURE, start_line=uncaught.get("line"),

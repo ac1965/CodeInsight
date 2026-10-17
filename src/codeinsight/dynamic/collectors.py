@@ -23,7 +23,7 @@ COLLECTORS: tuple[CollectorSpec, ...] = (
     CollectorSpec("python-monitoring", "python", (K.CALL, K.COVERAGE, K.FAILURE), "sys.monitoring（3.12+）/ sys.settrace", implemented=True),
     CollectorSpec("python-audit", "python", (K.IO,), "sys.addaudithook（ファイル・ネットワーク・プロセスの監査イベント）"),
     CollectorSpec("c-gcov", "c", (K.COVERAGE,), "gcov（--coverage で、作業領域の複製を再コンパイル。関数・行の実行回数のみ。呼び出しの辺は得られない）", needs_rebuild=True, implemented=True),
-    CollectorSpec("c-instrument", "c", (K.CALL, K.TIMING), "-finstrument-functions（再コンパイル）", needs_rebuild=True),
+    CollectorSpec("c-instrument", "c", (K.CALL, K.IO), "-finstrument-functions と薄い実行時の層（呼び出しの辺と、入出力の種類。addr2line で関数名にする。パス・コマンド・値は記録しない）", needs_rebuild=True, implemented=True),
     CollectorSpec("c-syscall", "c", (K.IO, K.FAILURE), "strace / dtrace / ltrace（OSによる）"),
 )
 

@@ -6,6 +6,8 @@
 * 実行された関数（ファイル・修飾名・開始行）と、関数の呼び出し（呼び出し元・呼び出し先・回数）
 * 実行された行（ファイルごと）
 * 送出された例外の型・位置・回数（捕捉されたものを含む）と、捕捉されずに終了させた例外
+* 入出力の種類（ファイルを開く・ネットワーク接続・外部プロセスの起動・環境変数の設定）。監査フック（`sys.addaudithook`）による。
+  **パス・コマンド・アドレスなどの値は記録しない**（ファイルは、場所の種類だけ: project / temp / system / other。環境変数は名前）。環境変数の読み取りは、監査イベントが無いため観測できない
 * 終了コード
 
 Python 3.12 以降は `sys.monitoring`、それ以前は `sys.settrace` を使う（環境変数 CODEINSIGHT_COLLECTOR_MECHANISM=settrace で、後者を強制できる）。
@@ -19,11 +21,14 @@ import json
 import os
 import runpy
 import sys
+import tempfile
 import time
 import traceback
 from collections import Counter
 from pathlib import Path
+from types import FrameType
 
+MAX_IO = 2_000
 MAX_EDGES = 50_000
 MAX_FAILURES = 500
 SCHEMA = "codeinsight.observation/1"
@@ -38,6 +43,59 @@ class Recorder:
         self.lines: dict[str, set[int]] = {}
         self.raised: Counter[tuple[str, str, int, str]] = Counter()  # (型, 相対パス, 行, 関数) -> 回数
         self.dropped_edges = 0
+        self.io: Counter[tuple[str, str, str, int, str]] = Counter()  # (種類, 相対パス, 関数, 行, 詳細) -> 回数
+        self.recording = False
+
+    def path_class(self, path: object) -> str:
+        """ファイルの場所の種類（パスそのものは記録しない）。"""
+
+        if isinstance(path, bytes):
+            path = os.fsdecode(path)
+        if not isinstance(path, str):
+            return "other"
+        absolute = os.path.realpath(path)
+        if (absolute + os.sep).startswith(self.root) or absolute + os.sep == self.root:
+            return "project"
+        temp = os.path.realpath(tempfile.gettempdir()) + os.sep
+        if absolute.startswith(("/tmp/", "/var/tmp/", "/private/tmp/", temp)):
+            return "temp"
+        if absolute.startswith(("/etc/", "/usr/", "/lib", "/proc/", "/dev/", "/sys/", "/opt/")):
+            return "system"
+        return "other"
+
+    def on_audit(self, event: str, args: tuple) -> None:
+        if not self.recording:
+            return
+        self.recording = False  # この関数の中の操作（パスの解決など）を、観測しない
+        try:
+            self._audit(event, args)
+        finally:
+            self.recording = True
+
+    def _audit(self, event: str, args: tuple) -> None:
+        kind = detail = None
+        if event == "open" and args:
+            flags = args[2] if len(args) > 2 and isinstance(args[2], int) else 0
+            mode = args[1] if len(args) > 1 and isinstance(args[1], str) else ""
+            writing = bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)) or any(c in mode for c in "wax+")
+            kind, detail = ("file_write" if writing else "file_read"), self.path_class(args[0])
+        elif event == "socket.connect":
+            kind, detail = "network", "connect"
+        elif event in ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn"):
+            kind, detail = "process", event.split(".")[-1]
+        elif event in ("os.putenv", "os.unsetenv") and args and isinstance(args[0], (str, bytes)):
+            kind, detail = "env_write", os.fsdecode(args[0])
+        if kind is None:
+            return
+        frame: FrameType | None = sys._getframe(3)  # noqa: SLF001 - 監査フック（on_audit → _audit の呼び出しの上）の呼び出し元から、対象のコードのフレームを探す
+        while frame is not None:
+            path = self.relative(frame.f_code.co_filename)
+            if path is not None:
+                key = (kind, path, getattr(frame.f_code, "co_qualname", frame.f_code.co_name).replace(".<locals>.", "."), frame.f_lineno, str(detail))
+                if key in self.io or len(self.io) < MAX_IO:
+                    self.io[key] += 1
+                return
+            frame = frame.f_back
 
     def relative(self, filename: str) -> str | None:
         cached = self._names.get(filename, ...)
@@ -174,9 +232,11 @@ def main() -> int:
     recorder = Recorder(root)
     forced = os.environ.get("CODEINSIGHT_COLLECTOR_MECHANISM")
     mechanism = start_monitoring(recorder) if hasattr(sys, "monitoring") and forced != "settrace" else start_settrace(recorder)
+    sys.addaudithook(lambda event, hook_args: recorder.on_audit(event, hook_args))  # 入出力の種類の観測。フックは外せないため、recording で有効・無効を切り替える
     started = time.monotonic()
     exit_code = 0
     uncaught: dict | None = None
+    recorder.recording = True
     try:
         run_target(command, root)
     except SystemExit as exc:
@@ -188,6 +248,7 @@ def main() -> int:
         last = frames[-1] if frames else None
         uncaught = {"type": type(exc).__name__, "file": recorder.relative(last.filename) if last else None, "line": last.lineno if last else None, "function": last.name if last else None}
     finally:
+        recorder.recording = False
         stop_tracing(mechanism)
     duration = time.monotonic() - started
     result = {
@@ -199,6 +260,10 @@ def main() -> int:
         ],
         "lines": {path: sorted(numbers) for path, numbers in sorted(recorder.lines.items())},
         "raised": [{"type": t, "file": f, "line": n, "function": q, "count": c} for (t, f, n, q), c in sorted(recorder.raised.items())[:MAX_FAILURES]],
+        "io": [
+            {"kind": kind, "caller": {"file": path, "qualname": name, "line": line}, "detail": detail, "count": count}
+            for (kind, path, name, line, detail), count in sorted(recorder.io.items())
+        ],
         "uncaught": uncaught, "dropped_edges": recorder.dropped_edges,
     }
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")

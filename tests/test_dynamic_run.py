@@ -266,3 +266,33 @@ def test_container_missing_command_and_uncaught_exception_are_recorded_as_failed
     missing = service.run(project, DynamicPermission(allow_run=True, command=("no_such.py",)), index, repository)
     assert missing.run.status == RunStatus.FAILED
     repository.close()
+
+
+IO_SAMPLE = (
+    "import os, subprocess, sys, tempfile\n"
+    "def reads():\n"
+    "    with open(__file__) as f:\n"
+    "        return len(f.read())\n"
+    "def writes():\n"
+    "    with open(os.path.join(tempfile.gettempdir(), 'ci_io_probe.txt'), 'w') as f:\n"
+    "        f.write('secret-value-must-not-be-recorded')\n"
+    "def spawns():\n"
+    "    subprocess.run([sys.executable, '-c', 'pass'])\n"
+    "def sets_env():\n"
+    "    os.putenv('CI_PROBE_NAME', 'secret-env-value')\n"
+    "reads(); writes(); spawns(); sets_env()\n"
+)
+
+
+def test_python_io_kinds_are_observed_without_paths_commands_or_values(db: str, project_dir: Path) -> None:
+    (project_dir / "io_probe.py").write_text(IO_SAMPLE, encoding="utf-8")
+    assert main(["analyze", str(project_dir), "--db", db]) == 0
+    repository, project, index = load(db)
+    outcome = DynamicAnalysisService().run(project, DynamicPermission(allow_run=True, command=("io_probe.py",)), index, repository, run_executor=local_executor)
+    assert outcome.run.status == RunStatus.COMPLETED
+    io = {(o.name, o.detail["kind"], o.detail["detail"]) for o in outcome.observations if o.kind == ObservationKind.IO}
+    assert ("reads", "file_read", "project") in io and ("writes", "file_write", "temp") in io  # 場所の種類だけ
+    assert ("spawns", "process", "Popen") in io and ("sets_env", "env_write", "CI_PROBE_NAME") in io  # 環境変数は、名前だけ
+    serialized = json.dumps([o.detail for o in outcome.observations])
+    assert "secret-value-must-not-be-recorded" not in serialized and "secret-env-value" not in serialized and "ci_io_probe" not in serialized  # パス・値は記録しない
+    repository.close()

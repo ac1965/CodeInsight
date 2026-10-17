@@ -113,7 +113,7 @@ def test_c_run_records_function_execution_and_never_modifies_the_target(project_
     index = ProjectIndex.load(repository, project.project_id)
     permission = DynamicPermission(allow_run=True, command=("sh", "build.sh"), collector="c")
     outcome = DynamicAnalysisService().run(project, permission, index, repository, run_executor=local_c_executor)
-    assert outcome.run.status == RunStatus.COMPLETED and outcome.run.collector == "c-gcov"
+    assert outcome.run.status == RunStatus.COMPLETED and outcome.run.collector.startswith("c-gcov")
     executed = {o.name: o.count for o in outcome.observations if o.detail.get("what") == "function"}
     assert executed["twice"] == 3 and executed["main"] == 1 and "never_called" not in executed  # 観測されなかった関数は記録しない
     assert any(o.symbol_id for o in outcome.observations if o.name == "twice")  # 解析結果のシンボルに対応づく
@@ -187,7 +187,7 @@ def test_c_container_end_to_end_with_gcov(project_dir: Path, tmp_path: Path, cap
     index = ProjectIndex.load(repository, project.project_id)
     permission = DynamicPermission(allow_run=True, command=("sh", "build.sh"), collector="c")
     outcome = DynamicAnalysisService().run(project, permission, index, repository)
-    assert outcome.run.status == RunStatus.COMPLETED and outcome.run.collector == "c-gcov", outcome.stderr_tail
+    assert outcome.run.status == RunStatus.COMPLETED and outcome.run.collector.startswith("c-gcov"), outcome.stderr_tail
     executed = {o.name: o.count for o in outcome.observations if o.detail.get("what") == "function"}
     assert executed["twice"] == 3 and executed["main"] == 1 and "never_called" not in executed
     assert any(o.symbol_id for o in outcome.observations if o.name == "twice")
@@ -214,3 +214,63 @@ def test_c_container_isolation_on_the_real_container(project_dir: Path, tmp_path
     assert seen == {"network": "blocked", "target": "readonly", "rootfs": "readonly", "unprivileged": "1", "secret": "None"}
     assert not (project_dir / "x.txt").exists() and "must-not-leak" not in json.dumps(outcome.run.sandbox)
     repository.close()
+
+
+C_IO_SAMPLE = {
+    "main.c": '#include <stdio.h>\n#include <stdlib.h>\n#include "lib.h"\nstatic int helper(int x) { return twice(x) + 1; }\nint main(void) {\n    const char *home = getenv("HOME");\n    FILE *f = fopen("/etc/hostname", "r");\n    if (f) fclose(f);\n    FILE *g = fopen("out.txt", "w");\n    if (g) { fputs("secret-value-must-not-be-recorded", g); fclose(g); }\n    int t = 0;\n    for (int i = 0; i < 3; i++) t += helper(i);\n    printf("%d %d\\n", t, home != NULL);\n    return 0;\n}\n',
+    "lib.c": "#include \"lib.h\"\nint twice(int x) { return x * 2; }\nint never_called(void) { return 1; }\n",
+    "lib.h": "int twice(int x);\nint never_called(void);\n",
+    "build.sh": "set -e\n$CC main.c lib.c -o app\n./app\n",
+}
+
+
+@c_container
+def test_c_container_observes_call_edges_and_io_kinds_without_values(tmp_path: Path, capsys) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    for name, text in C_IO_SAMPLE.items():
+        (root / name).write_text(text, encoding="utf-8")
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(root), "--db", db]) == 0
+    capsys.readouterr()
+    repository = AnalysisRepository(Path(db))
+    project = repository.list_projects()[0]
+    index = ProjectIndex.load(repository, project.project_id)
+    outcome = DynamicAnalysisService().run(project, DynamicPermission(allow_run=True, command=("sh", "build.sh"), collector="c"), index, repository)
+    assert outcome.run.status == RunStatus.COMPLETED and outcome.run.collector == "c-gcov+c-instrument", outcome.stderr_tail
+    calls = {(o.name, o.target_name): o.count for o in outcome.observations if o.kind == ObservationKind.CALL}
+    assert calls == {("main", "helper"): 3, ("helper", "twice"): 3}  # 呼び出しの辺（回数つき）。libc の関数は、プロジェクトの辺ではない
+    io = {(o.name, o.detail["kind"], o.detail["detail"]) for o in outcome.observations if o.kind == ObservationKind.IO}
+    assert {("main", "env_read", "HOME"), ("main", "file_read", "system"), ("main", "file_write", "project")} <= io  # 種類・場所の種類・環境変数の名前だけ
+    assert "secret-value-must-not-be-recorded" not in json.dumps([o.detail for o in outcome.observations]) and "out.txt" not in json.dumps([o.detail for o in outcome.observations])
+    diff = compare(index, outcome.run, outcome.observations)
+    assert diff.static_only == [] and diff.observed_only == [] and len(diff.both) == 2  # 辺を観測できるので、静的との比較ができる（両方に2本）
+    assert not any("呼び出しの辺を観測できない" in n for n in diff.notes)
+    repository.close()
+    capsys.readouterr()
+    assert main(["observed", "main", "--db", db]) == 0
+    out = capsys.readouterr().out
+    assert "入出力: 環境変数の読み取り（HOME）" in out and "ファイルの書き込み（project）" in out
+
+
+INSTRUMENT_TEXT = GCOV_TEXT + """\
+==CALLS
+2\thelper\t/tmp/ci/src/m.c:2\tmain\t/tmp/ci/src/m.c:6
+1\thelper\t/tmp/ci/src/m.c:2\tmain\t/tmp/ci/src/m.c:7
+3\tinline_fn\t/tmp/ci/src/lib/../util.h:1\thelper\t/tmp/ci/src/m.c:2
+5\tprintf\t/usr/include/stdio.h:9\tmain\t/tmp/ci/src/m.c:6
+==IO
+1\tfile_read\tmain\t/tmp/ci/src/m.c:6\tsystem
+2\tfile_write\tmain\t/tmp/ci/src/m.c:7\tproject
+1\tenv_read\tmain\t/tmp/ci/src/m.c:6\tHOME
+==DROPPED\t0\t1
+"""
+
+
+def test_parse_instrumentation_sections_merges_edges_and_drops_library_functions() -> None:
+    data = c_observation.parse(INSTRUMENT_TEXT, 0)
+    assert data["mechanism"] == "gcov+instrument" and data["dropped_edges"] == 0 and data["dropped_io"] == 1
+    edges = {(c["caller"]["qualname"], c["callee"]["qualname"]): (c["count"], c["caller"]["line"]) for c in data["calls"]}
+    assert edges == {("main", "helper"): (3, 6), ("helper", "inline_fn"): (3, 2)}  # 呼び出し箇所が複数でも1本にまとめ（回数は合算・行は最小）、ライブラリ（printf）の辺は含めない
+    assert {(i["kind"], i["detail"], i["count"]) for i in data["io"]} == {("file_read", "system", 1), ("file_write", "project", 2), ("env_read", "HOME", 1)}
+    assert c_observation.parse(GCOV_TEXT, 0)["mechanism"] == "gcov"  # 計装の記録が無ければ、gcov だけ（辺は観測できていない）

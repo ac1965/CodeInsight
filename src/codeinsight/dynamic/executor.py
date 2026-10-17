@@ -28,6 +28,8 @@ DEFAULT_IMAGE_C = "gcc:14"  # Cの収集器（gcov）には、C のツールチ�
 COLLECTOR_SCRIPT = Path(__file__).parent / "runtime" / "pycollect.py"
 C_COLLECTOR_SCRIPT = Path(__file__).parent / "runtime" / "ccollect.sh"
 CONTAINER_C_COLLECTOR = "/collector/ccollect.sh"
+C_SHIM_SOURCE = Path(__file__).parent / "runtime" / "ci_shim.c"
+CONTAINER_C_SHIM = "/collector/ci_shim.c"
 CONTAINER_TARGET = "/target"
 CONTAINER_COLLECTOR = "/collector/pycollect.py"
 CONTAINER_OUT = "/out"
@@ -106,6 +108,7 @@ def build_argv(run: PermittedRun, out_dir: Path, container_name: str) -> tuple[l
         "--ulimit", f"fsize={policy.max_file_size_mb * 1024 * 1024}",
         "-v", f"{run.root}:{CONTAINER_TARGET}:ro",
         "-v", f"{(C_COLLECTOR_SCRIPT if is_c else COLLECTOR_SCRIPT).resolve()}:{CONTAINER_C_COLLECTOR if is_c else CONTAINER_COLLECTOR}:ro",
+        *(["-v", f"{C_SHIM_SOURCE.resolve()}:{CONTAINER_C_SHIM}:ro"] if is_c else []),
         "-v", f"{out_dir}:{CONTAINER_OUT}:rw",
         "-w", CONTAINER_TARGET,
         *(["-e", "HOME=/tmp"] if is_c else ["-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "PYTHONPATH=" + CONTAINER_TARGET]),

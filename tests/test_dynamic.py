@@ -73,7 +73,7 @@ def test_domain_models_and_collector_catalog() -> None:
     assert RunStatus.DENIED.value == "denied" and RunStatus.TARGET_MODIFIED.value == "target_modified"
     run = DynamicRun("r1", "p1", __import__("datetime").datetime.now(), ("pytest",), {}, {}, "python-monitoring", "0", RunStatus.DENIED)
     assert run.status == RunStatus.DENIED and Observation("o1", "r1", ObservationKind.CALL).count == 1
-    assert {c.name for c in COLLECTORS if c.implemented} == {"python-monitoring", "c-gcov"}  # 実装済みの収集器だけが、実行できる
+    assert {c.name for c in COLLECTORS if c.implemented} == {"python-monitoring", "c-gcov", "c-instrument"}  # 実装済みの収集器だけが、実行できる
     assert {c.name for c in collectors_for({"c"})} == {"c-gcov", "c-instrument", "c-syscall"}
     assert all(c.needs_rebuild for c in COLLECTORS if c.name in ("c-gcov", "c-instrument"))  # 再コンパイルを伴うものを区別する
 
@@ -96,8 +96,12 @@ def test_the_dynamic_code_contains_no_way_to_execute_programs() -> None:
 def test_only_the_executor_runs_programs_and_never_through_a_shell() -> None:
     source = (ROOT / "src" / "codeinsight" / "dynamic" / "executor.py").read_text(encoding="utf-8")
     assert "shell=True" not in source and not re.search(r"\bos\.(system|exec\w*|spawn\w*|popen)\b|\beval\(|\bexec\(|__import__", source)
-    users = [p.name for p in (ROOT / "src" / "codeinsight").rglob("*.py") if "subprocess" in p.read_text(encoding="utf-8") and "dynamic" in p.parts]
-    assert users == ["executor.py"]  # 動的解析の中で subprocess を使うのは、executor.py だけ
+    users = [p.name for p in (ROOT / "src" / "codeinsight").rglob("*.py") if "subprocess" in p.read_text(encoding="utf-8") and "dynamic" in p.parts and "runtime" not in p.parts]
+    assert users == ["executor.py"]  # ホストで動く動的解析のコードのうち、subprocess を使うのは、executor.py だけ
+    # コンテナの中で動く収集器（runtime/）は、監査イベントの名前に subprocess が現れるが、プログラムを起動する呼び出しは持たない
+    launch = re.compile(r"import subprocess|from subprocess|\bsubprocess\.(run|Popen|call|check_output|check_call)\(|\bos\.(system|popen|spawn\w*|exec\w*)\(")
+    runtime = [p.name for p in (ROOT / "src" / "codeinsight" / "dynamic" / "runtime").glob("*.py") if launch.search(p.read_text(encoding="utf-8"))]
+    assert runtime == []
 
 
 def test_service_run_checks_permission_before_anything_else(tmp_path: Path) -> None:

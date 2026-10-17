@@ -121,8 +121,8 @@ def compare(index: ProjectIndex, run: DynamicRun, observations: list[Observation
         )
         result.observed_only.append(edge(caller_id, callee_id, count=count, candidates=candidates,
                                          reason="" if candidates else "呼び出し元に、未解決・曖昧な呼び出しも見つかりません"))
-    spec = next((c for c in COLLECTORS if c.name == run.collector), None)
-    observes_calls = spec is None or ObservationKind.CALL in spec.kinds
+    specs = [c for name in run.collector.split("+") for c in COLLECTORS if c.name == name]
+    observes_calls = not specs or any(ObservationKind.CALL in spec.kinds for spec in specs)
     if not observes_calls:
         result.notes.append(
             f"この実行の収集器（{run.collector}）は、呼び出しの辺を観測できないため、辺の比較（観測のみ・静的のみ）はしていません。"
