@@ -80,18 +80,26 @@ class ExplanationService:
         context = self._builder().for_path(project, index, source, target)
         return self._run(project, index, context, None, dry_run, save)
 
+    def infer_targets(self, project: Project, index: ProjectIndex, symbol: Symbol, *, dry_run: bool = False, save: bool = True) -> ExplanationResult:
+        """未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる（解析結果は変えない。【推論】つきの解説として、別に保存する）。
+
+        利用者の指示により、送信の許可（--allow-send）なしで実行できる。送信先が外部の場合の追加の許可（--allow-remote）は、必要。"""
+
+        context = self._builder().for_inference(project, index, symbol)
+        return self._run(project, index, context, None, dry_run, save, require_send=False)
+
     def ask(self, project: Project, index: ProjectIndex, question: str, *, dry_run: bool = False, save: bool = True) -> ExplanationResult:
         context = self._builder().for_question(project, index, question)
         return self._run(project, index, context, question, dry_run, save)
 
     # --- 共通の流れ ---
 
-    def _run(self, project: Project, index: ProjectIndex, context: Context, question: str | None, dry_run: bool, save: bool) -> ExplanationResult:
+    def _run(self, project: Project, index: ProjectIndex, context: Context, question: str | None, dry_run: bool, save: bool, require_send: bool = True) -> ExplanationResult:
         messages = PromptBuilder().build(context, question)
         if dry_run:
             return ExplanationResult(context, messages, dry_run=True)
 
-        self._config.check_consent(require_model=self._provider is None)
+        self._config.check_consent(require_model=self._provider is None, require_send=require_send)
         provider = self._make_provider()
         completion = provider.complete(messages, temperature=self._config.temperature, max_tokens=self._config.max_tokens)
         return self._record(project, index, context, question, messages, provider, completion, save)

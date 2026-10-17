@@ -7,7 +7,7 @@ from codeinsight.ai.retrieval import retrieve_symbols
 from codeinsight.application.navigation_service import NavigationService
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.understand_service import Understanding, UnderstandService
-from codeinsight.domain import Project, ResolutionStatus, Symbol, SymbolKind
+from codeinsight.domain import Project, ReferenceKind, ResolutionStatus, Symbol, SymbolKind
 
 
 class ContextError(Exception):
@@ -153,6 +153,49 @@ class ContextBuilder:
             self._related(project, index, symbol, card, budget)
         else:
             context.notes.append("ソースコード本体は含めていません（--no-source）。解析結果の事実のみです。")
+        return context
+
+    def for_inference(self, project: Project, index: ProjectIndex, symbol: Symbol) -> Context:
+        """未解決・曖昧な呼び出しの推測用。関数の解析結果とソースに、未解決・曖昧な呼び出しの一覧、置き場の代入・初期化の箇所、候補の関数のソースを加える。
+        未解決・曖昧な呼び出しが無ければ、AIに問い合わせる意味がないため、ContextError にする。"""
+
+        pending = [
+            hit for hit in self._navigation.callees(index, symbol)
+            if hit.reference.reference_kind == ReferenceKind.CALL and hit.reference.resolution_status in (ResolutionStatus.UNRESOLVED, ResolutionStatus.AMBIGUOUS)
+        ]
+        if not pending:
+            raise ContextError(f"{symbol.qualified_name} には、未解決・曖昧な呼び出しがありません（AIの推測の対象がありません）。")
+        base = self.for_symbol(project, index, symbol)
+        context = Context("inference", symbol.qualified_name, base.blocks, base.notes)
+        budget = _Budget(context, self._max_chars // 2)
+        path = index.path_of(symbol.file_id)
+        budget._counter = len(context.blocks)
+        lines, spans = [], []
+        for hit in pending[:30]:
+            reference = hit.reference
+            state = "曖昧（候補が複数）" if reference.resolution_status == ResolutionStatus.AMBIGUOUS else "未解決（静的に確定できない）"
+            lines.append(f"L{reference.source_location.start_line} `{reference.target_name}` — {state}: {reference.note}")
+            spans.append((path, reference.source_location.start_line, reference.source_location.start_line))
+        budget.add_facts("未解決・曖昧な呼び出し（推測の対象）", lines, spans)
+        slots = {h.reference.slot_key for h in pending if h.reference.slot_key}
+        if slots:
+            sites = [
+                f"{index.path_of(r.source_location.file_id)}:{r.source_location.start_line} `{r.target_name}`"
+                for r in index.references if r.slot_key in slots and r.reference_kind == ReferenceKind.FUNCTION_REF
+            ][:30]
+            site_spans = [(index.path_of(r.source_location.file_id), r.source_location.start_line, r.source_location.start_line)
+                          for r in index.references if r.slot_key in slots and r.reference_kind == ReferenceKind.FUNCTION_REF][:30]
+            if sites:
+                budget.add_facts("同じ置き場へ関数が代入・初期化されている箇所（解析器が確認できたもの）", sites, site_spans)
+        if self._include_source:
+            names = {name.strip().rstrip("］") for hit in pending for name in _candidate_names(hit.reference.note)}
+            by_name = {s.qualified_name: s for s in index.symbols.values()}
+            for name in sorted(names)[:5]:
+                candidate = by_name.get(name)
+                if candidate is not None and candidate.symbol_id != symbol.symbol_id:
+                    candidate_path = index.path_of(candidate.file_id)
+                    budget.add_source("source", f"候補 {candidate.qualified_name}", candidate_path, self._read(project, index, candidate_path), candidate.start_line, candidate.end_line, 0.3)
+        context.notes.append("この文脈は、AIの推測（解析結果ではない）のために作りました。推測は、解析結果の解決状態を変えません。")
         return context
 
     def _related(self, project: Project, index: ProjectIndex, symbol: Symbol, card: Understanding, budget: _Budget) -> None:
@@ -414,3 +457,14 @@ def _symbol_facts(index: ProjectIndex, symbol: Symbol, card: Understanding, navi
     for text in card.limitations:
         facts.append(f"解析上の制約: {text}")
     return facts, spans
+
+
+def _candidate_names(note: str) -> list[str]:
+    """解決の理由（`［候補: … は a, b。…］`）に挙がった関数名。"""
+
+    if "［候補:" not in note:
+        return []
+    tail = note.split("［候補:", 1)[1]
+    import re
+
+    return [m for m in re.findall(r"[A-Za-z_][\w:.]*", tail) if m and not m.isdigit()]

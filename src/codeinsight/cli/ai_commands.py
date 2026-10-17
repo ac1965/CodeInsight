@@ -116,7 +116,7 @@ def _print_validation(report: ValidationReport) -> None:
 def _print_result(args: argparse.Namespace, result: ExplanationResult, config: AIConfig) -> int:
     if result.dry_run:
         system, user = result.messages[0], result.messages[1]
-        print("［dry-run］AIへは何も送信していません。--allow-send を付けると、次の内容が送信されます。")
+        print("［dry-run］AIへは何も送信していません。" + ("実行すると" if result.context.target_kind == "inference" else "--allow-send を付けると") + "、次の内容が送信されます。")
         print(f"  送信先: {config.base_url}（{'この計算機の内' if config.is_local else 'この計算機の外'}）  モデル: {config.model or '未指定'}")
         print(f"  含めるファイル: {', '.join(sorted(result.context.paths)) or 'なし'}")
         print(f"  ソースコード: {'含める' if config.include_source else '含めない（解析結果の事実のみ）'}  文字数: {len(system.content) + len(user.content)}")
@@ -133,7 +133,8 @@ def _print_result(args: argparse.Namespace, result: ExplanationResult, config: A
             "saved": not getattr(args, "no_save", False), "ai_generated": True,
         })
         return 0
-    print(f"━━ AI解説（解析結果ではありません） モデル: {safe(explanation.model)} / 対象: {safe(explanation.target)}")
+    label = "AIの推測（解析結果ではありません。確定ではない）" if explanation.target_kind == "inference" else "AI解説（解析結果ではありません）"
+    print(f"━━ {label} モデル: {safe(explanation.model)} / 対象: {safe(explanation.target)}")
     print(f"   解説ID: {explanation.explanation_id[:8]}{'（保存済み）' if not getattr(args, 'no_save', False) else '（保存していません）'}")
     print()
     print(safe(render_annotated(result.completion.text, result.report)))
@@ -151,6 +152,15 @@ def cmd_explain(args: argparse.Namespace) -> int:
     repository, project, index, navigation, service, _ = _service(args)
     symbol = resolve_symbol_arg(args, navigation, index, args.name, project).symbol
     result = _guard(lambda: service.explain_symbol(project, index, symbol, dry_run=args.dry_run, save=not args.no_save))
+    return _print_result(args, result, _config(args))
+
+
+def cmd_infer(args: argparse.Namespace) -> int:
+    """未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる。送信の許可なしで実行できる（ローカル以外の送信先には、--allow-remote が要る）。"""
+
+    repository, project, index, navigation, service, _ = _service(args)
+    symbol = resolve_symbol_arg(args, navigation, index, args.name, project).symbol
+    result = _guard(lambda: service.infer_targets(project, index, symbol, dry_run=args.dry_run, save=not args.no_save))
     return _print_result(args, result, _config(args))
 
 
@@ -387,6 +397,11 @@ def register(add) -> None:
     explain.add_argument("name", help="名前または修飾名")
     explain.add_argument("--file")
     _add_ai_options(explain)
+
+    infer = add("infer", "未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる（【推論】つき。解析結果は変えない。送信の許可は不要。ローカル以外の送信先には --allow-remote）", cmd_infer, ("text", "json"))
+    infer.add_argument("name", help="名前または修飾名（未解決・曖昧な呼び出しを持つ関数）")
+    infer.add_argument("--file")
+    _add_ai_options(infer)
 
     explain_file = add("explain-file", "ファイルの役割と構成をAIで解説する", cmd_explain_file, ("text", "json"))
     explain_file.add_argument("path", help="解析対象ファイルの相対パス")
