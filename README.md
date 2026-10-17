@@ -84,6 +84,33 @@ make image                                             # イメージを明示�
 
 ホストの `uv` で動かすときは `RUNTIME=local` を付けます（例: `make analyze TARGET=../my-repo RUNTIME=local`。環境変数でも可）。開発用の `make setup` / `check` / `test` / `lint` は、常にホストで動きます。動的解析（`dynamic-run`）・`reading-c-build`・`ai-eval` は、ホストで実行します。`docker compose` で運用する場合は、下の「`docker compose`」を参照してください。
 
+#### 操作例（Docker・ビューアーの操作モード）
+
+`<対象>` は、解析したいリポジトリの絶対パスです（例: `/Users/me/Projects/music2score`）。対象は読み取り専用で割り当てられ、変更されません。出力先（`OUT`）は、対象の外にしてください。
+
+```bash
+# 0. 準備（初回のみ。AIの推測を使う場合は、ホストで Ollama を起動してモデルを入れる）
+docker info >/dev/null && echo "Docker OK"
+ollama pull qwen3-coder:latest
+
+# 1. 解析 → 資料一式（図・PDFを含む）
+make analyze TARGET=<対象>
+make reading TARGET=<対象> OUT=$HOME/reading-out/<名前> SERVE=0
+
+# 2. ビューアー（操作モードが既定）。表示された http://127.0.0.1:8765/?token=… をブラウザで開く
+make serve TARGET=<対象> OUT=$HOME/reading-out/<名前>
+CODEINSIGHT_AI_MODEL=qwen3-coder:latest make serve TARGET=<対象>   # AIの推測も使う場合
+make serve TARGET=<対象> ACTIONS=0                                 # 読み取り専用（「操作」タブが出ない）
+```
+
+「操作」画面でできること:
+
+1. **再解析**: 「再解析を実行」。履歴に「完了」が出る（2回目は、変更のないファイルをスキップ）。
+2. **AIの推測**: 送信先（この計算機の内か外か）・モデルが表示される。「送信せず内容を確認（dry-run）」で、送る内容を確かめてから、「この関数を推測」または「一括で推測」。結果は「未解決」画面の「AIの推測」列に出る（検証済み以外は、事実として扱わない）。
+3. **動的解析**: コマンドを1行1引数で入力 →「計画を表示（実行しません）」で、コマンド・イメージ・ネットワーク遮断などを確認 → 確認のチェック →「この内容で実行する」。コンテナの中のビューアーでは、動的解析の実行はできない（計画の表示まで）。実行するには、ホストで `RUNTIME=local make serve TARGET=<対象>` とする（対象のコマンドが、コンテナ内で実行される）。
+
+終了は Ctrl-C。対象が変更されていないことは、`cd <対象> && git status --short`（空であること）で確認できる。
+
 ### ホストで開発・実行する（`uv`）
 
 ```bash
