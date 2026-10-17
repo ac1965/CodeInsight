@@ -23,6 +23,7 @@ class ProjectConfiguration:
     exclude_files: tuple[str, ...] = ()
     respect_gitignore: bool = True
     compile_commands_dir: str | None = None  # 解析に使った compile_commands.json のあるディレクトリ（Cの関数単位の解析で再利用する）
+    compile_commands_hash: str | None = None  # 前回の解析時の compile_commands.json の内容のハッシュ（変わったら、C/C++ を解析し直す）。未記録は None、無しは空文字
 
 
 @dataclass

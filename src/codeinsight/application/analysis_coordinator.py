@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 from codeinsight import __version__
 from codeinsight.analysis.fingerprint import analyzer_fingerprint
@@ -16,6 +17,7 @@ from codeinsight.domain import (
     AnalysisFileStatus,
     AnalysisResult,
     AnalysisStatus,
+    DependencyKind,
     Language,
     Project,
     SourceFile,
@@ -38,6 +40,40 @@ class AnalysisProgress:
 
 
 ProgressCallback = Callable[[AnalysisProgress], None]
+
+
+@dataclass
+class AnalysisStats:
+    """直近の解析で、どのファイルを解析し直したか（差分解析の内訳）。保存しない。"""
+
+    changed: int = 0  # 新規・内容の変更・前回失敗・解析器の変更で、解析し直したファイル
+    dependents: int = 0  # 自身は変わっていないが、include しているヘッダーが変わった（削除された）ため、解析し直したファイル
+    skipped: int = 0  # 変更なしで、前回の結果を使ったファイル
+    removed: int = 0
+    build_config_changed: bool = False  # compile_commands.json の内容が前回から変わったため、C/C++ をすべて解析し直した
+    rebuilt_for_config: int = 0
+    dependent_paths: list[str] = field(default_factory=list)
+
+
+def include_dependents(dependencies, seeds: set[str]) -> set[str]:
+    """`seeds`（変更・削除されたファイル）を、直接・間接に include しているファイルの file_id。
+
+    Cのファイルの解析結果は、include しているヘッダーのマクロ・型・条件付きコンパイルに左右される。ファイル自身の内容が同じでも、
+    ヘッダーが変われば結果が変わりうるため、解析し直す対象にする。推移的にたどる（A が B を、B が C を include していれば、C の変更は A に及ぶ）。
+    """
+
+    includers: dict[str, set[str]] = {}
+    for dependency in dependencies:
+        if dependency.dependency_kind == DependencyKind.INCLUDE and dependency.target_file_id:
+            includers.setdefault(dependency.target_file_id, set()).add(dependency.source_file_id)
+    found: set[str] = set()
+    queue = list(seeds)
+    while queue:
+        for includer in includers.get(queue.pop(), ()):
+            if includer not in found and includer not in seeds:
+                found.add(includer)
+                queue.append(includer)
+    return found
 
 
 def derive_file_id(project_id: str, relative_path: str) -> str:
@@ -73,6 +109,7 @@ class AnalysisCoordinator:
         self._file_scanner = file_scanner or FileScanner()
         self._git_repository = git_repository or GitRepository()
         self._resolver = resolver or ReferenceResolver()
+        self.last_stats = AnalysisStats()
 
     def analyze_project(
         self, project: Project, progress: ProgressCallback | None = None
@@ -89,11 +126,24 @@ class AnalysisCoordinator:
                 f.relative_path: f for f in self._repository.list_source_files(project.project_id)
             }
             current_paths = {scanned.relative_path for scanned, _ in candidates}
+            stats = AnalysisStats(removed=sum(1 for path in existing_files if path not in current_paths))
+            hashes = {scanned.relative_path: _file_hash(scanned.absolute_path) for scanned, _ in candidates}
+            force = self._dependents_to_reanalyze(project, existing_files, hashes, current_paths)
+            build_hash = _compile_commands_hash(project)
+            previous_hash = project.configuration.compile_commands_hash
+            config_force: set[str] = set()
+            if (previous_hash or "") != build_hash:
+                # ビルド設定（-D・-I・規格）が変わると、ファイル自身が同じでも C/C++ の解析結果が変わりうる
+                stats.build_config_changed = True
+                config_force = {s.relative_path for s, lang in candidates if lang in (Language.C, Language.CPP)}
+                force |= config_force
             self._repository.delete_source_files(
                 f.file_id for path, f in existing_files.items() if path not in current_paths
             )
 
             for index, (scanned, language) in enumerate(candidates, start=1):
+                path = scanned.relative_path
+                was_current = self._is_current(existing_files.get(path), hashes.get(path))
                 succeeded = self._analyze_one(
                     project,
                     scanned,
@@ -101,13 +151,28 @@ class AnalysisCoordinator:
                     existing_files.get(scanned.relative_path),
                     warnings_by_message,
                     errors,
+                    force=path in force,
+                    known_hash=hashes.get(path),
                 )
+                if was_current and path not in force:
+                    stats.skipped += 1
+                elif was_current and path in config_force:
+                    stats.rebuilt_for_config += 1
+                elif was_current:
+                    stats.dependents += 1
+                    stats.dependent_paths.append(path)
+                else:
+                    stats.changed += 1
                 if succeeded:
                     analyzed_count += 1
                 if progress is not None:
                     progress(AnalysisProgress(index, len(candidates), scanned.relative_path))
 
             self._resolve_project(project)
+            self.last_stats = stats
+            if build_hash != (project.configuration.compile_commands_hash or ""):
+                project.configuration = replace(project.configuration, compile_commands_hash=build_hash)
+                self._repository.save_project(project)
 
             if errors:
                 overall_status = (
@@ -146,12 +211,19 @@ class AnalysisCoordinator:
         existing: SourceFile | None,
         warnings_by_message: dict[str, list[str]],
         errors: list[str],
+        force: bool = False,
+        known_hash: str | None = None,
     ) -> bool:
-        """1ファイルを解析して保存する。解析に成功した（またはスキップした）場合はTrue。"""
+        """1ファイルを解析して保存する。解析に成功した（またはスキップした）場合はTrue。
+
+        `force` は、ファイル自身は変わっていないが、include しているヘッダーが変わったため、解析し直す指定。
+        """
 
         file_id = existing.file_id if existing else derive_file_id(
             project.project_id, scanned.relative_path
         )
+        if not force and self._is_current(existing, known_hash):
+            return True  # 変更なし（ファイルを読み直さない）
 
         try:
             content = scanned.absolute_path.read_bytes()
@@ -161,12 +233,7 @@ class AnalysisCoordinator:
             return False
 
         content_hash = hashlib.sha256(content).hexdigest()
-        if (
-            existing is not None
-            and existing.content_hash == content_hash
-            and existing.analysis_status == AnalysisFileStatus.ANALYZED
-            and existing.analyzer_version == ANALYZER_VERSION
-        ):
+        if not force and self._is_current(existing, content_hash):
             return True
 
         unit = SourceUnit(file_id, scanned.absolute_path, scanned.relative_path, content)
@@ -216,6 +283,33 @@ class AnalysisCoordinator:
                 errors.append(f"{scanned.relative_path}: {error}")
         return succeeded
 
+    @staticmethod
+    def _is_current(existing: SourceFile | None, content_hash: str | None) -> bool:
+        """前回の解析結果が、今のファイルの内容と解析器に対して有効か。"""
+
+        return (
+            existing is not None
+            and content_hash is not None
+            and existing.content_hash == content_hash
+            and existing.analysis_status == AnalysisFileStatus.ANALYZED
+            and existing.analyzer_version == ANALYZER_VERSION
+        )
+
+    def _dependents_to_reanalyze(
+        self, project: Project, existing_files: dict[str, SourceFile], hashes: dict[str, str | None], current_paths: set[str]
+    ) -> set[str]:
+        """変更・削除されたファイルを include しているファイルのうち、自身は変わっていないもの（相対パス）。"""
+
+        by_id = {f.file_id: path for path, f in existing_files.items()}
+        seeds = {
+            f.file_id for path, f in existing_files.items()
+            if path not in current_paths or (path in hashes and not self._is_current(f, hashes[path]))
+        }
+        if not seeds:
+            return set()
+        dependents = include_dependents(self._repository.list_dependencies_for_project(project.project_id), seeds)
+        return {by_id[file_id] for file_id in dependents if by_id.get(file_id) in current_paths}
+
     def _save_failed(
         self,
         project: Project,
@@ -251,6 +345,25 @@ class AnalysisCoordinator:
             [r for r in references if _resolution_state(r) != before_references[r.reference_id]],
             [d for d in dependencies if _resolution_state(d) != before_dependencies[d.dependency_id]],
         )
+
+
+def _compile_commands_hash(project: Project) -> str:
+    """解析に使う compile_commands.json の内容のハッシュ（無ければ空文字）。"""
+
+    directory = project.configuration.compile_commands_dir
+    if not directory:
+        return ""
+    try:
+        return hashlib.sha256((Path(directory) / "compile_commands.json").read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _file_hash(path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _resolution_state(item: object) -> tuple:

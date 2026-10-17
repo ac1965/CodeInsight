@@ -77,6 +77,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             repository, build_symbol_extractor(compile_commands_dir if has_database else None)
         )
         result = coordinator.analyze_project(project, progress=progress)
+        stats = coordinator.last_stats
         source_files = repository.list_source_files(project.project_id)
         symbols = repository.list_symbols_for_project(project.project_id)
         references = repository.list_references_for_project(project.project_id)
@@ -92,6 +93,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 "status": result.status.value,
                 "warnings": list(result.warnings),
                 "errors": list(result.errors),
+                "reanalysis": {
+                    "changed": stats.changed, "dependents": stats.dependents, "rebuilt_for_build_config": stats.rebuilt_for_config,
+                    "skipped": stats.skipped, "removed": stats.removed, "dependent_files": stats.dependent_paths[:50],
+                },
             }
         )
     else:
@@ -101,6 +106,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"抽出シンボル数: {len(symbols)}")
         print(f"抽出した参照数: {len(references)}")
         print(f"解析結果: {result.status.value}")
+        print(
+            f"再解析: 変更 {stats.changed}件 / 変更なしでスキップ {stats.skipped}件"
+            + (f" / include しているヘッダーの変更で再解析 {stats.dependents}件" if stats.dependents else "")
+            + (f" / compile_commands.json の変更で C/C++ を再解析 {stats.rebuilt_for_config}件" if stats.build_config_changed and stats.rebuilt_for_config else "")
+            + (f" / 削除 {stats.removed}件" if stats.removed else "")
+        )
         if result.warnings:
             print(f"警告 {len(result.warnings)}件:")
             for warning in result.warnings:
