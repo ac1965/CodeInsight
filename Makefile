@@ -1,7 +1,7 @@
 # CodeInsight 開発・利用の補助タスク
 #
 #   make help                使えるタスクの一覧
-#   make setup               依存のインストール（uv sync --extra dev）
+#   make setup               初回の設定（~/.codeinsight/reading-out を作る・依存のインストール・Docker イメージを作る）
 #   make test                テストの実行
 #   make analyze TARGET=...  対象リポジトリを解析する（読み取りのみ。DBは対象の外に保存）
 #
@@ -124,8 +124,10 @@ endif
 
 # --- 開発 ---
 
-setup: ## 依存をインストールする（開発用を含む）
-	$(UV) sync --extra dev
+setup: ## 初期設定: ~/.codeinsight/reading-out を作り、依存をインストールする（uv があれば。Docker だけで使う場合は、イメージを作る）
+	mkdir -p $(DOCKER_DATA) $(READING_BASE)
+	@if command -v $(firstword $(UV)) >/dev/null 2>&1; then $(UV) sync --extra dev; else echo "uv が無いため、依存のインストールは行いません（Docker で使う場合は不要。開発する場合は uv をインストールしてください）"; fi
+	@if [ "$(USE_DOCKER)" = "1" ] && command -v $(DOCKER) >/dev/null 2>&1; then $(MAKE) --no-print-directory image; fi
 
 test: ## 全テストを実行する
 	$(PYTEST) -q tests

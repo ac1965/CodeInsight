@@ -188,6 +188,15 @@ def test_make_analyze_and_make_reading_run_the_same_analysis(tmp_path: Path) -> 
     assert db.is_file() and (out / "overview.txt").read_text(encoding="utf-8").strip()
 
 
+def test_setup_creates_the_data_and_reading_directories(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("CODEINSIGHT_DATA_DIR")
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _make("setup", "RUNTIME=local", f"HOME={home}", "UV=true")  # UV=true: 依存のインストールは、何もしない
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".codeinsight" / "reading-out").is_dir()
+
+
 def test_docker_is_the_default_runtime_and_local_is_opt_in(tmp_path: Path, monkeypatch) -> None:
     """既定の実行環境は Docker。対象は読み取り専用で、DB・出力は割り当て、ビューアーは 127.0.0.1 にだけ公開する。RUNTIME=local でホストの uv。"""
 

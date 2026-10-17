@@ -1,7 +1,7 @@
 # docker compose up で、対象を解析して、ビューアーを起動する（AIは、ホストの Ollama を使う）。
 # 通常は Makefile（make reading / make serve。既定が Docker）が簡単。このファイルは、compose で運用する場合のもの。
 #
-#   mkdir -p ~/.codeinsight                                     # 初回のみ（Docker に root の所有で作らせないため）
+#   make setup                                                  # 初回のみ（~/.codeinsight と reading-out を作る。mkdir -p ~/.codeinsight/reading-out でも可。Docker に root の所有で作らせないため）
 #   TARGET=/絶対パス/my-repo docker compose up --build        # → http://127.0.0.1:8765/ （表示されたトークン付きURLを開く）
 #   TARGET=/絶対パス/my-repo docker compose run --rm --entrypoint codeinsight codeinsight analyze /絶対パス/my-repo   # 任意のサブコマンド（--project は自分で付ける）
 #   TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDFを含む）を OUT に作る（先に mkdir -p ~/.codeinsight/reading-out）

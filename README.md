@@ -90,6 +90,7 @@ make image                                             # イメージを明示�
 
 ```bash
 # 0. 準備（AIの推測を使う場合のみ、ホストで Ollama を起動してモデルを入れる。起動済み・取得済みなら何もしない）
+make setup                                       # 初回のみ（~/.codeinsight/reading-out を作る。Docker のイメージも作る）
 docker info >/dev/null && echo "Docker OK"
 MODEL=qwen3-coder:latest
 curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 || { nohup ollama serve >/dev/null 2>&1 & sleep 3; }   # 起動していなければ、バックグラウンドで起動
@@ -130,7 +131,7 @@ make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1 RUNTIME=local   # AI�
 必要なソフトウェア(git・Go・graphviz・Chromium・make など)はイメージに含まれ、解析結果のDBはホストの `~/.codeinsight` と共有します。
 
 ```bash
-mkdir -p ~/.codeinsight/reading-out                        # 初回のみ
+make setup                                                 # 初回のみ（~/.codeinsight/reading-out を作る）。make を使わない場合は mkdir -p ~/.codeinsight/reading-out
 TARGET=/絶対パス/my-repo docker compose up --build         # 解析→ビューアー(ホストの 127.0.0.1 だけに公開)
 TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式(図・PDFを含む)
 TARGET=/絶対パス/my-repo MODEL=qwen3-coder:latest AI_SEND=1 docker compose run --rm --entrypoint codeinsight codeinsight explain main --project /絶対パス/my-repo   # AI解説はホストの Ollama(host.docker.internal)

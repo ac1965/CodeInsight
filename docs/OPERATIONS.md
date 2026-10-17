@@ -506,7 +506,7 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 
 ```bash
 mkdir -p ~/.codeinsight                                      # 初回のみ（Docker に root の所有で作らせないため）
-mkdir -p ~/.codeinsight/reading-out                        # 資料を作る場合のみ（up だけなら不要。無ければ「資料がありません」と表示）
+make setup                                                 # 初回のみ（~/.codeinsight/reading-out を作る。make を使わない場合は mkdir -p ~/.codeinsight/reading-out。無ければ、ビューアーの「資料」に「資料がありません」と表示）
 TARGET=/絶対パス/my-repo docker compose up --build           # 解析→ビューアー。表示されたトークン付きURL（http://127.0.0.1:8765/…）を開く
 TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDF）を OUT（既定 ~/.codeinsight/reading-out）に作る。ビューアーの「資料」で読める
 
