@@ -87,10 +87,16 @@ _PROPAGATING = ("terminate", "longjmp", "throw")  # assert は NDEBUG で消え�
 
 
 class CFlowService:
-    def __init__(self, navigation: NavigationService) -> None:
-        self._navigation = navigation
+    def __init__(self, navigation: NavigationService | None) -> None:  # 構文解析だけを使う用途（設定値・境界の走査）では、None でよい
+        self._nav = navigation
         self._analyzers: dict[tuple[Language, str | None], CAnalyzer] = {}
         self._parsed: dict[tuple[str, str], tuple] = {}
+
+    @property
+    def _navigation(self) -> NavigationService:
+        if self._nav is None:
+            raise FlowAnalysisError("この操作には、呼び出し関係（NavigationService）が必要です（構文解析だけの用途では使えません）。")
+        return self._nav
 
     # --- 読み込み ---
 

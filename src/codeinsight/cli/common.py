@@ -127,10 +127,12 @@ def coverage_note(
     return "\n".join(parts) or None
 
 
-def print_coverage(args: argparse.Namespace, index: ProjectIndex, what: str, partial: dict[str, str] | None = None) -> None:
+def print_coverage(
+    args: argparse.Namespace, index: ProjectIndex, what: str, partial: dict[str, str] | None = None, covered: tuple[Language, ...] = (Language.PYTHON,)
+) -> None:
     """注記を、テキスト出力では標準出力に、JSON出力では（形式を変えないよう）標準エラーに出す。"""
 
-    note = coverage_note(index, what, partial)
+    note = coverage_note(index, what, partial, covered)
     if note:
         print(("\n" if args.format != "json" else "") + note, file=sys.stderr if args.format == "json" else sys.stdout)
 

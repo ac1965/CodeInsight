@@ -72,25 +72,39 @@ def test_risks_now_checks_c_functions_and_does_not_claim_they_are_unchecked(tmp_
 
 
 @pytest.mark.parametrize("command, fragment", [
-    (["config"], "設定値の検出はPythonのみ対応"),
-    (["environment"], "実行環境の前提の抽出はPythonのみ対応"),
-    (["boundaries"], "入口と境界の検出は、c ではmain 関数のみ対応"),
+    (["config"], "設定値の検出はPython・C・C++のみ対応"),
+    (["environment"], "実行環境の前提の抽出は、c ではビルド設定"),
+    (["boundaries"], "入口と境界の検出はPython・C・C++のみ対応"),
 ])
 def test_language_limited_commands_say_what_they_did_not_check(tmp_path: Path, capsys, command: list[str], fragment: str) -> None:
+    """対応していない言語（Emacs Lisp）のファイルがあるとき、「0件」を「問題なし」と読ませないための注記。Cは、設定値・入口と境界に対応した。"""
+
+    db = str(tmp_path / "e.sqlite")
+    assert main(["analyze", str(FIXTURES / "elisp_sample"), "--db", db]) == 0
+    capsys.readouterr()
+    assert main([*command, "--db", db]) == 0
+    out = capsys.readouterr().out
+    if command == ["environment"]:  # 環境は、Cに部分対応（ビルド設定など）。Emacs Lisp は未対応
+        assert "実行環境の前提の抽出はPythonのみ対応" in out
+    else:
+        assert fragment in out
+
+
+def test_c_environment_says_which_parts_are_covered(tmp_path: Path, capsys) -> None:
     db = str(tmp_path / "c.sqlite")
     assert main(["analyze", str(FIXTURES / "c_callgraph"), "--db", db]) == 0
     capsys.readouterr()
-    assert main([*command, "--db", db]) == 0
-    assert fragment in capsys.readouterr().out  # 「0件」「確認できませんでした」を「問題なし」と読ませない（Pythonのみ対応の機能）
+    assert main(["environment", "--db", db]) == 0
+    assert "c ではビルド設定" in capsys.readouterr().out  # 部分対応（依存ライブラリの宣言との照合はPythonのみ）を示す
 
 
 def test_coverage_note_goes_to_stderr_for_json_and_is_absent_for_python_only_projects(tmp_path: Path, capsys) -> None:
-    db = str(tmp_path / "c.sqlite")
-    assert main(["analyze", str(FIXTURES / "c_callgraph"), "--db", db]) == 0
+    db = str(tmp_path / "e.sqlite")
+    assert main(["analyze", str(FIXTURES / "elisp_sample"), "--db", db]) == 0
     capsys.readouterr()
     assert main(["config", "--format", "json", "--db", db]) == 0
     captured = capsys.readouterr()
-    assert captured.out.strip() == "[]" and "Pythonのみ対応" in captured.err  # JSONの形式は変えない
+    assert captured.out.strip() == "[]" and "のみ対応です" in captured.err  # JSONの形式は変えない
 
     py = str(tmp_path / "p.sqlite")
     assert main(["analyze", str(FIXTURES / "python_flow"), "--db", py]) == 0

@@ -258,6 +258,23 @@ def field_accesses(translation_unit: ci.TranslationUnit, target_path: str, sourc
     return unique
 
 
+def _function_refs_for(expression: ci.Cursor) -> list[ci.Cursor]:
+    """式が関数の名前そのもの（`&f` を含む）なら、その参照。`c ? f : g` は全部。ほかは空。"""
+
+    node = _unwrap(expression)
+    while node.kind in (CK.UNEXPOSED_EXPR, CK.PAREN_EXPR, CK.CSTYLE_CAST_EXPR):
+        inner = [c for c in _children(node) if c.kind != CK.TYPE_REF]
+        if len(inner) != 1:
+            break
+        node = inner[0]
+    if node.kind == CK.CONDITIONAL_OPERATOR:
+        return [ref for branch in _children(node)[1:] for ref in _function_refs_for(branch)]
+    if node.kind == CK.UNARY_OPERATOR and _operator(node) == "&":
+        inner = _children(node)
+        node = _unwrap(inner[0]) if inner else node
+    return [node] if node.kind == CK.DECL_REF_EXPR and node.referenced is not None and node.referenced.kind == CK.FUNCTION_DECL else []
+
+
 def text(function: CFunction, cursor: ci.Cursor, limit: int = 80) -> str:
     """カーソルの範囲のソースを、空白をまとめた1行で返す。"""
 

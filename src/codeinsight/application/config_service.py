@@ -79,8 +79,29 @@ class ConfigService:
             items.extend(self._loaders(scanned, path))
             if not is_test_path(path):
                 items.extend(self._constants(scanned, path, index, symbols_by_qualified, refs_by_target))
+        c_items, c_skipped = self._c_items(project, index, only_paths)
+        items.extend(c_items)
         items.sort(key=lambda i: (list(KIND_LABELS).index(i.kind), i.name, i.path, i.line))
-        return items, result.skipped
+        return items, result.skipped + c_skipped
+
+    @staticmethod
+    def _c_items(project: Project, index: ProjectIndex, only_paths: set[str] | None) -> tuple[list[ConfigItem], list[str]]:
+        """C/C++ の設定値（環境変数・getopt・設定ファイル・定数マクロ）。"""
+
+        from codeinsight.application.c_scan_service import CScanService
+
+        scans, skipped = CScanService().scan(project, index, only_paths)
+        items: list[ConfigItem] = []
+        for file_scan in scans:
+            hits = list(file_scan.result.config)
+            if not is_test_path(file_scan.path):
+                hits += file_scan.constants
+            for hit in hits:
+                owner = file_scan.owner(hit.line)
+                item = ConfigItem(hit.kind, hit.name, file_scan.path, hit.line, owner, default=hit.default, detail=hit.detail, confidence=hit.confidence)
+                item.uses = [ConfigUse(file_scan.path, line, owner, "代入した変数の使用") for line in hit.uses]
+                items.append(item)
+        return items, skipped
 
     # --- 環境変数 ---
 

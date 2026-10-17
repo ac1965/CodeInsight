@@ -17,6 +17,7 @@ KIND_LABELS = {
     "thread": "スレッド・プロセス・実行器",
     "async": "非同期（asyncio）",
     "cache": "キャッシュ",
+    "network": "ネットワーク（C/C++: socket・bind・listen・accept・connect）",
 }
 _HTTP_METHODS = frozenset({"route", "get", "post", "put", "delete", "patch", "websocket", "head", "options"})
 _EVENT_METHODS = frozenset(
@@ -95,8 +96,30 @@ class BoundaryService:
         if not light:
             for scanned in iter_python_files(project, index, result, contains=contains):
                 items.extend(self._scan_file(scanned, symbols_by_qualified, symbols_by_name))
+            c_items, c_skipped = self._c_items(project, index, contains, symbols_by_name)
+            items.extend(c_items)
+            result.skipped.extend(c_skipped)
         items.sort(key=lambda i: (list(KIND_LABELS).index(i.kind), i.path, i.line))
         return items, result.skipped
+
+    @staticmethod
+    def _c_items(project: Project, index: ProjectIndex, contains: str | None, symbols_by_name) -> tuple[list[BoundaryItem], list[str]]:
+        """C/C++ の入口・境界（シグナルハンドラ・atexit・スレッド・ネットワーク）。登録される関数は、名前から結び付ける（同じファイルの定義、無ければ一意なもの）。"""
+
+        from codeinsight.application.c_scan_service import CScanService
+
+        scans, skipped = CScanService().scan(project, index, contains=contains)
+        by_file = {f.relative_path: file_id for file_id, f in index.files.items()}
+        items: list[BoundaryItem] = []
+        for file_scan in scans:
+            for hit in file_scan.result.boundaries:
+                target = None
+                if hit.target:
+                    candidates = [s for s in symbols_by_name.get(hit.target, []) if index.files[s.file_id].language in (Language.C, Language.CPP)]
+                    same_file = [s for s in candidates if s.file_id == by_file.get(file_scan.path)]
+                    target = (same_file or candidates)[0] if len(same_file or candidates) == 1 else None
+                items.append(BoundaryItem(hit.kind, hit.label, file_scan.path, hit.line, file_scan.owner(hit.line), target, hit.detail or (f"関数 {hit.target}" if hit.target and target is None else ""), hit.confidence))
+        return items, skipped
 
     # --- pyproject の scripts ---
 
