@@ -662,7 +662,7 @@ class ReferenceResolver:
                                 outcome.confidence,
                             )
                         return outcome
-            if prefix.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.CLASS_VARIABLE):
+            if prefix.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.CLASS_VARIABLE, SymbolKind.INSTANCE_VARIABLE):
                 note = f"変数 {prefix.qualified_name} 経由であり、型を静的に確定できない"
             elif prefix.kind == SymbolKind.MODULE and imported:
                 note = (
@@ -707,6 +707,10 @@ class ReferenceResolver:
         unresolved_base = any(c.symbol_id in self._unresolved_bases for c in order)
         if unresolved_base or (is_super and not order):
             note = "継承元にプロジェクト外または未解決のクラスがあり、定義を確定できない"
+        elif any(
+            s.kind == SymbolKind.INSTANCE_VARIABLE for cls in order for s in self._py_by_qname.get(f"{cls.qualified_name}.{attribute}", [])
+        ):
+            note = f"{attribute} はメソッドではなく、`self.{attribute} = ...` と代入されるインスタンス変数であり、呼び出し先は代入された値（静的に確定できない）"
         else:
             note = f"{class_qn} と継承元に {attribute} のメソッド定義が見つからない（インスタンス属性の可能性）"
         self._set(reference, ResolutionStatus.UNRESOLVED, note)

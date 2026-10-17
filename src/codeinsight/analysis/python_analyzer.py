@@ -304,6 +304,7 @@ class _SymbolBuilder:
             parent=parent,
             decorators=tuple(_unparse(d) for d in node.decorator_list),
             is_async=isinstance(node, ast.AsyncFunctionDef),
+            is_generator=_is_generator(node),
             summary=_summary(node),
         )
         self._result.symbols.append(symbol)
@@ -328,6 +329,38 @@ class _SymbolBuilder:
         self._result.symbols.append(symbol)
         self._node_symbols[id(node)] = symbol
         self.walk_body(node.body, symbol)
+        self._instance_variables(node, symbol)
+
+    def _instance_variables(self, node: ast.ClassDef, class_symbol: Symbol) -> None:
+        """メソッドの中の `self.X = ...`（`X` ごとに最初の代入）を、インスタンス変数のシンボルにする。
+
+        クラス直下に同名の定義（メソッド・クラス変数・入れ子のクラス）がある名前は、そちらを正とし、作らない（修飾名の衝突を避ける）。
+        `staticmethod`・`classmethod` の中の代入は対象外（`cls.X` はクラスの属性）。基底クラスやクラスの外からの代入は追わない。
+        """
+
+        taken = {s.name for s in self._result.symbols if s.parent_symbol_id == class_symbol.symbol_id}
+        first: dict[str, tuple[int, int]] = {}
+        for method in _class_methods(node.body):
+            positional = [*method.args.posonlyargs, *method.args.args]
+            decorators = {_unparse(d) for d in method.decorator_list}
+            if not positional or decorators & {"staticmethod", "classmethod"}:
+                continue
+            for attribute, line, end_line in _self_attribute_assignments(method.body, positional[0].arg):
+                if attribute not in taken and (attribute not in first or line < first[attribute][0]):
+                    first[attribute] = (line, end_line)
+        for attribute, (line, end_line) in sorted(first.items(), key=lambda item: (item[1][0], item[0])):
+            self._result.symbols.append(
+                build_symbol(
+                    self._ids,
+                    self._file_id,
+                    name=attribute,
+                    qualified_name=f"{class_symbol.qualified_name}.{attribute}",
+                    kind=SymbolKind.INSTANCE_VARIABLE,
+                    start_line=line,
+                    end_line=end_line,
+                    parent=class_symbol,
+                )
+            )
 
     def _assignment(self, node: ast.Assign | ast.AnnAssign, parent: Symbol) -> None:
         kind = (
@@ -1074,6 +1107,71 @@ class _ReferenceCollector(ast.NodeVisitor):
                 note="動的インポート（引数が実行時に決まる）",
             )
         self._result.dependencies.append(dependency)
+
+
+def _is_generator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """本体に yield / yield from がある（ネストした関数・クラス・lambda の中のものは、その関数のもの）。"""
+
+    stack: list[ast.AST] = list(node.body)
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (ast.Yield, ast.YieldFrom)):
+            return True
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(current))
+    return False
+
+
+def _class_methods(body: list[ast.stmt]) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """クラス直下のメソッド（if・try・with の内側の定義を含む。入れ子のクラスのメソッドは、そのクラスのもの）。"""
+
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for statement in body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(statement)
+        else:
+            for inner in _nested_statement_bodies(statement):
+                found.extend(_class_methods(inner))
+    return found
+
+
+def _self_attribute_assignments(body: list[ast.stmt], self_name: str):
+    """メソッドの本体の `self.X` への代入を (属性名, 開始行, 終了行) で列挙する。
+
+    代入・注釈つき代入・複合代入・tuple 代入・for のターゲット・`with ... as self.X` が対象。ネストした関数・クラス・lambda の中は含めない。
+    """
+
+    def targets(target: ast.AST):
+        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == self_name:
+            yield target.attr
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                yield from targets(element)
+        elif isinstance(target, ast.Starred):
+            yield from targets(target.value)
+
+    stack: list[ast.AST] = list(reversed(body))
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        found: list[ast.expr] = []
+        if isinstance(current, ast.Assign):
+            found = list(current.targets)
+        elif isinstance(current, (ast.AnnAssign, ast.AugAssign)):
+            found = [current.target]
+        elif isinstance(current, (ast.For, ast.AsyncFor)):
+            found = [current.target]
+        elif isinstance(current, (ast.With, ast.AsyncWith)):
+            found = [item.optional_vars for item in current.items if item.optional_vars is not None]
+        if not isinstance(current, ast.stmt):
+            stack.extend(reversed(list(ast.iter_child_nodes(current))))
+            continue
+        for target in found:
+            for attribute in targets(target):
+                yield attribute, current.lineno, current.end_lineno or current.lineno
+        stack.extend(reversed(list(ast.iter_child_nodes(current))))
 
 
 def _nested_statement_bodies(node: ast.stmt) -> list[list[ast.stmt]]:

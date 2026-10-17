@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## Python のインスタンス変数・ジェネレータ
+
+* **インスタンス変数をシンボルにした**（`instance_variable`）: メソッドの中の `self.X = ...` を、`X` ごとに最初の代入の位置で抽出（tuple 代入・注釈つき・複合代入・`for`・`with as` を含む。`staticmethod`/`classmethod`/ネストした関数の中、クラス直下に同名の定義がある名前は除く）。narou_dl で 71 件。
+* **ジェネレータを識別した**（`Symbol.is_generator`。スキーマの列追加。`search` の JSON に `is_generator`/`is_async` を出す）。
+* `self.X()` の `X` がインスタンス変数なら、呼び出し先は代入された値で確定できないと、未解決の理由に示す。
+
 ## C の解析と動的解析の拡充
 
 * **C23 構文など、解析失敗の対処**: `CODEINSIGHT_LIBCLANG`（新しい libclang の共有ライブラリを指定。自動では選ばない。変えると再解析）。規格を指定しないとき、C11 で失敗したファイルを C23 で解析し直す（推定として警告に記録。本当のエラーは隠さない）。emacs で、新しい libclang は C23/C2y を解析できるが失敗が増えた（389→428）ため、既定にはしない（TESTING.md）。

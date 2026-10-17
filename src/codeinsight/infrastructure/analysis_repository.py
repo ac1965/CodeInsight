@@ -51,7 +51,7 @@ _FILE_COLUMNS = (
 )
 _SYMBOL_COLUMNS = (
     "symbol_id, file_id, name, qualified_name, kind, start_line, end_line, "
-    "parent_symbol_id, decorators, base_classes, is_async, usr, summary"
+    "parent_symbol_id, decorators, base_classes, is_async, usr, summary, is_generator"
 )
 _REFERENCE_COLUMNS = (
     "reference_id, file_id, source_symbol_id, target_name, target_key, target_symbol_id, "
@@ -335,7 +335,7 @@ class AnalysisRepository:
 
     def _insert_symbols(self, symbols: list[Symbol]) -> None:
         self._connection.executemany(
-            f"INSERT INTO symbols ({_SYMBOL_COLUMNS}) VALUES ({', '.join('?' * 13)})",
+            f"INSERT INTO symbols ({_SYMBOL_COLUMNS}) VALUES ({', '.join('?' * 14)})",
             [
                 (
                     s.symbol_id,
@@ -351,6 +351,7 @@ class AnalysisRepository:
                     int(s.is_async),
                     s.usr,
                     s.summary,
+                    int(s.is_generator),
                 )
                 for s in symbols
             ],
@@ -725,6 +726,7 @@ def _symbol_from_row(row: sqlite3.Row) -> Symbol:
         decorators=tuple(json.loads(row["decorators"])),
         base_classes=tuple(json.loads(row["base_classes"])),
         is_async=bool(row["is_async"]),
+        is_generator=bool(row["is_generator"]),
         usr=row["usr"],
         summary=row["summary"],
     )

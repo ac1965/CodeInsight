@@ -18,7 +18,7 @@ from codeinsight.presentation.structure_view import TreeNode, build_structure_tr
 
 _KIND_MARK = {
     "function": "fn", "method": "fn", "class": "cls", "struct": "st", "union": "un", "enum": "en", "typedef": "td",
-    "macro": "#d", "global_variable": "var", "static_variable": "var", "class_variable": "var", "function_declaration": "decl",
+    "macro": "#d", "global_variable": "var", "static_variable": "var", "class_variable": "var", "instance_variable": "var", "function_declaration": "decl",
 }
 MAX_RELATIONS = 200
 MAX_RESULTS = 60

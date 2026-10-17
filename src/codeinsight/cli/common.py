@@ -160,7 +160,7 @@ def prepare_read(args: argparse.Namespace):
 
 def symbol_dict(hit: SymbolHit) -> dict:
     s = hit.symbol
-    return {
+    result = {
         "name": s.name,
         "qualified_name": s.qualified_name,
         "kind": s.kind.value,
@@ -168,6 +168,11 @@ def symbol_dict(hit: SymbolHit) -> dict:
         "start_line": s.start_line,
         "end_line": s.end_line,
     }
+    if s.is_async:
+        result["is_async"] = True
+    if s.is_generator:
+        result["is_generator"] = True
+    return result
 
 
 def reference_dict(hit: ReferenceHit) -> dict:

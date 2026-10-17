@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS analysis_results (
 V2_COLUMNS = (
     ("symbols", "usr", "TEXT"),
     ("symbols", "summary", "TEXT NOT NULL DEFAULT ''"),
+    ("symbols", "is_generator", "INTEGER NOT NULL DEFAULT 0"),  # v9: Python のジェネレータ
     ("source_files", "analyzer_version", "TEXT NOT NULL DEFAULT ''"),
     ("analysis_results", "repository_revision", "TEXT"),
     ("projects", "compile_commands_dir", "TEXT"),  # v5: Cの関数単位の解析で、解析時と同じコンパイル設定を使うため

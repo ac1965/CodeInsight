@@ -24,6 +24,7 @@ _VARIABLE_KINDS = frozenset(
         SymbolKind.STATIC_VARIABLE,
         SymbolKind.LOCAL_VARIABLE,
         SymbolKind.CLASS_VARIABLE,
+        SymbolKind.INSTANCE_VARIABLE,
     }
 )
 

@@ -23,6 +23,7 @@ _MEMBER_KINDS = frozenset(
         SymbolKind.FUNCTION,
         SymbolKind.CLASS,
         SymbolKind.CLASS_VARIABLE,
+        SymbolKind.INSTANCE_VARIABLE,
         SymbolKind.GLOBAL_VARIABLE,
         SymbolKind.STATIC_VARIABLE,
         SymbolKind.STRUCT,
@@ -138,6 +139,6 @@ def _read_declaration(
             break
         if len(collected) >= _MAX_DECLARATION_LINES:
             break
-    if language == Language.PYTHON and symbol.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.CLASS_VARIABLE):
+    if language == Language.PYTHON and symbol.kind in (SymbolKind.GLOBAL_VARIABLE, SymbolKind.CLASS_VARIABLE, SymbolKind.INSTANCE_VARIABLE):
         return collected[:1]
     return collected

@@ -26,6 +26,7 @@ class SymbolKind(enum.Enum):
     STATIC_VARIABLE = "static_variable"  # C
     LOCAL_VARIABLE = "local_variable"  # C
     CLASS_VARIABLE = "class_variable"  # Python
+    INSTANCE_VARIABLE = "instance_variable"  # Python: メソッドの中で `self.X = ...` と代入される属性（最初の代入の位置）
     NAMESPACE = "namespace"  # C++
     INTERFACE = "interface"  # Go
 
@@ -45,6 +46,7 @@ class Symbol:
     decorators: tuple[str, ...] = field(default_factory=tuple)
     base_classes: tuple[str, ...] = field(default_factory=tuple)
     is_async: bool = False
+    is_generator: bool = False  # Python: 本体に yield / yield from がある（ネストした関数・クラス・lambdaの中は含めない）
     usr: str | None = None  # C: libclangのUSR（ファイルをまたぐ参照解決用）
     # ソースのdocstring/ドキュメントコメントの先頭1行。ソースに書かれた内容の転記であり、
     # 解析器やAIが生成した要約ではない。
