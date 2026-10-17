@@ -4,7 +4,9 @@
 * ループバック（127.0.0.1・::1）にだけバインドする。外部のホストへ公開する指定は受け付けない。
 * Hostヘッダーを検査する（DNSリバインディング対策）。
 * 起動ごとのランダムなトークンを要求する（ページ: URLのクエリ、API: ヘッダー）。トークンはログに出さない。
-* GET以外は拒否する。CORSは許可しない。書き込み・解析の実行・外部通信・AIへの送信のエンドポイントは、存在しない。
+* 既定では、GET以外は拒否する。CORSは許可しない。書き込み・解析の実行・外部通信・AIへの送信のエンドポイントは、存在しない。
+* 操作モード（`--allow-actions`）に限り、決められた操作（再解析・AIの推測・動的解析の計画と実行。web/actions.py）のPOSTを受け付ける。
+  この場合は、トークン（専用のヘッダー）・Host・Origin（同一オリジンのみ）・Content-Type（JSON）を、すべて検査する。
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from codeinsight.web.actions import ActionRunner
 from codeinsight.web.api import ApiError, BinaryResponse, ViewerApi
 from codeinsight.web.app_page import content_security_policy, render_app
 
@@ -47,15 +50,19 @@ def bindable(host: str) -> bool:
     return host in LOOPBACK_HOSTS or (host == "0.0.0.0" and os.environ.get(ENV_IN_CONTAINER) == "1")
 TOKEN_HEADER = "X-CodeInsight-Token"
 MAX_URL = 4096
+MAX_BODY = 65536
+ACTION_PREFIX = "/api/actions/"
 
 
 class ViewerServer(HTTPServer):
-    def __init__(self, host: str, port: int, api: ViewerApi, token: str | None = None) -> None:
+    def __init__(self, host: str, port: int, api: ViewerApi, token: str | None = None, actions: ActionRunner | None = None) -> None:
         if not bindable(host):
             raise ValueError(f"ループバック以外にはバインドできません: {host}（127.0.0.1・localhost・::1 のみ。コンテナ内に限り 0.0.0.0）")
         self.address_family = socket.AF_INET6 if host == "::1" else socket.AF_INET
         super().__init__((host, port), _Handler)
         self.api = api
+        self.actions = actions
+        api.actions = actions
         self.token = token or secrets.token_urlsafe(32)
         self.allowed_hosts = {f"{name}:{self.server_address[1]}" for name in ("127.0.0.1", "localhost")} | {f"[::1]:{self.server_address[1]}"}
         self.lock = threading.Lock()
@@ -174,4 +181,50 @@ class _Handler(BaseHTTPRequestHandler):
     def _method_not_allowed(self) -> None:
         self._send(405, b'{"error": "GET\\u4ee5\\u5916\\u306f\\u53d7\\u3051\\u4ed8\\u3051\\u307e\\u305b\\u3093"}', "application/json; charset=utf-8", {"Allow": "GET"})
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = _method_not_allowed
+    def do_POST(self) -> None:
+        """操作モードの操作。操作モードでなければ、これまでどおり拒否する。"""
+
+        runner = self.server.actions
+        if runner is None:
+            self._method_not_allowed()
+            return
+        parsed = urlparse(self.path) if len(self.path) <= MAX_URL else None
+        if parsed is None or not parsed.path.startswith(ACTION_PREFIX) or parsed.query:
+            self._json(404, {"error": "存在しない操作です"})
+            return
+        if not self._host_ok():
+            self._json(403, {"error": "このHostでは受け付けません"})
+            return
+        if not self._token_ok(self.headers.get(TOKEN_HEADER)):  # 専用のヘッダー（URLのクエリ・Cookieでは受け付けない）
+            self._json(401, {"error": "トークンが必要です"})
+            return
+        origin = self.headers.get("Origin")
+        if origin is None or origin not in {f"http://{h}" for h in self.server.allowed_hosts} or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
+            self._json(403, {"error": "同じオリジンからの操作だけを受け付けます"})  # 他のサイトからの操作（CSRF）を防ぐ
+            return
+        if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
+            self._json(415, {"error": "Content-Type は application/json です"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self._json(411, {"error": "Content-Length が必要です"})
+            return
+        if not 0 <= length <= MAX_BODY:
+            self._json(413, {"error": "本文が大きすぎます"})
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError
+        except ValueError:
+            self._json(400, {"error": "本文は、JSONのオブジェクトです"})
+            return
+        try:
+            self._json(200, runner.handle(parsed.path[len(ACTION_PREFIX):], body))
+        except ApiError as exc:
+            self._json(exc.status, {"error": exc.message, **exc.extra})
+        except Exception:  # noqa: BLE001 - 内部の詳細を、応答に出さない
+            self._json(500, {"error": "内部エラーが発生しました"})
+
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = _method_not_allowed

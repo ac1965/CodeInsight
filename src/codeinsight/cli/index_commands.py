@@ -119,15 +119,27 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if reading_dir is not None and not reading_dir.is_dir():
         raise CliError(f"--reading-dir がディレクトリではありません: {reading_dir}")
     api = ViewerApi(repository, project, reading_dir)
+    runner = None
+    if args.allow_actions:
+        from codeinsight.cli.common import resolve_db_path
+        from codeinsight.web.actions import ActionRunner
+
+        def refresh() -> None:
+            with server.lock:
+                api.refresh()
+
+        runner = ActionRunner(resolve_db_path(args), project.project_id, refresh)
     try:
-        server = ViewerServer(args.host, args.port, api, configured_token())
+        server = ViewerServer(args.host, args.port, api, configured_token(), runner)
     except OSError as exc:
         raise CliError(f"サーバーを起動できません（ポート {args.port}）: {exc}") from exc
     except ValueError as exc:
         raise CliError(str(exc)) from exc
     print(f"CodeInsight ビューアー: {project.name}", file=sys.stderr)
     print(f"  {server.url}", file=sys.stderr)
-    print("  ※ このURLにはトークンが含まれます。共有しないでください。トークンは起動のたびに変わります（固定するには CODEINSIGHT_VIEWER_TOKEN）。読み取り専用で、ローカルからのみ接続できます。Ctrl-C で終了します。", file=sys.stderr)
+    if runner is not None:
+        print("  ［操作モード］画面から、再解析・AIの推測（許可の確認なし。送信先は画面に表示）・動的解析（コンテナ内。実行前に確認）を実行できます。対象リポジトリは変更しません。", file=sys.stderr)
+    print("  ※ このURLにはトークンが含まれます。共有しないでください。トークンは起動のたびに変わります（固定するには CODEINSIGHT_VIEWER_TOKEN）。ローカルからのみ接続できます。Ctrl-C で終了します。", file=sys.stderr)
     if args.open:
         webbrowser.open(server.url)
     try:

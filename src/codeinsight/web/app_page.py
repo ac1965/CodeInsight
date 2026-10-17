@@ -19,6 +19,7 @@ _CONTROLS = """<div id="controls">
     <button id="view-explore" type="button" role="tab">探索</button>
     <button id="view-external" type="button" role="tab">外部ツール</button>
     <button id="view-dynamic" type="button" role="tab">動的解析</button>
+    <button id="view-actions" type="button" role="tab" hidden>操作</button>
     <button id="view-status" type="button" role="tab">状態</button>
     <button id="view-help" type="button" role="tab">使い方</button>
   </span>
@@ -124,6 +125,12 @@ _BOOT = r"""
       .map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]); }).join("&");
     return fetch(path + (query ? "?" + query : ""), { headers: { "X-CodeInsight-Token": TOKEN }, cache: "no-store" }).then(function (r) {
       return r.json().then(function (body) { if (!r.ok) { var e = new Error(body.error || ("HTTP " + r.status)); e.body = body; throw e; } return body; });
+    });
+  }
+  var ACTIONS = false, currentView = "graph", pollTimer = null;
+  function post(path, body) {
+    return fetch(path, { method: "POST", headers: { "X-CodeInsight-Token": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(body || {}), cache: "no-store" }).then(function (r) {
+      return r.json().then(function (data) { if (!r.ok) { var e = new Error(data.error || ("HTTP " + r.status)); e.body = data; throw e; } return data; });
     });
   }
   function say(text) { $("message").textContent = text || ""; }
@@ -323,8 +330,9 @@ _BOOT = r"""
     });
   }
   function showView(name) {
+    currentView = name; clearTimeout(pollTimer);
     document.body.classList.toggle("view-docs", name !== "graph");
-    ["graph", "reading", "unresolved", "explore", "external", "dynamic", "status", "help"].forEach(function (v) { $("view-" + v).classList.toggle("active", v === name); });
+    ["graph", "reading", "unresolved", "explore", "external", "dynamic", "actions", "status", "help"].forEach(function (v) { $("view-" + v).classList.toggle("active", v === name); });
     $("docs-view").hidden = name === "graph";
     $("graph-controls").hidden = name !== "graph";
     $("docs-body").classList.remove("wide");
@@ -332,6 +340,7 @@ _BOOT = r"""
     if (name === "explore") { showExplore(HASH.explore); return; }
     if (name === "status") { showStatus(); return; }
     if (name === "external") { showExternal(); return; }
+    if (name === "actions") { showActions(); return; }
     if (name === "dynamic") { showDynamic(HASH.run); return; }
     if (name === "reading") {
       return api("/api/reading", {}).then(function (data) {
@@ -357,6 +366,7 @@ _BOOT = r"""
   $("view-explore").onclick = function () { showView("explore"); };
   $("view-status").onclick = function () { showView("status"); };
   $("view-external").onclick = function () { showView("external"); };
+  $("view-actions").onclick = function () { showView("actions"); };
   $("view-dynamic").onclick = function () { showView("dynamic"); };
 
   // ---- 状態の印（確定・推定・未解決・曖昧・外部・観測・AIの推測）。色だけでなく、記号と文字でも区別する ----
@@ -531,6 +541,11 @@ _BOOT = r"""
           ai.appendChild(badge("ai")); ai.appendChild(badge(f.inference.status)); if (f.inference.stale) ai.appendChild(el("span", "古い", "badge b-unverified"));
           var read = el("a", "読む", "srclink"); read.href = "#"; read.onclick = function (ev) { ev.preventDefault(); ev.stopPropagation(); showInference(f.inference.id); }; ai.appendChild(read);
         } else ai.textContent = "—";
+        if (ACTIONS) {
+          var infer = el("button", "推測を実行"); infer.type = "button";
+          infer.onclick = function (ev) { ev.stopPropagation(); post("/api/actions/infer", { symbol: f.function }).then(function () { showView("actions"); }).catch(function (e) { say(e.message); }); };
+          ai.appendChild(infer);
+        }
         tr.appendChild(ai); rows.push(tr);
         var detail = el("tr"); detail.hidden = true; var td = el("td"); td.colSpan = 5; td.className = "sub";
         f.calls.forEach(function (c) { var line = el("div"); line.appendChild(badge(c.status)); line.appendChild(pathLink(f.path, c.line)); line.appendChild(document.createTextNode("  " + c.name + "  ")); appendLinked(line, c.note || ""); td.appendChild(line); });
@@ -676,6 +691,72 @@ _BOOT = r"""
       }).catch(function (e) { out.appendChild(el("p", e.message)); });
     }).catch(function (e) { body.appendChild(el("p", e.message)); });
   }
+  // ---- 操作モード（serve --allow-actions）。再解析・AIの推測・動的解析（計画→確認→実行）。履歴を示す ----
+  var STATE_LABELS = { running: "実行中…", done: "完了", failed: "失敗", cancelled: "取り消し" };
+  function summarize(o) {
+    var r = o.result; if (o.error) return o.error; if (!r) return "";
+    if (o.kind === "analyze") return "状態 " + r.status + " / 変更 " + r.reanalysis.changed + "・依存 " + r.reanalysis.dependents + "・スキップ " + r.reanalysis.skipped + " / 警告 " + r.warnings + "・エラー " + r.errors;
+    if (o.kind === "infer") return "送信先 " + r.destination.base_url + "（" + (r.destination.local ? "この計算機の内" : "この計算機の外") + "） / 対象 " + r.targets + "件" + (r.dry_run ? "（送信なし）" : "") + " / " + r.items.map(function (i) { return i.function + ": " + (i.error || i.status || "dry-run"); }).join(", ");
+    if (o.kind === "dynamic-plan") return (r.runnable ? "実行できます" : "実行できません: " + r.denied_reasons.join(" / ")) + "（実行していません）";
+    if (o.kind === "dynamic-run") return "実行ID " + r.run_id.slice(0, 8) + " / " + r.status + " / 終了コード " + r.exit_code + " / 観測 " + r.observations + "件";
+    return "";
+  }
+  function showActions() {
+    var nav = $("docs-nav"); nav.textContent = ""; nav.appendChild(el("h3", "操作"));
+    var body = viewBody("操作（操作モード）");
+    var banner = el("div", null, "ai-banner"); banner.appendChild(document.createTextNode("操作モードです。対象リポジトリは変更しません。動的解析はコンテナの中（ネットワーク遮断・対象は読み取り専用）で、計画を確認したうえで実行します。AIの推測は、許可の確認なしで実行します（送信先は下に表示）。")); body.appendChild(banner);
+    var msg = el("p", "", "hint"); var live = el("div"), history = el("div");
+    var run = function (path, payload, after) { msg.textContent = ""; post(path, payload).then(function (d) { if (after) after(d); refresh(); }).catch(function (e) { msg.textContent = "実行できません: " + e.message; }); };
+    var section = function (title) { body.appendChild(el("h2", title)); var box = el("div"); body.appendChild(box); return box; };
+    var btn = function (label, fn) { var b = el("button", label); b.type = "button"; b.onclick = fn; return b; };
+    var field = function (parent, label, node) { var l = el("label", label + " "); l.appendChild(node); l.style.marginRight = "1em"; parent.appendChild(l); return node; };
+    var s1 = section("再解析"); s1.appendChild(el("p", "対象を再解析して、結果のDBを更新します（変更のないファイルは飛ばします）。対象リポジトリは変更しません。取り消せません。", "hint"));
+    s1.appendChild(btn("再解析を実行", function () { run("/api/actions/analyze", {}); }));
+    var s2 = section("AIの推測（未解決・曖昧な呼び出し）"); var dest = el("p", "", "hint"); s2.appendChild(dest);
+    var sym = el("input"); sym.type = "search"; sym.size = 28; sym.placeholder = "関数名（例: via_two）"; field(s2, "関数", sym);
+    var dry = el("input"); dry.type = "checkbox"; field(s2, "送信せず内容を確認（dry-run）", dry);
+    s2.appendChild(btn("この関数を推測", function () { run("/api/actions/infer", { symbol: sym.value.trim(), dry_run: dry.checked }); }));
+    s2.appendChild(el("br")); var lim = el("input"); lim.type = "number"; lim.min = 1; lim.max = 50; lim.value = 10; lim.style.width = "4em"; field(s2, "一括（未解決の多い順、最大）", lim);
+    s2.appendChild(btn("一括で推測", function () { run("/api/actions/infer", { all: true, limit: parseInt(lim.value, 10) || 10, dry_run: dry.checked }); }));
+    s2.appendChild(btn("取り消し", function () { run("/api/actions/cancel", {}); }));
+    s2.appendChild(el("p", "AIの推測は解析結果ではありません。解決状態は変わらず、検証済み以外は事実として扱わないでください。", "hint"));
+    var s3 = section("動的解析（コンテナ内。計画の確認が必要）");
+    var cmd = el("textarea"); cmd.rows = 3; cmd.cols = 50; cmd.placeholder = "実行するコマンド。1つの引数を1行に（例: main.py）。シェルは使いません"; field(s3, "コマンド", cmd);
+    var col = el("select"); ["python", "c"].forEach(function (c) { var o = el("option", c); o.value = c; col.appendChild(o); }); field(s3, "収集器", col);
+    var tmo = el("input"); tmo.type = "number"; tmo.value = 60; tmo.min = 1; tmo.max = 600; tmo.style.width = "5em"; field(s3, "時間(秒)", tmo);
+    var env = el("input"); env.size = 20; env.placeholder = "名前だけ（HOME,PATH）"; field(s3, "渡す環境変数", env);
+    var planBox = el("div");
+    var params = function () { return { command: cmd.value.split("\n").map(function (l) { return l.trim(); }).filter(Boolean), collector: col.value, timeout: parseFloat(tmo.value) || 60, env: env.value.split(",").map(function (v) { return v.trim(); }).filter(Boolean) }; };
+    [cmd, col, tmo, env].forEach(function (n) { n.onchange = function () { planBox.textContent = ""; }; });
+    s3.appendChild(btn("計画を表示（実行しません）", function () {
+      planBox.textContent = ""; msg.textContent = "";
+      post("/api/actions/dynamic-plan", params()).then(function (d) {
+        var p = d.operation.result, c = p.confirmation;
+        var rows = [["コマンド", c.command.join(" ")], ["収集器", c.collector], ["イメージ", c.image], ["ネットワーク", c.network], ["隔離なしの実行", c.unsandboxed], ["対象", c.target], ["作業領域", c.workdir], ["時間", c.timeout_seconds + "秒"], ["メモリ", c.memory_mb + "MB"], ["渡す環境変数", c.env.join(", ") || "（なし）"]];
+        planBox.appendChild(table(["確認する内容", "値"], rows.map(function (r) { var tr = el("tr"); tr.appendChild(cell(r[0])); tr.appendChild(cell(String(r[1]))); return tr; })));
+        p.notes.forEach(function (n) { planBox.appendChild(el("p", n, "hint")); });
+        if (!p.runnable) { planBox.appendChild(el("p", "実行できません: " + p.denied_reasons.join(" / "), "hint")); refresh(); return; }
+        var ok = el("input"); ok.type = "checkbox"; var go = btn("この内容で実行する", function () { run("/api/actions/dynamic-run", Object.assign(params(), { confirm_digest: p.plan_digest }), function () { planBox.textContent = ""; }); }); go.disabled = true;
+        ok.onchange = function () { go.disabled = !ok.checked; };
+        var l = el("label", "上の内容（コマンド・イメージ・ネットワーク遮断など）を確認しました "); l.appendChild(ok); planBox.appendChild(l); planBox.appendChild(go); refresh();
+      }).catch(function (e) { msg.textContent = "計画を表示できません: " + e.message; });
+    }));
+    s3.appendChild(planBox); body.appendChild(msg); body.appendChild(el("h2", "実行中の操作")); body.appendChild(live); body.appendChild(el("h2", "履歴")); body.appendChild(history);
+    function refresh() {
+      api("/api/actions/status", {}).then(function (d) {
+        if (currentView !== "actions") return;
+        dest.textContent = "AIの送信先: " + d.ai.base_url + "（" + (d.ai.local ? "この計算機の内" : "この計算機の外") + "） / モデル " + (d.ai.model || "未指定") + (d.ai.include_source ? " / ソースの断片を含めて送ります" : " / 解析結果の事実のみ送ります");
+        live.textContent = "";
+        if (d.current && d.current.state === "running") { var pr = d.current.progress; live.appendChild(el("p", d.current.label + "を実行中… " + (pr.total ? pr.done + " / " + pr.total + "  " : "") + pr.message)); } else live.appendChild(el("p", "実行中の操作はありません。"));
+        history.textContent = "";
+        history.appendChild(table(["時刻", "操作", "状態", "内容・結果"], d.history.map(function (o) {
+          var tr = el("tr"); tr.appendChild(cell(o.started_at)); tr.appendChild(cell(o.label)); tr.appendChild(cell(STATE_LABELS[o.state] || o.state)); tr.appendChild(cell(summarize(o))); return tr;
+        })));
+        clearTimeout(pollTimer); if (d.busy) pollTimer = setTimeout(refresh, 1500);
+      }).catch(function (e) { msg.textContent = e.message; });
+    }
+    refresh();
+  }
   function showStatus() {
     var nav = $("docs-nav"); nav.textContent = ""; nav.appendChild(el("h3", "解析の状態"));
     var body = viewBody("解析の状態");
@@ -769,11 +850,12 @@ _BOOT = r"""
   api("/api/project", {}).then(function (info) {
     $("project-name").textContent = info.name;
     $("project-stats").textContent = "  ファイル " + info.files + " / シンボル " + info.symbols + (info.stale_count ? " / 解析後に変更されたファイル " + info.stale_count + "件" : "");
+    if (info.actions_enabled) { ACTIONS = true; $("view-actions").hidden = false; }
     ["kind", "direction", "depth"].forEach(function (k) { if (HASH[k]) $(k).value = HASH[k]; });
     if (HASH.root) $("q").value = HASH.root;
     if (!HASH.kind && !HASH.root) $("kind").value = "arch";
     var drawn = draw();
-    if (["reading", "help", "unresolved", "explore", "status", "external", "dynamic"].indexOf(HASH.view) >= 0) {
+    if (["reading", "help", "unresolved", "explore", "status", "external", "dynamic", "actions"].indexOf(HASH.view) >= 0) {
       Promise.resolve(drawn).then(function () { return showView(HASH.view); }).then(function () { settle(function () { if (HASH.annotate) annotate(HASH.annotate); }); });
       return;
     }

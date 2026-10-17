@@ -89,6 +89,24 @@ class ExplanationService:
         context = self._builder().for_inference(project, index, symbol)
         return self._run(project, index, context, None, dry_run, save, require_send=False)
 
+    def pending_inference(self, project: Project, index: ProjectIndex, force: bool = False) -> tuple[builtins.list[Symbol], dict[str, int], int]:
+        """AIの推測の対象: 未解決・曖昧な呼び出しを持つ関数（多い順）。保存済みで根拠のファイルが変わっていないものは、force でなければ飛ばす。
+        戻り値: (今回の対象, 関数ごとの未解決・曖昧な呼び出しの数, 飛ばした数)。"""
+
+        from codeinsight.domain import ReferenceKind, ResolutionStatus, SymbolKind
+
+        pending: dict[str, int] = {}
+        for reference in index.references:
+            if reference.reference_kind == ReferenceKind.CALL and reference.resolution_status in (ResolutionStatus.UNRESOLVED, ResolutionStatus.AMBIGUOUS):
+                pending[reference.source_symbol_id] = pending.get(reference.source_symbol_id, 0) + 1
+        targets = sorted(
+            (index.symbols[sid] for sid in pending if sid in index.symbols and index.symbols[sid].kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)),
+            key=lambda s: (-pending[s.symbol_id], s.qualified_name),
+        )
+        saved = {e.target: e for e in self.list(project, "inference")}
+        todo = [s for s in targets if force or s.qualified_name not in saved or self.stale_paths(project, index, saved[s.qualified_name])]
+        return todo, pending, len(targets) - len(todo)
+
     def ask(self, project: Project, index: ProjectIndex, question: str, *, dry_run: bool = False, save: bool = True) -> ExplanationResult:
         context = self._builder().for_question(project, index, question)
         return self._run(project, index, context, question, dry_run, save)

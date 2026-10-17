@@ -103,6 +103,7 @@ def _flag(params: Params, name: str, default: bool = False) -> bool:
 
 class ViewerApi:
     def __init__(self, repository: AnalysisRepository, project: Project, reading_dir: Path | None = None) -> None:
+        self.actions: Any = None  # 操作モード（serve --allow-actions）の実行器。None なら読み取り専用
         self._repository = repository
         self._project = project
         self._reading_dir = reading_dir.resolve() if reading_dir is not None else None
@@ -128,6 +129,7 @@ class ViewerApi:
             "/api/status": self._status,
             "/api/inferences": self._inferences,
             "/api/inference": self._inference,
+            "/api/actions/status": self._actions_status,
             "/api/external": self._external,
             "/api/dynamic": self._dynamic,
             "/api/dynamic-diff": self._dynamic_diff,
@@ -158,7 +160,7 @@ class ViewerApi:
         return {
             "name": self._project.name, "root_path": str(self._project.root_path), "repository_revision": self._project.repository_revision,
             "files": len(self._index.files), "symbols": len(self._index.symbols), "languages": dict(languages),
-            "stale_files": self._stale[:50], "stale_count": len(self._stale), "graph_kinds": list(GRAPH_KINDS), "directions": list(DIRECTIONS),
+            "stale_files": self._stale[:50], "stale_count": len(self._stale), "graph_kinds": list(GRAPH_KINDS), "directions": list(DIRECTIONS), "actions_enabled": self.actions is not None,
         }
 
     def _symbols(self, params: Params) -> dict:
@@ -552,6 +554,9 @@ class ViewerApi:
             "warnings": [w[:300] for w in (latest.warnings if latest else ())][:50],
             "note": "失敗したファイルは、正常に解析したものとして扱っていません。古いファイルの位置は、解析時と対応しない可能性があります。",
         }
+
+    def _actions_status(self, params: Params) -> dict:
+        return self.actions.status() if self.actions is not None else {"enabled": False, "note": "読み取り専用です（操作モードは、serve --allow-actions で有効にします）。"}
 
     def _external(self, params: Params) -> dict:
         """外部ツールの取り込み結果（SARIF・SCIP・radare2）と、CodeInsight自身の結果との比較。外部の結果は事実ではなく、食い違いは並べて示す（採用しない）。"""

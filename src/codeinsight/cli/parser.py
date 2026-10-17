@@ -219,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve = add("serve", "解析結果を、ローカルのWebビューアーとして提供する（読み取り専用。127.0.0.1 にだけバインド。グラフ・ソース・切り出しをブラウザで）", cmd_serve, ("text",), exclude=False)
     serve.add_argument("--host", default="127.0.0.1", help="バインドするアドレス（ループバックのみ: 127.0.0.1・localhost・::1）")
     serve.add_argument("--port", type=int, default=8765, help="ポート（既定: 8765。0 で空きポートを自動選択）")
+    serve.add_argument("--allow-actions", action="store_true", help="操作モード: 画面から、再解析・AIの推測・動的解析の計画と実行ができる（既定は読み取り専用。対象は変更せず、動的解析はコンテナの中で確認のうえ実行する）")
     serve.add_argument("--open", action="store_true", help="起動後にブラウザで開く（既定はオフ）")
     serve.add_argument("--reading-dir", help="make reading の出力先。指定すると、ビューアーの「資料」で、その中のテキスト・Markdownを読める（読み取りのみ）")
 

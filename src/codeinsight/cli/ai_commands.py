@@ -181,21 +181,10 @@ def _announce_destination(config: AIConfig) -> None:
 def _infer_all(args: argparse.Namespace, project, index, service: ExplanationService, config: AIConfig) -> int:
     """未解決・曖昧な呼び出しを持つ関数を、AIの推測にかける（保存済みで、根拠のファイルが変わっていないものは飛ばす）。"""
 
-    from codeinsight.domain import ReferenceKind, ResolutionStatus, SymbolKind
-
-    pending: dict[str, int] = {}
-    for reference in index.references:
-        if reference.reference_kind == ReferenceKind.CALL and reference.resolution_status in (ResolutionStatus.UNRESOLVED, ResolutionStatus.AMBIGUOUS):
-            pending[reference.source_symbol_id] = pending.get(reference.source_symbol_id, 0) + 1
-    targets = sorted(
-        (index.symbols[sid] for sid in pending if sid in index.symbols and index.symbols[sid].kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)),
-        key=lambda s: (-pending[s.symbol_id], s.qualified_name),
-    )
-    saved = {e.target: e for e in service.list(project, "inference")}
-    todo = [s for s in targets if args.force or s.qualified_name not in saved or service.stale_paths(project, index, saved[s.qualified_name])]
-    skipped = len(targets) - len(todo)
+    todo, pending, skipped = service.pending_inference(project, index, args.force)
+    targets_total = len(todo) + skipped
     todo = todo[: args.limit]
-    print(f"AIの推測の対象: 未解決・曖昧な呼び出しを持つ関数 {len(targets)}件（保存済みで有効なため飛ばす {skipped}件）。今回 {len(todo)}件（--limit {args.limit}）")
+    print(f"AIの推測の対象: 未解決・曖昧な呼び出しを持つ関数 {targets_total}件（保存済みで有効なため飛ばす {skipped}件）。今回 {len(todo)}件（--limit {args.limit}）")
     if args.dry_run:
         for symbol in todo:
             print(f"  {safe(symbol.qualified_name)}（未解決・曖昧な呼び出し {pending[symbol.symbol_id]}件）")
