@@ -209,7 +209,7 @@ uv run codeinsight explain <関数> --dry-run --ai-model qwen3-coder:latest
 # 3. 送信を許可して解説する
 uv run codeinsight explain <関数|クラス> --allow-send --ai-model qwen3-coder:latest
 uv run codeinsight explain-file src/foo.py --allow-send --ai-model qwen3-coder:latest
-uv run codeinsight infer <関数> --ai-model qwen3-coder:latest         # 未解決・曖昧な呼び出しの呼び出し先をAIに推測させる（送信の許可は不要。【推論】つきで別に保存）
+uv run codeinsight infer <関数> --ai-model qwen3-coder:latest         # 未解決・曖昧な呼び出しの呼び出し先をAIに推測させる（許可は確認しない。送信先を表示し、根拠を検証。【推論】つきで別に保存。--all で一括）
 uv run codeinsight explain-path <呼び出し元> <呼び出し先> --allow-send --ai-model qwen3-coder:latest
 uv run codeinsight ask "キャッシュはどこに保存されますか?" --allow-send --ai-model qwen3-coder:latest
 

@@ -159,9 +159,61 @@ def cmd_infer(args: argparse.Namespace) -> int:
     """未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる。送信の許可なしで実行できる（ローカル以外の送信先には、--allow-remote が要る）。"""
 
     repository, project, index, navigation, service, _ = _service(args)
+    config = _config(args)
+    if args.all:
+        return _infer_all(args, project, index, service, config)
+    if not args.name:
+        raise CliError("関数名を指定するか、--all を付けてください。")
     symbol = resolve_symbol_arg(args, navigation, index, args.name, project).symbol
+    if not args.dry_run:
+        _announce_destination(config)
     result = _guard(lambda: service.infer_targets(project, index, symbol, dry_run=args.dry_run, save=not args.no_save))
-    return _print_result(args, result, _config(args))
+    return _print_result(args, result, config)
+
+
+def _announce_destination(config: AIConfig) -> None:
+    """AIの推測は、送信の許可を確認しない（利用者の指示）。そのかわり、何をどこへ送るかを、毎回示す。"""
+
+    where = "この計算機の内" if config.is_local else "**この計算機の外**"
+    print(f"［AIの推測］ソースの断片と解析結果を、{config.base_url}（{where}）のモデル {config.model or '未指定'} へ送ります（許可の確認はしません。--dry-run で内容を確認できます）。", file=sys.stderr)
+
+
+def _infer_all(args: argparse.Namespace, project, index, service: ExplanationService, config: AIConfig) -> int:
+    """未解決・曖昧な呼び出しを持つ関数を、AIの推測にかける（保存済みで、根拠のファイルが変わっていないものは飛ばす）。"""
+
+    from codeinsight.domain import ReferenceKind, ResolutionStatus, SymbolKind
+
+    pending: dict[str, int] = {}
+    for reference in index.references:
+        if reference.reference_kind == ReferenceKind.CALL and reference.resolution_status in (ResolutionStatus.UNRESOLVED, ResolutionStatus.AMBIGUOUS):
+            pending[reference.source_symbol_id] = pending.get(reference.source_symbol_id, 0) + 1
+    targets = sorted(
+        (index.symbols[sid] for sid in pending if sid in index.symbols and index.symbols[sid].kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)),
+        key=lambda s: (-pending[s.symbol_id], s.qualified_name),
+    )
+    saved = {e.target: e for e in service.list(project, "inference")}
+    todo = [s for s in targets if args.force or s.qualified_name not in saved or service.stale_paths(project, index, saved[s.qualified_name])]
+    skipped = len(targets) - len(todo)
+    todo = todo[: args.limit]
+    print(f"AIの推測の対象: 未解決・曖昧な呼び出しを持つ関数 {len(targets)}件（保存済みで有効なため飛ばす {skipped}件）。今回 {len(todo)}件（--limit {args.limit}）")
+    if args.dry_run:
+        for symbol in todo:
+            print(f"  {safe(symbol.qualified_name)}（未解決・曖昧な呼び出し {pending[symbol.symbol_id]}件）")
+        return 0
+    if todo:
+        _announce_destination(config)
+    failures = 0
+    for symbol in todo:
+        try:
+            result = service.infer_targets(project, index, symbol, save=not args.no_save)
+        except (ConsentError, ContextError, AIProviderError, FlowAnalysisError) as exc:
+            failures += 1
+            print(f"  ✗ {safe(symbol.qualified_name)}: {safe(str(exc))}")
+            continue
+        assert result.report is not None
+        print(f"  ✓ {safe(symbol.qualified_name)}: {STATUS_LABEL[result.report.status].split('（')[0]}（解説ID {result.explanation.explanation_id[:8] if result.explanation else '-'}）")
+    print("※ AIの推測は、解析結果ではありません。内容は `explanations`・`explanation <ID>` で読めます。検証済み以外は、事実として扱わないでください。", file=sys.stderr)
+    return 1 if failures else 0
 
 
 def cmd_explain_file(args: argparse.Namespace) -> int:
@@ -398,9 +450,12 @@ def register(add) -> None:
     explain.add_argument("--file")
     _add_ai_options(explain)
 
-    infer = add("infer", "未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる（【推論】つき。解析結果は変えない。送信の許可は不要。ローカル以外の送信先には --allow-remote）", cmd_infer, ("text", "json"))
-    infer.add_argument("name", help="名前または修飾名（未解決・曖昧な呼び出しを持つ関数）")
+    infer = add("infer", "未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる（【推論】つき。解析結果は変えない。送信の許可は確認しない。根拠は検証する）", cmd_infer, ("text", "json"))
+    infer.add_argument("name", nargs="?", help="名前または修飾名（未解決・曖昧な呼び出しを持つ関数）。--all では不要")
     infer.add_argument("--file")
+    infer.add_argument("--all", action="store_true", help="未解決・曖昧な呼び出しを持つ関数すべてを対象にする（保存済みで根拠のファイルが変わっていないものは飛ばす）")
+    infer.add_argument("--limit", type=int, default=20, help="--all で、今回推測する関数の最大数")
+    infer.add_argument("--force", action="store_true", help="--all で、保存済みのものも推測し直す")
     _add_ai_options(infer)
 
     explain_file = add("explain-file", "ファイルの役割と構成をAIで解説する", cmd_explain_file, ("text", "json"))

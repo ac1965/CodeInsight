@@ -52,15 +52,15 @@ class AIConfig:
             return True
         return self.host in _LOCAL_HOSTS
 
-    def check_consent(self, require_model: bool = True, require_send: bool = True) -> None:
+    def check_consent(self, require_model: bool = True, require_send: bool = True, require_remote: bool = True) -> None:
         """送信前の確認。許可が無い、または送信先が外部で追加の許可が無い場合は送信しない。"""
 
-        if require_send and not self.allow_send:  # AIの推測（infer）は、利用者の指示により、送信の許可なしで実行できる。送信先が外部の場合の追加の許可は、残る
+        if require_send and not self.allow_send:  # AIの推測（infer）は、利用者の指示により、送信の許可も、外部の送信先の追加の許可も、確認しない（送信先は、実行のたびに表示する）
             raise ConsentError(
                 "ソースコードをAIへ送信する許可が設定されていません。送信内容は --dry-run で確認できます。"
                 "送信してよい場合は --allow-send を付けるか、環境変数 CODEINSIGHT_AI_ALLOW_SEND=1 を設定してください。"
             )
-        if not self.is_local and not self.allow_remote:
+        if require_remote and not self.is_local and not self.allow_remote:
             raise ConsentError(
                 f"送信先 {self.host} はこの計算機の外です。外部へソースコードを送信してよい場合に限り、"
                 "--allow-remote（または CODEINSIGHT_AI_ALLOW_REMOTE=1）を追加してください。"

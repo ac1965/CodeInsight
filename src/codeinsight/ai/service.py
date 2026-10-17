@@ -83,7 +83,8 @@ class ExplanationService:
     def infer_targets(self, project: Project, index: ProjectIndex, symbol: Symbol, *, dry_run: bool = False, save: bool = True) -> ExplanationResult:
         """未解決・曖昧な呼び出しの呼び出し先を、AIに推測させる（解析結果は変えない。【推論】つきの解説として、別に保存する）。
 
-        利用者の指示により、送信の許可（--allow-send）なしで実行できる。送信先が外部の場合の追加の許可（--allow-remote）は、必要。"""
+        利用者の指示により、送信の許可（--allow-send）も、外部の送信先の追加の許可（--allow-remote）も、確認せずに実行する。
+        送信先は、実行のたびに表示する。根拠（引用）は、他の解説と同じく機械的に検証し、検証できない記述を検証済みとして扱わない。"""
 
         context = self._builder().for_inference(project, index, symbol)
         return self._run(project, index, context, None, dry_run, save, require_send=False)
@@ -99,7 +100,7 @@ class ExplanationService:
         if dry_run:
             return ExplanationResult(context, messages, dry_run=True)
 
-        self._config.check_consent(require_model=self._provider is None, require_send=require_send)
+        self._config.check_consent(require_model=self._provider is None, require_send=require_send, require_remote=require_send)
         provider = self._make_provider()
         completion = provider.complete(messages, temperature=self._config.temperature, max_tokens=self._config.max_tokens)
         return self._record(project, index, context, question, messages, provider, completion, save)

@@ -74,13 +74,16 @@ def test_other_ai_features_still_require_the_send_permission(setup) -> None:
     assert provider.calls == []
 
 
-def test_inference_to_a_remote_endpoint_still_needs_the_remote_permission(setup) -> None:
+def test_inference_does_not_check_consent_even_for_a_remote_endpoint_but_always_verifies(setup) -> None:
     repo, project, nav, index, symbols = setup
     provider = FakeProvider(ANSWER)
-    remote = AIConfig(base_url="https://api.example.com/v1", model="m", allow_send=False)
-    with pytest.raises(ConsentError, match="この計算機の外"):
-        ExplanationService(repo, nav, remote, provider).infer_targets(project, index, symbols["apply"])
-    assert provider.calls == []  # 外部への送信は、追加の許可なしには行わない
+    remote = AIConfig(base_url="https://api.example.com/v1", model="m", allow_send=False)  # 利用者の指示: 許可の確認はしない
+    result = ExplanationService(repo, nav, remote, provider).infer_targets(project, index, symbols["apply"])
+    assert len(provider.calls) == 1 and result.report is not None  # 根拠の検証は、必ず行う
+    wrong = FakeProvider("## 処理の詳細\n【推論】`apply` は `made_up_target` を呼ぶ。[nowhere.c:1-9]")
+    bad = ExplanationService(repo, nav, remote, wrong).infer_targets(project, index, symbols["apply"])
+    assert bad.explanation is not None and bad.explanation.status == ExplanationStatus.UNVERIFIED  # 存在しない名前・ファイルの引用は、未検証
+    assert not [e for e in repo.list_explanations(project.project_id) if e.status == ExplanationStatus.VERIFIED and e.text == wrong.text]
 
 
 def test_no_pending_calls_means_the_ai_is_not_asked(setup) -> None:
@@ -101,3 +104,32 @@ def test_cli_infer_dry_run(tmp_path: Path, capsys) -> None:
     assert main(["infer", "apply", "--db", db, "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "実行すると" in out and "未解決・曖昧な呼び出し（推測の対象）" in out
+
+
+def test_cli_infer_all_skips_saved_and_announces_the_destination(setup, tmp_path: Path, capsys, monkeypatch) -> None:
+    repo, project, nav, index, symbols = setup
+    db_path = repo._connection.execute("PRAGMA database_list").fetchone()[2]
+    from codeinsight.ai import provider as provider_module
+
+    calls: list[int] = []
+
+    class Fake:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def complete(self, messages, *, temperature=0.1, max_tokens=None):
+            calls.append(1)
+            return provider_module.Completion(ANSWER, "fake-model")
+
+    monkeypatch.setattr("codeinsight.ai.service.OpenAICompatibleProvider", Fake)
+    capsys.readouterr()
+    assert main(["infer", "--all", "--db", db_path, "--ai-model", "m", "--dry-run"]) == 0
+    assert "apply" in capsys.readouterr().out and calls == []  # 対象の一覧だけ。何も送らない
+    assert main(["infer", "--all", "--db", db_path, "--ai-model", "m"]) == 0
+    captured = capsys.readouterr()
+    assert "✓ apply" in captured.out and "許可の確認はしません" in captured.err and len(calls) == 1  # 許可を確認せず、送信先を示す
+    assert main(["infer", "--all", "--db", db_path, "--ai-model", "m"]) == 0
+    assert "保存済みで有効なため飛ばす 1件" in capsys.readouterr().out and len(calls) == 1  # 保存済み（根拠のファイルは変わらず）は、飛ばす
