@@ -117,11 +117,16 @@ def test_c_run_records_function_execution_and_never_modifies_the_target(project_
     executed = {o.name: o.count for o in outcome.observations if o.detail.get("what") == "function"}
     assert executed["twice"] == 3 and executed["main"] == 1 and "never_called" not in executed  # 観測されなかった関数は記録しない
     assert any(o.symbol_id for o in outcome.observations if o.name == "twice")  # 解析結果のシンボルに対応づく
-    assert not any(o.kind == ObservationKind.CALL for o in outcome.observations)  # gcov は呼び出しの辺を得られない
+    instrumented = outcome.run.collector.endswith("+c-instrument")  # ar・addr2line・/proc がある環境（Linux）では、呼び出しの辺も観測できる。無い環境（macOS）では gcov だけ
+    calls = {(o.name, o.target_name) for o in outcome.observations if o.kind == ObservationKind.CALL}
+    assert (("main", "twice") in calls) if instrumented else not calls
     assert {p.name: p.read_bytes() for p in project_dir.iterdir()} == before  # 対象に、ビルドの生成物も残らない（複製の中で行う）
     diff = compare(index, outcome.run, outcome.observations)
     assert diff.executed_functions >= 2 and diff.not_executed >= 1  # never_called は「実行を観測できなかった関数」
-    assert diff.static_only == [] and any("呼び出しの辺を観測できない" in n for n in diff.notes)  # 辺を観測できない収集器で、「静的のみ」と誤って示さない
+    if instrumented:
+        assert [(e.caller, e.callee) for e in diff.both] == [("main", "twice")] and diff.static_only == []  # 辺を観測できれば、静的との比較ができる
+    else:
+        assert diff.static_only == [] and any("呼び出しの辺を観測できない" in n for n in diff.notes)  # 辺を観測できない収集器で、「静的のみ」と誤って示さない
     repository.close()
     assert main(["observed", "twice", "--db", db]) == 0
     assert "実行された回数: 3" in capsys.readouterr().out
