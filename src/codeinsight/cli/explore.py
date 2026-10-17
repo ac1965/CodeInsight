@@ -45,7 +45,7 @@ from codeinsight.cli.common import (
     symbol_not_found,
     warn_if_stale,
 )
-from codeinsight.domain import AnalysisStatus, Confidence, FileFreshness, ResolutionStatus, SymbolKind
+from codeinsight.domain import AnalysisStatus, Confidence, FileFreshness, ReferenceKind, ResolutionStatus, SymbolKind
 from codeinsight.infrastructure import AnalysisRepository
 from codeinsight.presentation import build_structure_tree, render_tree_text, tree_to_dict
 
@@ -80,7 +80,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         stats = coordinator.last_stats
         source_files = repository.list_source_files(project.project_id)
         symbols = repository.list_symbols_for_project(project.project_id)
-        references = repository.list_references_for_project(project.project_id)
+        references = [r for r in repository.list_references_for_project(project.project_id) if r.reference_kind != ReferenceKind.SLOT_SOURCE]
 
     if args.format == "json":
         emit_json(

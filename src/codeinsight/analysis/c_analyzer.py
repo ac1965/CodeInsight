@@ -193,24 +193,82 @@ def _slot_of(expression: cindex.Cursor) -> str | None:
         return None
     if node.kind == cindex.CursorKind.MEMBER_REF_EXPR and referenced.kind == cindex.CursorKind.FIELD_DECL:
         return referenced.get_usr() or None
-    if node.kind == cindex.CursorKind.DECL_REF_EXPR and referenced.kind == cindex.CursorKind.VAR_DECL:
-        parent = referenced.semantic_parent
-        if parent is not None and parent.kind == cindex.CursorKind.TRANSLATION_UNIT:
-            return referenced.get_usr() or None
+    if node.kind == cindex.CursorKind.DECL_REF_EXPR:
+        return _slot_of_declaration(referenced)
     return None
 
 
-def _function_ref_in(expression: cindex.Cursor) -> cindex.Cursor | None:
-    """式が（`&` を付けても付けなくても）関数の名前そのものなら、その DECL_REF_EXPR。"""
+def _is_function_pointer(declaration: cindex.Cursor) -> bool:
+    kind = declaration.type.get_canonical()
+    return kind.kind == cindex.TypeKind.POINTER and kind.get_pointee().kind in (cindex.TypeKind.FUNCTIONPROTO, cindex.TypeKind.FUNCTIONNOPROTO)
+
+
+def _slot_of_declaration(declaration: cindex.Cursor) -> str | None:
+    """変数・引数の宣言から、置き場の照合キー。グローバル/static変数はUSR、関数ポインタ型のローカル変数は `local:`、
+    関数ポインタ型の引数は `param:<関数のUSR>:<位置>`（その関数の呼び出し元が渡している関数を、結び付けるため）。"""
+
+    if declaration.kind == cindex.CursorKind.VAR_DECL:
+        parent = declaration.semantic_parent
+        if parent is not None and parent.kind == cindex.CursorKind.TRANSLATION_UNIT:
+            return declaration.get_usr() or None
+        if _is_function_pointer(declaration):
+            usr = declaration.get_usr()
+            return f"local:{usr}" if usr else None
+    elif declaration.kind == cindex.CursorKind.PARM_DECL and _is_function_pointer(declaration):
+        function = declaration.semantic_parent
+        if function is not None and function.kind == cindex.CursorKind.FUNCTION_DECL and function.get_usr():
+            parameters = [c for c in function.get_children() if c.kind == cindex.CursorKind.PARM_DECL]
+            for position, parameter in enumerate(parameters):
+                if parameter == declaration:
+                    return f"param:{function.get_usr()}:{position}"
+    return None
+
+
+def _function_refs_in(expression: cindex.Cursor) -> list[cindex.Cursor]:
+    """式が（`&` を付けても付けなくても）関数の名前そのもの、または `c ? f : g` のような選択なら、その DECL_REF_EXPR（複数あれば全部）。"""
 
     node = _strip_wrappers(expression)
+    if node.kind == cindex.CursorKind.CONDITIONAL_OPERATOR:
+        parts = list(node.get_children())
+        return [ref for branch in parts[1:] for ref in _function_refs_in(branch)]
     if node.kind == cindex.CursorKind.UNARY_OPERATOR:
         inner = list(node.get_children())
         if len(inner) == 1 and _assign_operator(node) == "&":
             node = _strip_wrappers(inner[0])
     if node.kind == cindex.CursorKind.DECL_REF_EXPR and node.referenced is not None and node.referenced.kind == cindex.CursorKind.FUNCTION_DECL:
-        return node
-    return None
+        return [node]
+    return []
+
+
+def _is_null(node: cindex.Cursor) -> bool:
+    """NULL・0・`(T *)0`（関数ポインタに何も入れない代入）。"""
+
+    node = _strip_wrappers(node)
+    if node.kind in (cindex.CursorKind.INTEGER_LITERAL, cindex.CursorKind.GNU_NULL_EXPR, cindex.CursorKind.CXX_NULL_PTR_LITERAL_EXPR):
+        return True
+    if node.kind == cindex.CursorKind.CSTYLE_CAST_EXPR:
+        inner = [c for c in node.get_children() if c.kind != cindex.CursorKind.TYPE_REF]
+        return len(inner) == 1 and _is_null(inner[0])
+    return False
+
+
+def _classify_value(expression: cindex.Cursor) -> tuple[list[cindex.Cursor], bool]:
+    """関数ポインタへ代入される式の、(関数の名前の参照の一覧, 関数名でない値（変数・戻り値・引数の転送など）を含むか)。
+    `c ? f : g` は枝ごとに分け、NULL は無視する。"""
+
+    node = _strip_wrappers(expression)
+    if node.kind == cindex.CursorKind.CONDITIONAL_OPERATOR:
+        refs: list[cindex.Cursor] = []
+        unknown = False
+        for branch in list(node.get_children())[1:]:
+            branch_refs, branch_unknown = _classify_value(branch)
+            refs += branch_refs
+            unknown = unknown or branch_unknown
+        return refs, unknown
+    refs = _function_refs_in(node)
+    if refs:
+        return refs, False
+    return [], not _is_null(node)
 
 
 def _field_usrs_in_order(init_list: cindex.Cursor) -> list[str]:
@@ -507,15 +565,47 @@ class CAnalyzer:
 
         slot_hints: dict[tuple[int, int], str] = {}  # 関数名の式の位置 → それを代入・初期化している置き場
 
+        current_source: list[Symbol | None] = [None]  # いま参照を集めている関数（不明な代入元の記録に使う）
+
         def hint_slot(slot: str | None, value: cindex.Cursor) -> None:
-            function_ref = _function_ref_in(value)
-            if slot and function_ref is not None:
+            if not slot:
+                return
+            refs, unknown = _classify_value(value)
+            for function_ref in refs:
                 slot_hints[(function_ref.extent.start.line, function_ref.extent.start.column)] = slot
+            if unknown and current_source[0] is not None:
+                # 関数名でない値が代入されている（変数・戻り値・引数の転送）。置き場の全部の候補は列挙できないため、目印の参照を残す
+                add_reference(
+                    ReferenceKind.SLOT_SOURCE, value, current_source[0], "<関数名でない値>", None, ResolutionStatus.UNRESOLVED,
+                    "関数ポインタの置き場に、関数名でない値（変数・戻り値・引数の転送など）が代入されている", slot,
+                )
 
         def hint_assignment(cursor: cindex.Cursor) -> None:
             children = list(cursor.get_children())
             if len(children) == 2 and _assign_operator(cursor) == "=":
                 hint_slot(_slot_of(children[0]), children[1])
+
+        def hint_declaration(cursor: cindex.Cursor) -> None:
+            """`op f = mul;`（関数ポインタ型のローカル変数の初期化）。"""
+
+            values = [c for c in cursor.get_children() if c.kind not in (cindex.CursorKind.TYPE_REF, cindex.CursorKind.PARM_DECL)]
+            if values and cursor.semantic_parent is not None and cursor.semantic_parent.kind != cindex.CursorKind.TRANSLATION_UNIT:
+                hint_slot(_slot_of_declaration(cursor), values[-1])
+
+        def hint_call_arguments(cursor: cindex.Cursor) -> None:
+            """直接呼び出しの実引数のうち、関数の名前そのものを、呼び出し先の引数の置き場に結び付ける（`apply(helper, v)`）。"""
+
+            callee = cursor.referenced
+            if callee is None or callee.kind != cindex.CursorKind.FUNCTION_DECL:
+                return
+            usr = self._function_key(callee)
+            if not usr or usr.endswith(KEY_SYSTEM_HEADER):
+                return  # 標準ライブラリなど、プロジェクトの外の関数に渡す関数は、置き場を持たない
+            arguments = [a for a in cursor.get_children()][1:]  # 先頭は呼び出し対象の式
+            parameters = [c for c in callee.get_children() if c.kind == cindex.CursorKind.PARM_DECL]
+            for position, argument in enumerate(arguments):
+                if position < len(parameters) and _is_function_pointer(parameters[position]):  # 関数ポインタ型の引数だけ
+                    hint_slot(f"param:{usr}:{position}", argument)
 
         def hint_initializer(init_list: cindex.Cursor) -> None:
             fields = _field_usrs_in_order(init_list)
@@ -536,7 +626,12 @@ class CAnalyzer:
         def collect_reference(cursor: cindex.Cursor, source: Symbol | None) -> None:
             if source is None:
                 return
+            current_source[0] = source
             kind = cursor.kind
+            if kind == cindex.CursorKind.CALL_EXPR:
+                hint_call_arguments(cursor)
+            elif kind == cindex.CursorKind.VAR_DECL:
+                hint_declaration(cursor)
             if kind == cindex.CursorKind.BINARY_OPERATOR:
                 hint_assignment(cursor)
             elif kind == cindex.CursorKind.INIT_LIST_EXPR:
@@ -586,6 +681,9 @@ class CAnalyzer:
                 symbols_by_id[symbol.symbol_id] = symbol
                 if symbol.usr:
                     symbols_by_usr.setdefault(symbol.usr, symbol)
+                if child.kind == cindex.CursorKind.VAR_DECL:
+                    current_source[0] = symbol
+                    hint_declaration(child)  # ローカルの関数ポインタの初期化（子の式を訪ねる前に、置き場を結び付ける）
                 visit(child, symbol)
 
         self._collect_includes(translation_unit, unit, project_root, in_target_file, ids, result)

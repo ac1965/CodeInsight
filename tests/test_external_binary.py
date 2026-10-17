@@ -24,7 +24,7 @@ int unused(void) { return 0; }
 int shared(void) { return 1; }
 static op table[2] = {helper, twice};
 int apply(op f, int v) { return f(v); }
-int main(void) { int t = helper(1); t += twice(t); t += apply(helper, t); return t; }
+int main(void) { int t = helper(1); t += twice(t); t += apply(table[1], t); return t; }
 """
 OTHER = "int shared(void) { return 2; }\n"
 

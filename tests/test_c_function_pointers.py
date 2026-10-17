@@ -78,3 +78,68 @@ def test_resolution_is_idempotent(tmp_path: Path, calls) -> None:
     ReferenceResolver().resolve(list(index.files.values()), list(index.symbols.values()), list(index.references), list(index.dependencies))
     after = {k: (v.resolution_status, v.target_symbol_id, v.note) for k, v in of("run").items()}
     assert before == after
+
+
+LOCAL_PARAM_SOURCE = """\
+static int mul(int a, int b) { return a * b; }
+static int add(int a, int b) { return a + b; }
+static int sub(int a, int b) { return a - b; }
+int apply(int (*f)(int, int), int x) { return f(x, 2); }
+int forward(int (*g)(int, int), int x) { return apply(g, x); }
+int via_local(int x) { int (*op)(int, int) = mul; return op(x, 3); }
+int via_assign(int x) { int (*op)(int, int); op = add; return op(x, 4); }
+int via_two(int x, int c) { int (*op)(int, int) = c ? add : sub; op = sub; return op(x, 5); }
+int unknown_local(int (*h)(int, int)) { int (*op)(int, int) = h; return op(1, 2); }
+int strcmp_like(int a, int b) { return a - b; }
+int main(void) { return apply(mul, 1) + apply(add, 2) + forward(sub, 3) + apply(strcmp_like, 4); }
+"""
+
+
+@pytest.fixture
+def local_calls(tmp_path: Path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "lp.c").write_text(LOCAL_PARAM_SOURCE, encoding="utf-8")
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(root), "--db", db]) == 0
+    repository = AnalysisRepository(Path(db))
+    project = repository.list_projects()[0]
+    index = NavigationService(repository).load_index(project)
+    by_name = {s.qualified_name: s for s in index.symbols.values()}
+
+    def of(function: str, target: str):
+        (found,) = [r for r in index.references if r.source_symbol_id == by_name[function].symbol_id and r.reference_kind == ReferenceKind.CALL and r.target_name == target]
+        return found
+
+    yield of, index
+    repository.close()
+
+
+def test_local_function_pointer_is_resolved_from_its_assignment(local_calls) -> None:
+    of, index = local_calls
+    local = of("via_local", "op")
+    assert local.resolution_status == ResolutionStatus.RESOLVED and local.confidence == Confidence.INFERRED
+    assert index.symbols[local.target_symbol_id].name == "mul" and "この変数に" in local.note
+    assigned = of("via_assign", "op")
+    assert index.symbols[assigned.target_symbol_id].name == "add"
+
+
+def test_local_with_several_assignments_is_ambiguous(local_calls) -> None:
+    of, _ = local_calls
+    two = of("via_two", "op")
+    assert two.resolution_status == ResolutionStatus.AMBIGUOUS and "add" in two.note and "sub" in two.note  # 流れ非依存なので、代入された全部を候補にする（1つを選ばない）
+
+
+def test_parameter_function_pointer_is_resolved_from_callers(local_calls) -> None:
+    of, _ = local_calls
+    applied = of("apply", "f")
+    assert applied.resolution_status == ResolutionStatus.AMBIGUOUS  # 呼び出し元が渡す: mul・add・strcmp_like（転送された g は追わない）
+    for name in ("mul", "add", "strcmp_like"):
+        assert name in applied.note
+    assert "この引数に、呼び出し元が渡している関数" in applied.note and "sub" not in applied.note.split("［候補")[1]  # forward 経由で渡る sub は、転送なので追えない
+
+
+def test_forwarded_and_unknown_sources_stay_unresolved(local_calls) -> None:
+    of, _ = local_calls
+    unknown = of("unknown_local", "op")
+    assert unknown.resolution_status == ResolutionStatus.UNRESOLVED  # 引数 h からのコピー: 転送は追わない

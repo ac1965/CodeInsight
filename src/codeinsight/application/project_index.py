@@ -4,7 +4,7 @@ import fnmatch
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from codeinsight.domain import Dependency, Reference, SourceFile, Symbol
+from codeinsight.domain import Dependency, Reference, ReferenceKind, SourceFile, Symbol
 from codeinsight.infrastructure.analysis_repository import AnalysisRepository
 
 
@@ -37,7 +37,7 @@ class ProjectIndex:
             project_id=project_id,
             files=files,
             symbols={s.symbol_id: s for s in repository.list_symbols_for_project(project_id)},
-            _load_references=lambda: repository.list_references_for_project(project_id),
+            _load_references=lambda: [r for r in repository.list_references_for_project(project_id) if r.reference_kind != ReferenceKind.SLOT_SOURCE],
             _load_dependencies=lambda: [
                 d for d in repository.list_dependencies_for_project(project_id) if d.is_visible
             ],

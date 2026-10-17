@@ -16,6 +16,7 @@ class ReferenceKind(enum.Enum):
     INHERITANCE = "inheritance"
     TYPE_USE = "type_use"
     IMPORT = "import"
+    SLOT_SOURCE = "slot_source"  # 内部の目印: 関数ポインタの置き場に、関数名でない値が代入されている（解決に使う。利用者向けの一覧・件数には出さない）
 
 
 class ResolutionStatus(enum.Enum):

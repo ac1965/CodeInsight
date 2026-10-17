@@ -55,6 +55,11 @@ _INHERITANCE_NOTE = "サブクラスでのオーバーライドにより、実�
 
 
 _CANDIDATES_MARK = " ［候補: "
+_SLOT_PHRASES = {  # 置き場の種類ごとの、根拠の言い方
+    "param:": "この引数に、呼び出し元が渡している関数",
+    "local:": "この変数に代入・初期化されている関数",
+    "": "この置き場に代入・初期化されている関数",
+}
 
 
 class ReferenceResolver:
@@ -168,16 +173,17 @@ class ReferenceResolver:
 
         根拠は「プロジェクトの中で、その置き場に関数のアドレスが代入・初期化されている」ことだけ。実行時にどれが入っているか
         （再代入・プロジェクト外のコードによる代入・ポインタのコピー）は分からないため、候補が1つでも**確定にはしない（推定）**。
-        候補が複数なら曖昧（どれか1つを選ばない）、代入が見つからなければ未解決のまま。"""
+        候補が複数なら曖昧（どれか1つを選ばない）、代入が見つからなければ未解決のまま。
+        関数名でない値（変数・戻り値・引数の転送など）も代入されている置き場は、見つかった関数だけが候補とは言えないため、1つに絞らず曖昧にする。"""
 
         bindings: dict[str, dict[str, Symbol]] = defaultdict(dict)
+        unknown_sources: set[str] = set()  # 関数名でない値が代入・渡されている置き場
         for reference in references:
-            if (
-                reference.slot_key
-                and reference.reference_kind == ReferenceKind.FUNCTION_REF
-                and reference.resolution_status == ResolutionStatus.RESOLVED
-                and reference.target_symbol_id
-            ):
+            if not reference.slot_key or reference.reference_kind not in (ReferenceKind.FUNCTION_REF, ReferenceKind.SLOT_SOURCE):
+                continue
+            if reference.reference_kind == ReferenceKind.SLOT_SOURCE:
+                unknown_sources.add(reference.slot_key)
+            elif reference.resolution_status == ResolutionStatus.RESOLVED and reference.target_symbol_id:
                 target = self._symbols_by_id.get(reference.target_symbol_id)
                 if target is not None and target.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD):
                     bindings[reference.slot_key][target.symbol_id] = target
@@ -185,20 +191,31 @@ class ReferenceResolver:
             if not (reference.slot_key and reference.reference_kind == ReferenceKind.CALL and reference.target_key is None):
                 continue
             base = reference.note.split(_CANDIDATES_MARK)[0]
+            where = _SLOT_PHRASES[next((k for k in _SLOT_PHRASES if reference.slot_key.startswith(k)), "")]
             candidates = sorted(bindings.get(reference.slot_key, {}).values(), key=lambda s: (s.qualified_name, s.symbol_id))
             reference.target_symbol_id = None
-            if not candidates:
-                self._set(reference, ResolutionStatus.UNRESOLVED, f"{base}{_CANDIDATES_MARK}このプロジェクトの中に、関数を代入・初期化している箇所は見つからない］")
+            unknown = reference.slot_key in unknown_sources
+            if not candidates and unknown:
+                self._set(reference, ResolutionStatus.UNRESOLVED, f"{base}{_CANDIDATES_MARK}代入・渡されているのは、関数名でない値（変数・戻り値・引数の転送など）だけ］")
+            elif not candidates:
+                self._set(reference, ResolutionStatus.UNRESOLVED, f"{base}{_CANDIDATES_MARK}このプロジェクトの中に、{where}は見つからない］")
+            elif unknown:
+                # 関数名でない値も代入されているため、見つかった関数だけが候補とは言えない（1つに絞らない）
+                names = ", ".join(c.qualified_name for c in candidates[:8])
+                self._set(
+                    reference, ResolutionStatus.AMBIGUOUS,
+                    f"{base}{_CANDIDATES_MARK}{where}は {names}。ほかに、関数名でない値（変数・戻り値・引数の転送など）も代入されており、全部は列挙できない］",
+                )
             elif len(candidates) == 1:
                 self._resolved(
                     reference, candidates[0],
-                    f"{base}{_CANDIDATES_MARK}プロジェクトの中で、この置き場に代入・初期化されている関数は {candidates[0].qualified_name} だけ。"
-                    "再代入・外部のコードによる代入があれば、実際の呼び出し先は変わりうる］",
+                    f"{base}{_CANDIDATES_MARK}プロジェクトの中で、{where}は {candidates[0].qualified_name} だけ。"
+                    "再代入・外部のコードによる代入・転送があれば、実際の呼び出し先は変わりうる］",
                     Confidence.INFERRED,
                 )
             else:
                 names = ", ".join(c.qualified_name for c in candidates[:8]) + (f" ほか{len(candidates) - 8}件" if len(candidates) > 8 else "")
-                self._set(reference, ResolutionStatus.AMBIGUOUS, f"{base}{_CANDIDATES_MARK}この置き場に代入・初期化されている関数が複数ある: {names}］")
+                self._set(reference, ResolutionStatus.AMBIGUOUS, f"{base}{_CANDIDATES_MARK}{where}が複数ある: {names}］")
 
     def _language_of(self, file_id: str) -> Language:
         source_file = self._files_by_id.get(file_id)
