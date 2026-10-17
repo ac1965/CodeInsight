@@ -6,6 +6,7 @@ from pathlib import Path
 import pathspec
 
 from codeinsight.domain.project import Project
+from codeinsight.native import native_helper
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,9 @@ class FileScanner:
 
     def scan(self, project: Project) -> list[ScannedFile]:
         root = project.root_path.resolve()
+        fast = self._scan_native(project, root)
+        if fast is not None:
+            return fast
         spec = (
             self._load_gitignore(root)
             if project.configuration.respect_gitignore
@@ -44,6 +48,21 @@ class FileScanner:
             results=results,
         )
         return results
+
+    def _scan_native(self, project: Project, root: Path) -> list[ScannedFile] | None:
+        """Goの補助プログラムで走査する（結果は Python の走査と同じ）。使えない・.gitignore の書式が範囲外なら None。"""
+
+        lines: list[str] | None = None
+        if project.configuration.respect_gitignore:
+            gitignore_path = root / ".gitignore"
+            if gitignore_path.is_file():
+                lines = gitignore_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        relatives = native_helper().scan(
+            root, lines, set(project.configuration.exclude_dirs), set(project.configuration.exclude_files)
+        )
+        if relatives is None:
+            return None
+        return [ScannedFile(absolute_path=root / relative, relative_path=relative) for relative in relatives]
 
     def _load_gitignore(self, root: Path) -> pathspec.PathSpec | None:
         gitignore_path = root / ".gitignore"

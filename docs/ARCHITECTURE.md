@@ -65,6 +65,7 @@ src/codeinsight/
 │   ├── elisp_flow_service.py    Emacs Lispの関数単位の制御フロー・シグナル・状態（ソースの鮮度を確認して実行）
 │   └── graph_builder.py         グラフモデル（呼び出し/ファイル依存/継承/アーキテクチャ）の組み立て
 │
+├── native/            Goの補助プログラム cifast（走査・内容ハッシュ・経路探索）の呼び出し口。無い・失敗した場合は、Python の実装に戻る（cifast/main.go。標準ライブラリのみ、読み取り専用）
 ├── infrastructure/    ファイル・Git・永続化との接続
 │   ├── file_scanner.py        走査、.gitignore尊重、既定除外、symlink安全化
 │   ├── git_repository.py      Gitリポジトリ識別・リビジョン・行範囲/ファイルの履歴（読み取り専用）

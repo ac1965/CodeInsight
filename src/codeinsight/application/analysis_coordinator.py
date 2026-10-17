@@ -25,6 +25,7 @@ from codeinsight.domain import (
 from codeinsight.infrastructure.analysis_repository import AnalysisRepository
 from codeinsight.infrastructure.file_scanner import FileScanner, ScannedFile
 from codeinsight.infrastructure.git_repository import GitRepository
+from codeinsight.native import native_helper
 
 # パッケージのバージョンに、解析ロジックの指紋を付けて「解析器のバージョン」とする。
 ANALYZER_VERSION = f"{__version__}+{analyzer_fingerprint()}"
@@ -127,7 +128,7 @@ class AnalysisCoordinator:
             }
             current_paths = {scanned.relative_path for scanned, _ in candidates}
             stats = AnalysisStats(removed=sum(1 for path in existing_files if path not in current_paths))
-            hashes = {scanned.relative_path: _file_hash(scanned.absolute_path) for scanned, _ in candidates}
+            hashes = _file_hashes(candidates)
             force = self._dependents_to_reanalyze(project, existing_files, hashes, current_paths)
             build_hash = _compile_commands_hash(project)
             previous_hash = project.configuration.compile_commands_hash
@@ -357,6 +358,17 @@ def _compile_commands_hash(project: Project) -> str:
         return hashlib.sha256((Path(directory) / "compile_commands.json").read_bytes()).hexdigest()[:16]
     except OSError:
         return ""
+
+
+def _file_hashes(candidates) -> dict[str, str | None]:
+    """候補ファイルの内容ハッシュ。Goの補助プログラムが使えれば並列で計算し、使えなければ（または結果が欠ければ）Python で計算する。"""
+
+    fast = native_helper().hash_files([str(scanned.absolute_path) for scanned, _ in candidates])
+    result: dict[str, str | None] = {}
+    for scanned, _ in candidates:
+        key = str(scanned.absolute_path)
+        result[scanned.relative_path] = fast[key] if fast is not None and key in fast else _file_hash(scanned.absolute_path)
+    return result
 
 
 def _file_hash(path) -> str | None:

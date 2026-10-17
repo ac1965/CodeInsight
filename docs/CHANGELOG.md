@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## ファイル走査・内容ハッシュ・経路探索を、Goの補助プログラム（cifast）に任せられるようにする
+
+* `src/codeinsight/native/`（`cifast/main.go` と `helper.py`）を追加した。標準ライブラリだけに依存し、読み取りしかしない。初回に `go build` で `~/.codeinsight/tools/` へ作る（Goの補助プログラム `goparse` と同じ方式。ネットワークは使わない）。`go` が無い・作れない・失敗した場合、または `CODEINSIGHT_NO_NATIVE=1` の場合は、**従来の Python の実装でそのまま処理する**（エラーにしない。結果は同じ）。
+* 対象: (1) `FileScanner.scan`（`.gitignore`・除外・シンボリックリンクの扱いを含む）、(2) 解析時の内容ハッシュ（`analysis_coordinator._file_hashes`。並列化）、(3) `CallGraph.find_paths`（経路の上限が1000件以上のときだけ）。`.gitignore` の書式が範囲外（`[...]`・バックスラッシュ・セグメント内の `**`）の場合は、走査を Python 側で行う。
+* 実測（macOS arm64）: 3.3万ファイルの走査 1033ms → 342ms、ハッシュ 996ms → 490ms、経路探索（上限5000件）4.3秒 → 0.7秒。一方、418ファイルの走査は約16ms で差がなく、経路の上限が既定の20件のときは速くならない（プロセスの起動と変換のほうが重い）。強連結成分は、150万辺でも速くならなかったため、Go には移していない。
+* Goの結果が Python と同じことを `tests/test_native_helper.py` で確認する（`pathspec` との照合、シンボリックリンク、ランダムなグラフ）。なお、Python 版の `find_paths` は、上限に達した直後の兄弟の辺でも1件追加しうる。Go 版も同じ挙動にそろえた（挙動の変更は別の課題）。
+
 ## 資料の出力先の既定を ~/.codeinsight/reading-out/<対象名> にする
 
 * `make reading` などの `OUT` の既定を、`reading/<対象名>`（リポジトリ直下）から `~/.codeinsight/reading-out/<対象名>`（`CODEINSIGHT_DATA_DIR` があればその下）に変更した。対象・リポジトリの外になり、DBと同じ場所にまとまる。compose・`.env.example`・README・OPERATIONS も合わせた。

@@ -6,6 +6,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from codeinsight.domain import Reference, ReferenceKind, ResolutionStatus, Symbol
+from codeinsight.native import native_helper
+
+# 経路の上限がこの数以上（探索が重くなる）のときだけ、Goの補助プログラムで探索する。
+# 実測では、上限が小さい（既定の20件）ときは、プロセスの起動とグラフの変換のほうが遅く、上限が大きいときは数倍速い。
+# 強連結成分は、大きいグラフ（150万辺）でも、変換のほうが重く、速くならなかったため、Python のままにしている。
+NATIVE_MIN_LIMIT = 1000
+NATIVE_MIN_EDGES = 2000
 
 
 class Direction(Enum):
@@ -124,6 +131,10 @@ class CallGraph:
         通ることは保証しない。
         """
 
+        native = self._find_paths_native(source_id, target_id, max_depth, limit)
+        if native is not None:
+            return native
+
         paths: list[list[Reference]] = []
 
         def walk(current: str, visited: set[str], trail: list[Reference]) -> None:
@@ -147,6 +158,24 @@ class CallGraph:
         walk(source_id, {source_id}, [])
         return paths
 
+    def _find_paths_native(self, source_id: str, target_id: str, max_depth: int, limit: int) -> list[list[Reference]] | None:
+        """大きいグラフでは、Goの補助プログラムで探索する（Python 版と同じ順序・打ち切り）。使えなければ None。"""
+
+        if limit < NATIVE_MIN_LIMIT or sum(len(v) for v in self._calls_from.values()) < NATIVE_MIN_EDGES:
+            return None
+        by_id: dict[int, Reference] = {}
+        edges: dict[str, list[tuple[int, str]]] = {}
+        for node_id in self._calls_from:
+            for reference in self.calls_from(node_id):
+                if reference.resolution_status != ResolutionStatus.RESOLVED or reference.target_symbol_id is None:
+                    continue
+                by_id[len(by_id)] = reference
+                edges.setdefault(node_id, []).append((len(by_id) - 1, reference.target_symbol_id))
+        answer = native_helper().paths(edges, source_id, target_id, max_depth, limit)
+        if answer is None:
+            return None
+        return [[by_id[i] for i in path] for path in answer]
+
 
 def _reference_order(reference: Reference) -> tuple:
     location = reference.source_location
@@ -155,6 +184,7 @@ def _reference_order(reference: Reference) -> tuple:
 
 def strongly_connected_components(edges: dict[str, set[str]]) -> list[list[str]]:
     """有向グラフの強連結成分（Tarjan法、反復版）。要素数2以上のものが循環を表す。"""
+
 
     index_of: dict[str, int] = {}
     lowlink: dict[str, int] = {}
