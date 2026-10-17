@@ -18,6 +18,9 @@ from codeinsight.application.boundary_service import BoundaryService
 from codeinsight.application.c_flow_service import C_FAMILY, CFlowService
 from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
 from codeinsight.application.config_service import ConfigService
+from codeinsight.application.external_binary_service import ExternalBinaryService
+from codeinsight.application.external_findings_service import ExternalFindingsService
+from codeinsight.application.external_index_service import ExternalIndexService
 from codeinsight.application.extract_service import DIRECTIONS, ExtractService
 from codeinsight.application.flow_service import FlowAnalysisError
 from codeinsight.application.freshness_service import FreshnessService
@@ -28,6 +31,8 @@ from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.search_service import search_symbols_in_index
 from codeinsight.application.understand_service import UnderstandService
 from codeinsight.domain import Confidence, FileFreshness, Project, ReferenceKind, ResolutionStatus
+from codeinsight.dynamic.diff import NOTE as NOTE_DYNAMIC
+from codeinsight.dynamic.diff import compare as compare_with_static
 from codeinsight.infrastructure import AnalysisRepository
 from codeinsight.mcp.serialize import to_plain
 from codeinsight.presentation import extract_export
@@ -123,6 +128,9 @@ class ViewerApi:
             "/api/status": self._status,
             "/api/inferences": self._inferences,
             "/api/inference": self._inference,
+            "/api/external": self._external,
+            "/api/dynamic": self._dynamic,
+            "/api/dynamic-diff": self._dynamic_diff,
         }
 
     def refresh(self) -> None:
@@ -545,6 +553,64 @@ class ViewerApi:
             "note": "失敗したファイルは、正常に解析したものとして扱っていません。古いファイルの位置は、解析時と対応しない可能性があります。",
         }
 
+    def _external(self, params: Params) -> dict:
+        """外部ツールの取り込み結果（SARIF・SCIP・radare2）と、CodeInsight自身の結果との比較。外部の結果は事実ではなく、食い違いは並べて示す（採用しない）。"""
+
+        limit = _int(params, "limit", 50, 1, 200) or 50
+        findings = ExternalFindingsService(self._repository).with_staleness(self._project)
+        by_tool: dict[str, int] = defaultdict(int)
+        for finding, _ in findings:
+            by_tool[f"{finding.tool} {finding.tool_version}".strip()] += 1
+        index_service = ExternalIndexService(self._repository)
+        binary_service = ExternalBinaryService(self._repository)
+        index_summaries = index_service.summaries(self._project)
+        binary_summaries = binary_service.summaries(self._project)
+        return {
+            "sarif": {
+                "total": len(findings), "by_tool": dict(by_tool),
+                "findings": [
+                    {"tool": f.tool, "tool_version": f.tool_version, "rule": f.rule_id, "level": f.level, "message": f.message[:500], "path": f.path,
+                     "start_line": f.start_line, "end_line": f.end_line, "source": f.source_name, "imported_at": f.imported_at.isoformat(timespec="seconds"), "stale": stale}
+                    for f, stale in findings[:limit]
+                ],
+            },
+            "scip": {"indexes": _plain_rows(index_summaries), "comparison": to_plain(index_service.compare(self._project, self._index), True) if index_summaries else None},
+            "binary": {"binaries": _plain_rows(binary_summaries), "comparison": to_plain(binary_service.compare(self._project, self._index), True) if binary_summaries else None},
+            "note": "外部ツールの結果は、CodeInsight自身の解析結果（事実）とは別の区分です。確定した事実として扱いません。食い違いは、並べて示すだけで、どちらも採用していません。取り込み後に変更されたファイルは、古いと示します。",
+        }
+
+    def _dynamic(self, params: Params) -> dict:
+        """動的解析の実行の一覧（保存済みの記録。実行はしない）。"""
+
+        runs = []
+        for run in self._repository.list_dynamic_runs(self._project.project_id):
+            stale = [p for p, h in run.source_hashes.items() if not self._hashes_current({p: h})]
+            runs.append({
+                "id": run.run_id, "started_at": run.started_at.isoformat(timespec="seconds"), "command": list(run.command), "status": run.status.value, "collector": run.collector,
+                "exit_code": run.exit_code, "duration_seconds": run.duration_seconds, "stale": bool(stale), "stale_files": stale[:20], "sandbox": run.sandbox, "notes": run.notes[:10],
+            })
+        return {"runs": runs[:50], "note": "観測は、この1回の実行で起きたことの記録です。観測されなかったことは、呼ばれないことを意味しません。"}
+
+    def _dynamic_diff(self, params: Params) -> dict:
+        """観測と静的な呼び出し関係の差分（保存済みの観測を読むだけ）。"""
+
+        wanted = _text(params, "run")
+        runs = [r for r in self._repository.list_dynamic_runs(self._project.project_id) if r.status.value in ("completed", "failed")]
+        if wanted:
+            runs = [r for r in runs if r.run_id.startswith(wanted)]
+        if not runs:
+            raise ApiError(404, "比較できる観測がありません（完了・異常終了の実行のみ）")
+        run = runs[0]
+        limit = _int(params, "limit", 50, 1, 500) or 50
+        diff = compare_with_static(self._index, run, self._repository.list_dynamic_observations(run.run_id))
+        plain = to_plain(diff, True)
+        counts = {k: len(plain[k]) for k in ("both", "observed_only", "unmatched", "static_only")}
+        for key in counts:
+            plain[key] = plain[key][:limit]
+        plain["counts"] = counts
+        plain["note"] = NOTE_DYNAMIC
+        return plain
+
     def _inferences(self, params: Params) -> dict:
         """保存済みのAIの推測（種類 inference）。解析結果ではない。根拠のファイルが変わったものは、古いと示す。"""
 
@@ -565,6 +631,10 @@ class ViewerApi:
             "text": explanation.text, "validation": explanation.validation, "latest": info.get("id") == explanation.explanation_id,
             "ai_generated": True, "note": "AIの推測です（確定ではありません）。解析結果の解決状態は、変わりません。",
         }
+
+
+def _plain_rows(rows: list[dict]) -> list[dict]:
+    return [{k: (v if isinstance(v, str | int | float | bool) or v is None else str(v)) for k, v in row.items()} for row in rows]
 
 
 def _group_errors(errors) -> list[dict]:

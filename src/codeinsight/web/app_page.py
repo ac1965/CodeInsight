@@ -17,6 +17,8 @@ _CONTROLS = """<div id="controls">
     <button id="view-reading" type="button" role="tab">資料</button>
     <button id="view-unresolved" type="button" role="tab">未解決</button>
     <button id="view-explore" type="button" role="tab">探索</button>
+    <button id="view-external" type="button" role="tab">外部ツール</button>
+    <button id="view-dynamic" type="button" role="tab">動的解析</button>
     <button id="view-status" type="button" role="tab">状態</button>
     <button id="view-help" type="button" role="tab">使い方</button>
   </span>
@@ -322,13 +324,15 @@ _BOOT = r"""
   }
   function showView(name) {
     document.body.classList.toggle("view-docs", name !== "graph");
-    ["graph", "reading", "unresolved", "explore", "status", "help"].forEach(function (v) { $("view-" + v).classList.toggle("active", v === name); });
+    ["graph", "reading", "unresolved", "explore", "external", "dynamic", "status", "help"].forEach(function (v) { $("view-" + v).classList.toggle("active", v === name); });
     $("docs-view").hidden = name === "graph";
     $("graph-controls").hidden = name !== "graph";
     $("docs-body").classList.remove("wide");
     if (name === "unresolved") { showUnresolved(); return; }
     if (name === "explore") { showExplore(HASH.explore); return; }
     if (name === "status") { showStatus(); return; }
+    if (name === "external") { showExternal(); return; }
+    if (name === "dynamic") { showDynamic(HASH.run); return; }
     if (name === "reading") {
       return api("/api/reading", {}).then(function (data) {
         docs.files = data.files; buildNav(data.files);
@@ -352,6 +356,8 @@ _BOOT = r"""
   $("view-unresolved").onclick = function () { showView("unresolved"); };
   $("view-explore").onclick = function () { showView("explore"); };
   $("view-status").onclick = function () { showView("status"); };
+  $("view-external").onclick = function () { showView("external"); };
+  $("view-dynamic").onclick = function () { showView("dynamic"); };
 
   // ---- 状態の印（確定・推定・未解決・曖昧・外部・観測・AIの推測）。色だけでなく、記号と文字でも区別する ----
   var BADGES = {
@@ -596,6 +602,80 @@ _BOOT = r"""
     };
     go.onclick = run; input.onkeydown = function (ev) { if (ev.key === "Enter") run(); }; run();
   }
+  function showExternal() {
+    var nav = $("docs-nav"); nav.textContent = ""; nav.appendChild(el("h3", "外部ツールの結果"));
+    var body = viewBody("外部ツールの結果と、自身の解析結果との比較");
+    api("/api/external", {}).then(function (d) {
+      var banner = el("div", null, "ai-banner"); banner.appendChild(document.createTextNode("※ " + d.note)); body.appendChild(banner);
+      body.appendChild(el("h2", "SARIF の指摘（" + d.sarif.total + "件）"));
+      if (!d.sarif.total) body.appendChild(el("p", "取り込まれた指摘はありません（import-sarif で取り込めます）。"));
+      else {
+        body.appendChild(el("p", Object.keys(d.sarif.by_tool).map(function (t) { return t + ": " + d.sarif.by_tool[t] + "件"; }).join(" / ")));
+        var rows = d.sarif.findings.map(function (f) {
+          var tr = el("tr"); tr.appendChild(cell(f.tool + " " + f.tool_version)); tr.appendChild(cell(f.level)); tr.appendChild(cell(f.rule)); tr.appendChild(cell(pathLink(f.path, f.start_line)));
+          var m = el("td"); m.appendChild(document.createTextNode(f.message)); if (f.stale) m.appendChild(el("span", "古い（取り込み後にファイルが変更）", "badge b-unverified")); tr.appendChild(m); return tr;
+        });
+        body.appendChild(table(["ツール", "水準", "規則", "位置", "内容"], rows));
+      }
+      body.appendChild(el("h2", "SCIP の索引との比較"));
+      if (!d.scip.comparison) body.appendChild(el("p", "取り込まれた索引はありません（import-scip で取り込めます）。"));
+      else {
+        var c = d.scip.comparison;
+        body.appendChild(el("p", "索引: " + c.indexes.join(", ") + " / 比較した参照 " + c.compared + "件 / 一致 " + c.confirmed + "件（うち自身は推定としていたもの " + c.confirmed_inferred + "件） / 食い違い " + c.conflicts.length + "件 / 自身は未解決で索引は定義を示すもの " + c.index_resolves.length + "件"));
+        var show = function (title, items) {
+          if (!items.length) return; body.appendChild(el("h3", title));
+          body.appendChild(table(["位置", "自身の解決先", "索引の定義", "索引のシンボル"], items.slice(0, 50).map(function (i) {
+            var tr = el("tr"); tr.appendChild(cell(pathLink(i.path, i.line))); tr.appendChild(cell(i.ours || "（未解決）")); tr.appendChild(cell(i.index.map(function (x) { return x[0] + ":" + x[1]; }).join(", "))); tr.appendChild(cell(i.symbol)); return tr;
+          })));
+        };
+        show("食い違い（どちらも採用していません）", c.conflicts); show("索引だけが定義を示すもの（採用していません）", c.index_resolves);
+        if (c.stale_files.length) body.appendChild(el("p", "取り込み後に変更されたため、比較から除いたファイル: " + c.stale_files.join(", "), "hint"));
+      }
+      body.appendChild(el("h2", "radare2 のバイナリ解析との比較"));
+      if (!d.binary.comparison) body.appendChild(el("p", "取り込まれたバイナリの結果はありません（import-r2 で取り込めます）。"));
+      else {
+        var b = d.binary.comparison;
+        body.appendChild(el("p", "バイナリ: " + b.binaries.join(", ") + " / 対応づいた関数 " + b.matched.length + " / バイナリのみ " + b.binary_only.length + " / ソースのみ " + b.source_only.length + " / 辺: 両方 " + b.edges_both.length + "・バイナリのみ " + b.edges_binary_only.length + "・ソースのみ " + b.edges_source_only.length));
+        var edges = function (title, items) {
+          if (!items.length) return; body.appendChild(el("h3", title));
+          body.appendChild(table(["呼び出し元", "呼び出し先", "備考"], items.slice(0, 50).map(function (i) { var tr = el("tr"); tr.appendChild(cell(i.caller)); tr.appendChild(cell(i.callee)); tr.appendChild(cell((i.candidates.length ? "未解決・曖昧な呼び出しの候補: " + i.candidates.join(", ") + " " : "") + (i.note || ""))); return tr; })));
+        };
+        edges("バイナリにだけある呼び出しの辺（自身の静的解析では確認できていない）", b.edges_binary_only); edges("ソースにだけある呼び出しの辺（インライン化・最適化・ビルド対象外の可能性）", b.edges_source_only);
+        b.notes.forEach(function (n) { body.appendChild(el("p", n, "hint")); });
+      }
+    }).catch(function (e) { body.appendChild(el("p", e.message)); });
+  }
+  function showDynamic(runId) {
+    var nav = $("docs-nav"); nav.textContent = ""; nav.appendChild(el("h3", "動的解析の実行"));
+    var body = viewBody("動的解析の観測と、静的な解析結果との差分");
+    api("/api/dynamic", {}).then(function (d) {
+      var banner = el("div", null, "ai-banner"); banner.appendChild(badge("observed")); banner.appendChild(document.createTextNode(" " + d.note)); body.appendChild(banner);
+      if (!d.runs.length) { body.appendChild(el("p", "動的解析の実行の記録がありません（dynamic-run で、許可とコマンドを明示して実行できます）。")); return; }
+      d.runs.forEach(function (r) {
+        var b = el("button", r.started_at + " " + r.status + (r.stale ? "（古い）" : "")); b.type = "button"; b.onclick = function () { showDynamic(r.id); }; nav.appendChild(b);
+      });
+      var rows = d.runs.map(function (r) { var tr = el("tr"); tr.appendChild(cell(r.id.slice(0, 8))); tr.appendChild(cell(r.started_at)); tr.appendChild(cell(r.status + (r.exit_code == null ? "" : "（終了コード " + r.exit_code + "）"))); tr.appendChild(cell(r.collector)); tr.appendChild(cell(r.command.join(" "))); tr.appendChild(cell(r.stale ? "古い: " + r.stale_files.join(", ") : "")); return tr; });
+      body.appendChild(table(["実行ID", "開始", "状態", "収集器", "コマンド", "古さ"], rows));
+      var usable = d.runs.filter(function (r) { return r.status === "completed" || r.status === "failed"; });
+      var target = runId || (usable[0] && usable[0].id); if (!target) return;
+      body.appendChild(el("h2", "差分: 実行 " + target.slice(0, 8)));
+      var out = el("div"); body.appendChild(out);
+      api("/api/dynamic-diff", { run: target }).then(function (x) {
+        out.appendChild(el("p", "観測と静的の両方 " + x.counts.both + " / 観測のみ " + x.counts.observed_only + " / 対応づけ不能 " + x.counts.unmatched + " / 静的のみ " + x.counts.static_only + " / 実行された関数 " + x.executed_functions + " / 実行が観測されなかった関数 " + x.not_executed));
+        var edgeTable = function (title, items, withReason) {
+          if (!items.length) return; out.appendChild(el("h3", title));
+          out.appendChild(table(["呼び出し元", "呼び出し先", "回数", "備考"], items.map(function (i) {
+            var tr = el("tr"); tr.appendChild(cell(i.caller + " (" + i.caller_path + ")")); tr.appendChild(cell(i.callee + (i.callee_path ? " (" + i.callee_path + ")" : ""))); tr.appendChild(cell(i.count || ""));
+            tr.appendChild(cell((i.candidates || []).map(function (c) { return "静的では " + c.target_name + "（" + c.status + "、" + c.line + "行目）"; }).join("; ") + (i.reason ? " " + i.reason : ""))); return tr;
+          })));
+        };
+        edgeTable("観測と静的の両方で確認できた辺", x.both); edgeTable("観測のみ（静的な確定済みの辺には無い。候補は採用していません）", x.observed_only);
+        edgeTable("解析結果のシンボルに対応づけられない辺（静的解析が見つけていない関数）", x.unmatched); edgeTable("静的のみ（呼び出し元は実行されたが、辺は観測されていない）", x.static_only);
+        if (x.stale_files.length) out.appendChild(el("p", "実行後に変更されたため、比較から除いたファイル: " + x.stale_files.join(", "), "hint"));
+        x.notes.forEach(function (n) { out.appendChild(el("p", n, "hint")); }); out.appendChild(el("p", x.note, "hint"));
+      }).catch(function (e) { out.appendChild(el("p", e.message)); });
+    }).catch(function (e) { body.appendChild(el("p", e.message)); });
+  }
   function showStatus() {
     var nav = $("docs-nav"); nav.textContent = ""; nav.appendChild(el("h3", "解析の状態"));
     var body = viewBody("解析の状態");
@@ -693,7 +773,7 @@ _BOOT = r"""
     if (HASH.root) $("q").value = HASH.root;
     if (!HASH.kind && !HASH.root) $("kind").value = "arch";
     var drawn = draw();
-    if (["reading", "help", "unresolved", "explore", "status"].indexOf(HASH.view) >= 0) {
+    if (["reading", "help", "unresolved", "explore", "status", "external", "dynamic"].indexOf(HASH.view) >= 0) {
       Promise.resolve(drawn).then(function () { return showView(HASH.view); }).then(function () { settle(function () { if (HASH.annotate) annotate(HASH.annotate); }); });
       return;
     }

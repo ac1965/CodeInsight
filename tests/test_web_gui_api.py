@@ -212,9 +212,55 @@ def test_stale_observation_is_not_overlaid(gui) -> None:
     assert not any(e["style"] == "observed_only" for e in data["edges"]) and "重ねられる観測がありません" in " ".join(data["overlay"]["notes"])
 
 
+def test_external_tool_results_are_shown_apart_and_compared_without_adopting(gui, tmp_path: Path) -> None:
+    import json
+
+    httpd, _, db = gui
+    assert _api(httpd, "/api/external")[1]["sarif"]["total"] == 0 and _api(httpd, "/api/external")[1]["binary"]["comparison"] is None  # 取り込みが無い
+    sarif = tmp_path / "t.sarif"
+    sarif.write_text(json.dumps({"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "demo", "version": "1"}}, "results": [
+        {"ruleId": "D1", "level": "warning", "message": {"text": "x"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "app.c"}, "region": {"startLine": 8}}}]}]}]}), encoding="utf-8")
+    funcs = tmp_path / "f.json"
+    funcs.write_text(json.dumps([{"name": "dbg.main", "addr": 4096, "size": 16, "file": "app.c"}, {"name": "dbg.pick", "addr": 4200, "size": 16, "file": "app.c"}, {"name": "dbg.ghost", "addr": 4300, "size": 16, "file": "app.c"}]), encoding="utf-8")
+    graph = tmp_path / "g.json"
+    graph.write_text(json.dumps([{"name": "dbg.main", "size": 10, "imports": ["dbg.pick", "dbg.ghost"]}]), encoding="utf-8")
+    assert main(["import-sarif", str(sarif), "--db", db]) == 0
+    assert main(["import-r2", str(funcs), "--callgraph", str(graph), "--db", db]) == 0
+    data = _api(httpd, "/api/external")[1]
+    assert data["sarif"]["total"] == 1 and data["sarif"]["findings"][0]["rule"] == "D1" and data["sarif"]["findings"][0]["stale"] is False
+    assert "事実として扱いません" in data["note"]
+    comparison = data["binary"]["comparison"]
+    assert "ghost" in " ".join(comparison["binary_only"]) and comparison["matched"]  # ソースに無い関数は、バイナリのみ。採用しない
+    assert data["scip"]["comparison"] is None
+
+
+def test_dynamic_runs_and_diff_are_read_only_views_of_saved_observations(gui) -> None:
+    httpd, _, db = gui
+    from datetime import datetime
+
+    from codeinsight.application import NavigationService
+    from codeinsight.domain.observation import DynamicRun, Observation, ObservationKind, RunStatus
+
+    assert _api(httpd, "/api/dynamic")[1]["runs"] == [] and _api(httpd, "/api/dynamic-diff")[0] == 404
+    repo = AnalysisRepository(Path(db))
+    project = repo.list_projects()[0]
+    index = NavigationService(repo).load_index(project)
+    ids = {n: s.symbol_id for n, s in _by_name(index).items()}
+    hashes = {f.relative_path: f.content_hash for f in index.files.values()}
+    run = DynamicRun("r3abcdef", project.project_id, datetime.now(UTC), ("./a.out",), {}, {}, "c-gcov+c-instrument", "1", RunStatus.COMPLETED, source_hashes=hashes)
+    repo.save_dynamic_run(run, [Observation("o1", "r3abcdef", ObservationKind.CALL, symbol_id=ids["main"], target_symbol_id=ids["apply"], count=2, path="app.c", name="main"),
+                                Observation("o2", "r3abcdef", ObservationKind.CALL, symbol_id=ids["main"], target_symbol_id=ids["add"], count=1, path="app.c", name="main")])
+    repo.close()
+    runs = _api(httpd, "/api/dynamic")[1]["runs"]
+    assert runs[0]["id"] == "r3abcdef" and runs[0]["stale"] is False and "呼ばれないことを意味しません" in _api(httpd, "/api/dynamic")[1]["note"]
+    status, diff = _api(httpd, "/api/dynamic-diff?run=r3ab")
+    assert status == 200 and diff["counts"]["both"] >= 1 and diff["counts"]["observed_only"] >= 1 and "呼ばれないことを意味しません" in diff["note"]
+    assert _api(httpd, "/api/dynamic-diff?run=zzz")[0] == 404
+
+
 def test_new_endpoints_require_the_token_and_only_accept_get(gui) -> None:
     httpd, _, _ = gui
-    for path in ("/api/card?symbol=main", "/api/marks?path=app.c", "/api/unresolved", "/api/status", "/api/config", "/api/boundaries", "/api/inferences"):
+    for path in ("/api/card?symbol=main", "/api/marks?path=app.c", "/api/unresolved", "/api/status", "/api/config", "/api/boundaries", "/api/inferences", "/api/external", "/api/dynamic"):
         assert _request(httpd, path)[0] == 401
         assert _request(httpd, path, method="POST", headers={TOKEN_HEADER: httpd.token})[0] == 405  # 操作モードでない既定は、GET以外を受け付けない
 
