@@ -5,21 +5,31 @@
 
 from __future__ import annotations
 
-from collections import Counter
+import re
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from codeinsight.application import NavigationService
+from codeinsight.application.boundary_service import KIND_LABELS as BOUNDARY_LABELS
+from codeinsight.application.boundary_service import BoundaryService
+from codeinsight.application.c_flow_service import C_FAMILY, CFlowService
+from codeinsight.application.config_service import KIND_LABELS as CONFIG_LABELS
+from codeinsight.application.config_service import ConfigService
 from codeinsight.application.extract_service import DIRECTIONS, ExtractService
+from codeinsight.application.flow_service import FlowAnalysisError
 from codeinsight.application.freshness_service import FreshnessService
 from codeinsight.application.graph_builder import Traversal
 from codeinsight.application.graph_service import GRAPH_KINDS, GraphRequest, GraphRequestError, GraphService
 from codeinsight.application.navigation_service import AmbiguousSymbolError, SymbolNotFoundError
 from codeinsight.application.project_index import ProjectIndex
 from codeinsight.application.search_service import search_symbols_in_index
-from codeinsight.domain import FileFreshness, Project
+from codeinsight.application.understand_service import UnderstandService
+from codeinsight.domain import Confidence, FileFreshness, Project, ReferenceKind, ResolutionStatus
 from codeinsight.infrastructure import AnalysisRepository
+from codeinsight.mcp.serialize import to_plain
 from codeinsight.presentation import extract_export
 from codeinsight.presentation.graph_export import model_to_dict
 
@@ -104,12 +114,22 @@ class ViewerApi:
             "/api/reading/file": self._reading_file,
             "/api/guide": self._guide,
             "/api/guide/image": self._guide_image,
+            "/api/card": self._card,
+            "/api/marks": self._marks,
+            "/api/unresolved": self._unresolved,
+            "/api/fields": self._fields,
+            "/api/config": self._config,
+            "/api/boundaries": self._boundaries,
+            "/api/status": self._status,
+            "/api/inferences": self._inferences,
+            "/api/inference": self._inference,
         }
 
     def refresh(self) -> None:
         """DBと、解析後に変更されたファイルを読み直す（読み取りのみ）。"""
 
         self._index: ProjectIndex = self._navigation.load_index(self._project)
+        self._cache: dict[str, object] = {}  # 重い走査（設定値・境界・欄外の印）の結果。再読み込みで捨てる
         states = FreshnessService().check_project(self._project, list(self._index.files.values()))
         self._stale = sorted(self._index.files[fid].relative_path for fid, state in states.items() if state in (FileFreshness.STALE, FileFreshness.MISSING))
 
@@ -270,3 +290,218 @@ class ViewerApi:
         if "/" in name or "\\" in name or path.suffix.lower() not in _IMAGE_TYPES or not path.is_file() or path.is_symlink():
             raise ApiError(404, "画像が見つかりません")
         return BinaryResponse(_IMAGE_TYPES[path.suffix.lower()], path.read_bytes())
+
+    # --- 読解（読み取り専用。解析結果の表示だけ） ---
+
+    def _card(self, params: Params) -> dict:
+        """関数の読解カード（8つの問い）。確定・推定・未解決は、項目ごとの resolution・confidence で区別できる。"""
+
+        symbol = self._resolve(params, "symbol")
+        try:
+            card = UnderstandService(self._navigation).understand(self._project, self._index, symbol, _int(params, "depth", 3, 1, 4) or 3)
+        except FlowAnalysisError as exc:
+            raise ApiError(422, str(exc)) from exc
+        data = to_plain(card, True)  # ビューアーは、ソースを表示できるため、断片も含める
+        data["note"] = "確認できた事実だけの読解カードです。resolution・confidence が inferred・unresolved のものは、確定ではありません。limitations に、確認できなかったこと・対応範囲外のことを示します。"
+        return data
+
+    def _marks_by_file(self) -> dict[str, list[dict]]:
+        cached = self._cache.get("marks")
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        marks: dict[str, list[dict]] = defaultdict(list)
+        for reference in self._index.references:
+            if reference.reference_kind != ReferenceKind.CALL:
+                continue
+            if reference.resolution_status == ResolutionStatus.UNRESOLVED:
+                kind = "unresolved"
+            elif reference.resolution_status == ResolutionStatus.AMBIGUOUS:
+                kind = "ambiguous"
+            elif reference.resolution_status == ResolutionStatus.RESOLVED and reference.confidence == Confidence.INFERRED:
+                kind = "inferred"
+            else:
+                continue
+            source = self._index.symbols.get(reference.source_symbol_id)
+            path = self._index.path_of(reference.source_location.file_id)
+            marks[path].append({
+                "line": reference.source_location.start_line, "kind": kind, "label": reference.target_name, "detail": reference.note,
+                "function": source.qualified_name if source else "",
+            })
+        for items in marks.values():
+            items.sort(key=lambda m: (m["line"], m["label"]))
+        self._cache["marks"] = dict(marks)
+        return self._cache["marks"]  # type: ignore[return-value]
+
+    def _marks(self, params: Params) -> dict:
+        """ソースの欄外に出す印（未解決・曖昧・推定の呼び出し）。解析結果に保存された事実だけで、ファイルは読まない。"""
+
+        path = _text(params, "path", required=True) or ""
+        if self._index.file_by_path(path) is None:
+            raise ApiError(404, "解析対象のファイルではありません")
+        return {"path": path, "stale": path in self._stale, "marks": self._marks_by_file().get(path, [])[:2000]}
+
+    def _inference_by_target(self) -> dict[str, dict]:
+        found: dict[str, dict] = {}
+        for explanation in self._repository.list_explanations(self._project.project_id, "inference"):  # 新しい順
+            if explanation.target in found:
+                continue
+            stale = [p for p, h in explanation.source_hashes.items() if (self._index.file_by_path(p) is None or self._index.file_by_path(p).content_hash != h)]  # type: ignore[union-attr]
+            found[explanation.target] = {"id": explanation.explanation_id, "status": explanation.status.value, "stale": bool(stale), "model": explanation.model,
+                                         "created_at": explanation.created_at.isoformat(timespec="seconds")}
+        return found
+
+    def _unresolved(self, params: Params) -> dict:
+        """未解決・曖昧な呼び出しを、関数ごとにまとめた一覧（多い順）。AIの推測の入口（案 A）に使う。"""
+
+        wanted = _text(params, "status", "all") or "all"
+        if wanted not in ("all", "unresolved", "ambiguous"):
+            raise ApiError(400, "status は all / unresolved / ambiguous のいずれかです")
+        query = (_text(params, "q") or "").lower()
+        limit = _int(params, "limit", 50, 1, 200) or 50
+        offset = _int(params, "offset", 0, 0, 1_000_000) or 0
+        groups: dict[str, list] = defaultdict(list)
+        for reference in self._index.references:
+            if reference.reference_kind != ReferenceKind.CALL or reference.resolution_status not in (ResolutionStatus.UNRESOLVED, ResolutionStatus.AMBIGUOUS):
+                continue
+            state = reference.resolution_status.value
+            if wanted != "all" and state != wanted:
+                continue
+            groups[reference.source_symbol_id].append(reference)
+        inferences = self._inference_by_target()
+        rows: list[dict[str, Any]] = []
+        for symbol_id, references in groups.items():
+            symbol = self._index.symbols.get(symbol_id)
+            if symbol is None or (query and query not in symbol.qualified_name.lower() and not any(query in r.target_name.lower() for r in references)):
+                continue
+            rows.append({
+                "function": symbol.qualified_name, "path": self._index.path_of(symbol.file_id), "line": symbol.start_line, "count": len(references),
+                "unresolved": sum(1 for r in references if r.resolution_status == ResolutionStatus.UNRESOLVED),
+                "ambiguous": sum(1 for r in references if r.resolution_status == ResolutionStatus.AMBIGUOUS),
+                "inference": inferences.get(symbol.qualified_name),
+                "calls": [
+                    {"line": r.source_location.start_line, "name": r.target_name, "status": r.resolution_status.value, "note": r.note}
+                    for r in sorted(references, key=lambda r: r.source_location.start_line)[:30]
+                ],
+            })
+        rows.sort(key=lambda r: (-r["count"], r["function"]))
+        return {"total_functions": len(rows), "total_calls": sum(r["count"] for r in rows), "offset": offset, "functions": rows[offset:offset + limit]}
+
+    def _fields(self, params: Params) -> dict:
+        """C/C++ の構造体のフィールドを、プロジェクト全体で読み書きしている箇所（`fields` と同じ）。"""
+
+        name = _text(params, "name", required=True) or ""
+        owner = None
+        for separator in ("::", "."):
+            if separator in name:
+                owner, _, name = name.rpartition(separator)
+                owner = owner.split("::")[-1].split(".")[-1]
+                break
+        if not re.fullmatch(r"[A-Za-z_]\w*", name) or (owner is not None and not re.fullmatch(r"[A-Za-z_]\w*", owner)):
+            raise ApiError(400, "フィールド名は、識別子（または 構造体.フィールド）で指定してください")
+        if not any(f.language in C_FAMILY for f in self._index.files.values()):
+            raise ApiError(422, "C/C++ のファイルがありません（フィールド単位の読み書きは、C/C++ が対象です）")
+        report = CFlowService(self._navigation).field_uses(self._project, self._index, name, owner)
+        return {
+            "field": name, "owner": owner, "owners": sorted(report.owners), "scanned_files": report.scanned, "skipped": report.skipped[:20],
+            "uses": [vars(u) for u in report.uses[:2000]],
+            "note": "構文から確認できた読み書きです。ポインタ経由の別名・マクロの内部・位置による初期化は追えません。",
+        }
+
+    def _config(self, params: Params) -> dict:
+        items = self._cache.get("config")
+        if items is None:
+            items, skipped = ConfigService().scan(self._project, self._index)
+            self._cache["config"] = items
+            self._cache["config_skipped"] = skipped
+        kinds = set(params.get("kind", []))
+        query = (_text(params, "q") or "").lower()
+        chosen = [i for i in items if (not kinds or i.kind in kinds) and (not query or query in i.name.lower())]  # type: ignore[attr-defined]
+        limit = _int(params, "limit", 300, 1, 1000) or 300
+        return {
+            "kinds": CONFIG_LABELS, "total": len(chosen), "skipped": list(self._cache.get("config_skipped", []))[:20],  # type: ignore[call-overload]
+            "items": [
+                {"kind": i.kind, "name": i.name, "path": i.path, "line": i.line, "owner": i.owner, "default": i.default, "detail": i.detail, "confidence": i.confidence,
+                 "uses": [{"path": u.path, "line": u.line, "owner": u.owner, "how": u.how} for u in i.uses[:20]]}
+                for i in chosen[:limit]
+            ],
+        }
+
+    def _boundaries(self, params: Params) -> dict:
+        items = self._cache.get("boundaries")
+        if items is None:
+            items, skipped = BoundaryService().scan(self._project, self._index)
+            self._cache["boundaries"] = items
+            self._cache["boundaries_skipped"] = skipped
+        kinds = set(params.get("kind", []))
+        query = (_text(params, "q") or "").lower()
+        chosen = [i for i in items if (not kinds or i.kind in kinds) and (not query or query in i.label.lower() or query in i.owner.lower())]  # type: ignore[attr-defined]
+        limit = _int(params, "limit", 300, 1, 1000) or 300
+        return {
+            "kinds": BOUNDARY_LABELS, "total": len(chosen), "skipped": list(self._cache.get("boundaries_skipped", []))[:20],  # type: ignore[call-overload]
+            "items": [
+                {"kind": i.kind, "label": i.label, "path": i.path, "line": i.line, "owner": i.owner, "target": i.target.qualified_name if i.target else "", "detail": i.detail,
+                 "confidence": i.confidence}
+                for i in chosen[:limit]
+            ],
+        }
+
+    def _status(self, params: Params) -> dict:
+        """解析の状態: 前回の解析の結果、古いファイル、失敗の原因の一覧（隠さない）。"""
+
+        results = self._repository.list_analysis_results(self._project.project_id)
+        latest = results[0] if results else None
+        by_language: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for file in self._index.files.values():
+            by_language[file.language.value][file.analysis_status.value] += 1
+        return {
+            "latest": None if latest is None else {
+                "status": latest.status.value, "timestamp": latest.analysis_timestamp.isoformat(timespec="seconds"), "analyzer_version": latest.analyzer_version,
+                "repository_revision": latest.repository_revision, "warning_count": len(latest.warnings), "error_count": len(latest.errors),
+            },
+            "files_by_language": {k: dict(v) for k, v in by_language.items()},
+            "stale_files": self._stale[:200], "stale_count": len(self._stale),
+            "error_groups": _group_errors(latest.errors if latest else ()),
+            "warnings": [w[:300] for w in (latest.warnings if latest else ())][:50],
+            "note": "失敗したファイルは、正常に解析したものとして扱っていません。古いファイルの位置は、解析時と対応しない可能性があります。",
+        }
+
+    def _inferences(self, params: Params) -> dict:
+        """保存済みのAIの推測（種類 inference）。解析結果ではない。根拠のファイルが変わったものは、古いと示す。"""
+
+        return {"inferences": [
+            {"function": target, **info} for target, info in sorted(self._inference_by_target().items())
+        ], "note": "AIの推測は、解析結果ではありません。検証状態が「検証済み」でないものは、事実として扱わないでください。"}
+
+    def _inference(self, params: Params) -> dict:
+        wanted = _text(params, "id", required=True) or ""
+        explanation = self._repository.get_explanation(self._project.project_id, wanted)
+        if explanation is None or explanation.target_kind != "inference":
+            raise ApiError(404, "AIの推測が見つかりません")
+        info = self._inference_by_target().get(explanation.target, {})
+        stale = [p for p, h in explanation.source_hashes.items() if (self._index.file_by_path(p) is None or self._index.file_by_path(p).content_hash != h)]  # type: ignore[union-attr]
+        return {
+            "id": explanation.explanation_id, "function": explanation.target, "model": explanation.model, "provider": explanation.provider,
+            "created_at": explanation.created_at.isoformat(timespec="seconds"), "status": explanation.status.value, "stale": bool(stale), "stale_files": stale,
+            "text": explanation.text, "validation": explanation.validation, "latest": info.get("id") == explanation.explanation_id,
+            "ai_generated": True, "note": "AIの推測です（確定ではありません）。解析結果の解決状態は、変わりません。",
+        }
+
+
+def _group_errors(errors) -> list[dict]:
+    """解析の失敗を、原因ごとにまとめる（パス・行・引用の中身を除いた文言で）。"""
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for error in errors:
+        message = error.split(": ", 1)[1] if ": " in error else error
+        message = re.sub(r"<SourceLocation[^>]*>:?\s*", "", message)
+        key = re.sub(r"'[^']*'", "'…'", message)[:120]
+        groups[key].append(error[:200])
+    result = []
+    for key, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        hint = ""
+        if "file not found" in key:
+            hint = "ヘッダーが見つかりません。ビルドで生成されるヘッダーや、このホストに無いシステムヘッダーの可能性があります。configure とビルドを実行して compile_commands.json を渡すと、解決することがあります。"
+        elif "Error parsing translation unit" in key:
+            hint = "構文解析を始められませんでした。コンパイル設定（compile_commands.json）を確認してください。"
+        result.append({"cause": key, "count": len(items), "examples": items[:3], "hint": hint})
+    return result[:30]
