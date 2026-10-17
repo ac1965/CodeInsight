@@ -4,12 +4,12 @@
 #   mkdir -p ~/.codeinsight                                     # 初回のみ（Docker に root の所有で作らせないため）
 #   TARGET=/絶対パス/my-repo docker compose up --build        # → http://127.0.0.1:8765/ （表示されたトークン付きURLを開く）
 #   TARGET=/絶対パス/my-repo docker compose run --rm --entrypoint codeinsight codeinsight analyze /絶対パス/my-repo   # 任意のサブコマンド（--project は自分で付ける）
-#   TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDFを含む）を OUT に作る（先に mkdir -p reading/out）
+#   TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDFを含む）を OUT に作る（先に mkdir -p ~/.codeinsight/reading-out）
 #
 # 設定は、環境変数か、このファイルと同じ場所の .env（.env.example を参照）で渡す。
 #   TARGET   解析対象のディレクトリの絶対パス（必須）。ホストと同じパスに、読み取り専用で割り当てる（変更しない）
 #   PORT     ビューアーのポート（既定 8765。ホスト側とコンテナ側で同じ値にする。Hostの検査のため）
-#   OUT      資料の出力先（既定 ./reading/out）。ビューアーの「資料」で読める
+#   OUT      資料の出力先（既定 ~/.codeinsight/reading-out）。ビューアーの「資料」で読める
 #   CODEINSIGHT_DATA   解析結果のDBの場所（既定 ~/.codeinsight）。ホストの uv run codeinsight と共有する（同時に書き込まない）
 #   CODEINSIGHT_UID / CODEINSIGHT_GID   コンテナの実行ユーザー（既定 1000:1000。Linux では id -u / id -g を指定）
 #   ACTIONS=0   ビューアーを読み取り専用にする（既定は操作モード: 再解析・AIの推測。動的解析の実行は、コンテナの中ではできない）
@@ -55,7 +55,7 @@ services:
         bind: {create_host_path: false}
       # 資料の出力先。ビューアーは読むだけ（読み取り専用）なので、無ければ作られてよい（資料が無ければ「資料がありません」と表示）
       - type: bind
-        source: "${OUT:-./reading/out}"
+        source: "${OUT:-${CODEINSIGHT_DATA:-${HOME}/.codeinsight}/reading-out}"
         target: /out
         read_only: true
 
@@ -81,6 +81,6 @@ services:
         bind: {create_host_path: false}
       # 資料の出力先（書き込む）。先に mkdir -p しておく
       - type: bind
-        source: "${OUT:-./reading/out}"
+        source: "${OUT:-${CODEINSIGHT_DATA:-${HOME}/.codeinsight}/reading-out}"
         target: /out
         bind: {create_host_path: false}

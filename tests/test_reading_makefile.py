@@ -203,6 +203,11 @@ def test_docker_is_the_default_runtime_and_local_is_opt_in(tmp_path: Path, monke
     assert "--read-only" in _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "ACTIONS=0").stdout  # 読み取り専用にもできる
     no_open = _make("-n", "reading-serve-run", f"TARGET={target}", f"OUT={out}", "OPEN=1").stdout
     assert "OPEN=1 は Docker では使えません" in no_open and "--open" not in no_open.split("codeinsight:local")[-1]
+    data_dir = os.environ["CODEINSIGHT_DATA_DIR"]  # conftest が設定した、テスト用のデータの場所
+    assert f"--reading-dir {data_dir}/reading-out/t" in _make("-n", "reading-serve-run", f"TARGET={target}", "RUNTIME=local").stdout  # CODEINSIGHT_DATA_DIR の下
+    monkeypatch.delenv("CODEINSIGHT_DATA_DIR")
+    default_out = _make("-n", "reading-serve-run", f"TARGET={target}", "RUNTIME=local", f"HOME={tmp_path}").stdout
+    assert f"--reading-dir {tmp_path}/.codeinsight/reading-out/t" in default_out  # 出力先の既定: ~/.codeinsight/reading-out/<対象名>
     local = _make("-n", "analyze", f"TARGET={target}", "RUNTIME=local").stdout
     assert "docker run" not in local and "uv run codeinsight analyze" in local
     inside = subprocess.run(["make", "--no-print-directory", "-n", "analyze", f"TARGET={target}"], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "CODEINSIGHT_IN_CONTAINER": "1"}).stdout

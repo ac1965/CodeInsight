@@ -115,7 +115,7 @@ pip版の libclang は、コンパイラが暗黙に行うシステムヘッダ�
 | --- | --- | --- |
 | 解析結果DB | `~/.codeinsight/codeinsight.db` | 各コマンドの `--db`、または環境変数 `CODEINSIGHT_DATA_DIR`（ディレクトリ） |
 | AIの設定ファイル | `~/.codeinsight/config.toml` の `[ai]` | `CODEINSIGHT_DATA_DIR` |
-| 資料一式（`make reading`） | `reading/<対象名>/` | `OUT=` |
+| 資料一式（`make reading`） | `~/.codeinsight/reading-out/<対象名>/` | `OUT=` |
 | Docker での解析結果DB | ホストの `~/.codeinsight`（コンテナの `/data`。ホストと共有） | `DOCKER_DATA=` / `CODEINSIGHT_DATA` |
 
 DBは**対象リポジトリの外**に保存されます（対象には何も書き込みません）。登録したプロジェクトが複数ある場合は、`--project`（ID・名前・ルートパス）で指定します。
@@ -266,7 +266,7 @@ TypeScript などは未対応です（将来の言語追加の候補）。PownFo
 対象のリポジトリから、読むための資料一式を出力ディレクトリにまとめます。**対象のソースは変更せず**（出力先が対象の中だとエラー）、**対象のプログラムは実行しません**。
 
 ```bash
-make reading TARGET=../my-repo                         # 解析→資料一式（reading/my-repo/）→ビューアーの起動。事前の make analyze は不要
+make reading TARGET=../my-repo                         # 解析→資料一式（~/.codeinsight/reading-out/my-repo/）→ビューアーの起動。事前の make analyze は不要
 make reading TARGET=../my-repo OUT=/tmp/out TOP=12     # 出力先・主要な関数の数
 make reading TARGET=../c-proj COMPILE_DB=/tmp/build    # Cで compile_commands.json がある場合
 make reading TARGET=../my-repo AI_SEND=1                       # AI解説を追記（モデルは環境変数 CODEINSIGHT_AI_MODEL か設定ファイル）
@@ -279,7 +279,7 @@ make reading-clean TARGET=../my-repo                   # 成果物の削除（�
 | 変数 | 既定 | 意味 |
 | --- | --- | --- |
 | `TARGET` | （必須） | 対象のディレクトリ |
-| `OUT` | `reading/<対象名>` | 出力先（`TARGET` の外）。`~/…` も使える。空白を含むパスは不可 |
+| `OUT` | `~/.codeinsight/reading-out/<対象名>`（`CODEINSIGHT_DATA_DIR` があればその下） | 出力先（`TARGET` の外）。`~/…` も使える。空白を含むパスは不可 |
 | `TOP` | 8 | 主要な関数の選択数（入口・よく呼ばれる・多くを呼ぶ・大きい、各 `TOP` 件の和集合の上位 `2×TOP` 件） |
 | `COMPILE_DB` | `BUILD` にあれば自動 | Cの `compile_commands.json` のあるディレクトリ |
 | `BUILD` | `OUT/build` | `reading-c-build` のビルド先 |
@@ -506,9 +506,9 @@ Claude Code に登録する例（プロジェクトの `.mcp.json`、または `
 
 ```bash
 mkdir -p ~/.codeinsight                                      # 初回のみ（Docker に root の所有で作らせないため）
-mkdir -p reading/out                                         # 資料を作る場合のみ（up だけなら不要。無ければ「資料がありません」と表示）
+mkdir -p ~/.codeinsight/reading-out                        # 資料を作る場合のみ（up だけなら不要。無ければ「資料がありません」と表示）
 TARGET=/絶対パス/my-repo docker compose up --build           # 解析→ビューアー。表示されたトークン付きURL（http://127.0.0.1:8765/…）を開く
-TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDF）を OUT（既定 ./reading/out）に作る。ビューアーの「資料」で読める
+TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式（図・PDF）を OUT（既定 ~/.codeinsight/reading-out）に作る。ビューアーの「資料」で読める
 
 # 任意のサブコマンド（--project は自分で付ける）。AI解説は、送信の許可 AI_SEND=1 とモデル MODEL= が必要
 TARGET=/絶対パス/my-repo docker compose run --rm --entrypoint codeinsight codeinsight overview --project /絶対パス/my-repo

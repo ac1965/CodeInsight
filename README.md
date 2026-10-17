@@ -86,7 +86,7 @@ make image                                             # イメージを明示�
 
 #### 操作例（Docker・ビューアーの操作モード）
 
-`<対象>` は、解析したいリポジトリの絶対パスです（例: `/Users/me/Projects/music2score`）。対象は読み取り専用で割り当てられ、変更されません。出力先（`OUT`）は、対象の外にしてください。
+`<対象>` は、解析したいリポジトリの絶対パスです（例: `/Users/me/Projects/music2score`）。対象は読み取り専用で割り当てられ、変更されません。出力先（`OUT`）の既定は `~/.codeinsight/reading-out/<対象名>` です（変更する場合は、対象の外にしてください）。
 
 ```bash
 # 0. 準備（AIの推測を使う場合のみ、ホストで Ollama を起動してモデルを入れる。起動済み・取得済みなら何もしない）
@@ -97,10 +97,10 @@ ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL" || ollama pull "$MODEL" 
 
 # 1. 解析 → 資料一式（図・PDFを含む）
 make analyze TARGET=<対象>
-make reading TARGET=<対象> OUT=$HOME/reading-out/<名前> SERVE=0
+make reading TARGET=<対象> SERVE=0                     # 出力先の既定: ~/.codeinsight/reading-out/<対象名>（OUT= で変更）
 
 # 2. ビューアー（操作モードが既定）。表示された http://127.0.0.1:8765/?token=… をブラウザで開く
-make serve TARGET=<対象> OUT=$HOME/reading-out/<名前>
+make serve TARGET=<対象>
 CODEINSIGHT_AI_MODEL=$MODEL make serve TARGET=<対象>                # AIの推測も使う場合
 make serve TARGET=<対象> ACTIONS=0                                 # 読み取り専用（「操作」タブが出ない）
 ```
@@ -130,7 +130,7 @@ make explain NAME=main MODEL=qwen3-coder:latest AI_SEND=1 RUNTIME=local   # AI�
 必要なソフトウェア(git・Go・graphviz・Chromium・make など)はイメージに含まれ、解析結果のDBはホストの `~/.codeinsight` と共有します。
 
 ```bash
-mkdir -p ~/.codeinsight                                    # 初回のみ（資料を作る場合は reading/out も）
+mkdir -p ~/.codeinsight/reading-out                        # 初回のみ
 TARGET=/絶対パス/my-repo docker compose up --build         # 解析→ビューアー(ホストの 127.0.0.1 だけに公開)
 TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading   # 資料一式(図・PDFを含む)
 TARGET=/絶対パス/my-repo MODEL=qwen3-coder:latest AI_SEND=1 docker compose run --rm --entrypoint codeinsight codeinsight explain main --project /絶対パス/my-repo   # AI解説はホストの Ollama(host.docker.internal)
@@ -143,7 +143,7 @@ TARGET=/絶対パス/my-repo MODEL=qwen3-coder:latest AI_SEND=1 docker compose r
 対象のリポジトリから、読むための資料を出力ディレクトリにまとめて作ります。対象のソースは変更せず(出力先が対象の中だとエラー)、対象のプログラムは実行しません。
 
 ```bash
-make reading TARGET=../my-repo                         # 解析→資料一式と目次(reading/my-repo/README.md)→ビューアー起動。事前の make analyze は不要（SERVE=0 で起動しない）
+make reading TARGET=../my-repo                         # 解析→資料一式と目次(~/.codeinsight/reading-out/my-repo/README.md)→ビューアー起動。事前の make analyze は不要（SERVE=0 で起動しない）
 make reading TARGET=../my-repo OUT=/tmp/out TOP=12     # 出力先・主要な関数の数
 make reading TARGET=../c-proj COMPILE_DB=/tmp/build    # Cで compile_commands.json がある場合
 make reading TARGET=../my-repo AI_SEND=1 AI_WORKERS=4   # 並列数を指定。保存済みは再利用し、中断しても同じコマンドで再開できる

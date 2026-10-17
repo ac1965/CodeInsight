@@ -73,9 +73,11 @@ AI_OPTS   = $(if $(MODEL),--ai-model $(MODEL))
 expand_path = $(if $(strip $(1)),$(abspath $(patsubst ~/%,$(HOME)/%,$(patsubst ~,$(HOME),$(strip $(1))))))
 override TARGET := $(call expand_path,$(TARGET))
 READING_NAME = $(notdir $(TARGET))
-# OUT が指定されたか（reading-pdf / reading-index が、指定なしに repo 直下の reading/ を対象にしないため）。OUT の既定値を決める前に記録する
+# OUT が指定されたか（reading-pdf / reading-index が、指定なしに既定の出力先の親（reading-out/）全体を対象にしないため）。OUT の既定値を決める前に記録する
 OUT_ORIGIN := $(origin OUT)
-OUT         ?= reading/$(READING_NAME)
+# 既定の出力先: ~/.codeinsight/reading-out/<対象名>（CODEINSIGHT_DATA_DIR があればその下。対象の外・リポジトリの外）
+READING_BASE ?= $(or $(CODEINSIGHT_DATA_DIR),$(HOME)/.codeinsight)/reading-out
+OUT         ?= $(READING_BASE)/$(READING_NAME)
 override OUT := $(call expand_path,$(OUT))
 need_out = $(if $(or $(TARGET),$(filter command% environment,$(OUT_ORIGIN))),,$(error TARGET か OUT を指定してください。例: make $(1) TARGET=../my-repo))
 TOP         ?= 8

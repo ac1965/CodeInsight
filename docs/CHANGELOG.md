@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 資料の出力先の既定を ~/.codeinsight/reading-out/<対象名> にする
+
+* `make reading` などの `OUT` の既定を、`reading/<対象名>`（リポジトリ直下）から `~/.codeinsight/reading-out/<対象名>`（`CODEINSIGHT_DATA_DIR` があればその下）に変更した。対象・リポジトリの外になり、DBと同じ場所にまとまる。compose・`.env.example`・README・OPERATIONS も合わせた。
+
 ## 操作モードを既定にする
 
 * `serve` の既定を操作モードにした（`--read-only` で読み取り専用。`--allow-actions` は互換のため残す）。Makefile は `ACTIONS=0`、compose は `ACTIONS=0` で読み取り専用。AGENTS.md §3.14 を改訂した。ループバックのみ・トークン・Host・Originの検査、動的解析の計画の確認・コンテナ・ネットワーク遮断は、既定のままでも変わらない。
