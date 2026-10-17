@@ -115,6 +115,9 @@ class CMacroUse:
     definition_line: int
     body: str  # 定義のソース上の文字（引数リスト・本体。長ければ切り詰める）
     system: bool  # システムヘッダーで定義されたマクロ（標準ライブラリなど）
+    control: tuple[str, ...] = ()  # 展開後のASTにある制御構造（do・if・for・while・switch・return・goto・break・continue・三項演算子）
+    calls: tuple[str, ...] = ()  # 展開後のASTにある関数の呼び出し先（マクロの引数の呼び出しを含む）
+    hidden_exit: bool = False  # 展開が return・goto・break・continue を含む（マクロを使う関数の制御が、ここで変わる）
 
 
 def macros_used(function: CFunction) -> list[CMacroUse]:
@@ -131,6 +134,7 @@ def macros_used(function: CFunction) -> list[CMacroUse]:
     target = _resolved(file.name)
     start, end = function.cursor.extent.start.line, function.cursor.extent.end.line
     found: dict[str, CMacroUse] = {}
+    instantiations: list[tuple[ci.Cursor, int, int]] = []
     for node in tu.cursor.get_children():
         try:
             if node.kind != CK.MACRO_INSTANTIATION:
@@ -140,6 +144,19 @@ def macros_used(function: CFunction) -> list[CMacroUse]:
         location = node.location
         if location.file is None or _resolved(location.file.name) != target or not start <= location.line <= end:
             continue
+        instantiations.append((node, node.extent.start.offset, node.extent.end.offset))
+    # 展開で作られたASTの節点は、範囲が、マクロの使用の範囲と一致する（引数の式は、使用の先頭の1点に縮む）
+    ranges = {(s, e) for _, s, e in instantiations}
+    expansion: dict[tuple[int, int], list[ci.Cursor]] = {}
+    if ranges:
+        for node in function.cursor.walk_preorder():
+            key = (node.extent.start.offset, node.extent.end.offset)
+            if key in ranges:
+                expansion.setdefault(key, []).append(node)
+    control_kinds = {CK.DO_STMT: "do", CK.IF_STMT: "if", CK.FOR_STMT: "for", CK.WHILE_STMT: "while", CK.SWITCH_STMT: "switch", CK.RETURN_STMT: "return",
+                     CK.GOTO_STMT: "goto", CK.BREAK_STMT: "break", CK.CONTINUE_STMT: "continue", CK.CONDITIONAL_OPERATOR: "?:"}
+    for node, s_offset, e_offset in instantiations:
+        location = node.location
         definition = node.referenced
         path, line, body, system = "", 0, "", False
         if definition is not None:
@@ -159,8 +176,15 @@ def macros_used(function: CFunction) -> list[CMacroUse]:
                 previous_end = token.extent.end.offset
             body = "".join(pieces).strip()
             body = body if len(body) <= 120 else body[:119] + "…"
+        nodes = expansion.get((s_offset, e_offset), [])
+        control = sorted({control_kinds[n.kind] for n in nodes if n.kind in control_kinds})
+        calls = sorted({call_name(n) for n in nodes if n.kind == CK.CALL_EXPR and call_name(n)})
         previous = found.get(node.spelling)
-        found[node.spelling] = CMacroUse(node.spelling, previous.line if previous else location.line, (previous.count if previous else 0) + 1, path, line, body, system)
+        found[node.spelling] = CMacroUse(
+            node.spelling, previous.line if previous else location.line, (previous.count if previous else 0) + 1, path, line, body, system,
+            tuple(sorted(set(control) | set(previous.control if previous else ()))), tuple(sorted(set(calls) | set(previous.calls if previous else ()))),
+            bool({"return", "goto", "break", "continue"} & set(control)) or (previous.hidden_exit if previous else False),
+        )
     return sorted(found.values(), key=lambda m: (m.system, m.line, m.name))
 
 

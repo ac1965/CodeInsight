@@ -79,7 +79,10 @@ def _macro_rows(service: CFlowService, project, index, symbol) -> list[dict]:
             shown = f"{Path(use.definition_path).resolve().relative_to(root).as_posix()}:{use.definition_line}" if use.definition_path else "（不明）"
         except ValueError:
             shown = f"{use.definition_path}:{use.definition_line}"
-        rows.append({"name": use.name, "line": use.line, "count": use.count, "definition": shown, "body": use.body, "system": use.system})
+        rows.append({
+            "name": use.name, "line": use.line, "count": use.count, "definition": shown, "body": use.body, "system": use.system,
+            "expands_control": list(use.control), "expands_calls": list(use.calls), "hidden_exit": use.hidden_exit,
+        })
     return rows
 
 
@@ -122,6 +125,13 @@ def flow(args: argparse.Namespace, project, index, navigation: NavigationService
         print("使っているマクロ（展開の内部は上の構造に含まれません。定義を示します）:")
         for m in own[:15]:
             print(f"  L{m['line']:<5} {safe(m['name'])} ×{m['count']}  定義 {safe(m['definition'])}  → {safe(m['body']) or '（本体なし）'}")
+            expanded = []
+            if m["expands_control"]:
+                expanded.append("制御: " + "・".join(m["expands_control"]))
+            if m["expands_calls"]:
+                expanded.append("呼び出し: " + ", ".join(safe(c) for c in m["expands_calls"]))
+            if expanded:
+                print(f"           展開後の構造（展開後のASTから）: {' / '.join(expanded)}" + ("  ※ return・goto・break・continue を含む（この関数の制御が、ここで変わる）" if m["hidden_exit"] else ""))
     if any(m["system"] for m in macros):
         print("  システムヘッダーのマクロ: " + ", ".join(safe(m["name"]) for m in macros if m["system"])[:200])
     warn_if_stale(stale)

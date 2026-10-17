@@ -51,3 +51,37 @@ def test_json_has_macros_and_functions_without_macros_have_none(db: str, capsys)
     assert macros["SQUARE"]["count"] == 2 and macros["SQUARE"]["definition"] == "m.c:3" and not macros["SQUARE"]["system"]
     assert main(["flow", "plain", "--db", db, "--format", "json"]) == 0
     assert [m for m in json.loads(capsys.readouterr().out)["macros"] if not m["system"]] == []
+
+
+EXPANSION = """\
+#define CHECK(c) do { if (!(c)) { return -1; } } while (0)
+#define SQUARE(x) ((x) * (x))
+#define CALL2(f, a) (f(a) + f(a))
+#define ASSIGN_ONE(p) ((p) = 1)
+int g(int);
+int compute(int v) {
+    int r;
+    CHECK(v < 10);
+    r = SQUARE(v) + CALL2(g, v);
+    ASSIGN_ONE(r);
+    return r;
+}
+"""
+
+
+def test_macro_expansion_structure_shows_hidden_control_and_calls(tmp_path: Path, capsys) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "e.c").write_text(EXPANSION, encoding="utf-8")
+    db = str(tmp_path / "d.sqlite")
+    assert main(["analyze", str(root), "--db", db]) == 0
+    capsys.readouterr()
+    assert main(["flow", "compute", "--db", db, "--format", "json"]) == 0
+    macros = {m["name"]: m for m in json.loads(capsys.readouterr().out)["macros"]}
+    assert macros["CHECK"]["hidden_exit"] is True and {"do", "if", "return"} <= set(macros["CHECK"]["expands_control"])  # return が、マクロの中に隠れている
+    assert macros["CALL2"]["expands_calls"] == ["g"] and macros["CALL2"]["hidden_exit"] is False  # 引数で渡した関数の呼び出し
+    assert macros["SQUARE"]["expands_control"] == [] and macros["SQUARE"]["hidden_exit"] is False
+    capsys.readouterr()
+    assert main(["flow", "compute", "--db", db]) == 0
+    out = capsys.readouterr().out
+    assert "展開後の構造（展開後のASTから）: 制御: do・if・return" in out and "この関数の制御が、ここで変わる" in out
