@@ -208,6 +208,14 @@ class UnderstandService:
             )
             for m in state.parameter_mutations
         ]
+        for name in dict.fromkeys(m.parameter for m in state.parameter_mutations if m.parameter != "this"):  # ポインタ引数に、呼び出し元が渡している先
+            try:
+                destinations = self._c.pointer_destinations(project, index, symbol, name, depth=1)
+            except FlowAnalysisError:
+                continue
+            names = sorted({n for item in destinations for n, _ in item.targets})
+            if names:
+                result.parameter_mutations.append(f"　　↳ 引数 {name} に呼び出し元が渡している先: {', '.join(names[:5])}" + ("…" if len(names) > 5 else "") + "（解決済みの呼び出しのみ。流れ非依存の近似）")
         result.c_exit_report = self._c.exit_report(project, index, symbol, depth + 1)
         result.c_exits = result.c_exit_report.direct
         findings, _ = self._c.scan_risks(project, index, only_paths={result.path})

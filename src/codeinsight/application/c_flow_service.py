@@ -46,6 +46,19 @@ def _guarded(method):
 
 
 @dataclass(frozen=True)
+class PointerDestination:
+    """ポインタ引数に、呼び出し元が渡している先（呼び出し箇所ごと）。"""
+
+    caller: Symbol
+    path: str
+    line: int
+    argument: str  # 実引数の式のソース上の文字
+    targets: tuple[tuple[str, str], ...]  # (変数名, global / static)。渡された先
+    unknown: bool  # 追えない値（関数の戻り値・フィールドの読み取りなど）も渡されている
+    chain: tuple[tuple[Symbol, int], ...] = ()  # 呼び出し元の引数を、さらに上の呼び出し元から転送されている場合の経路
+
+
+@dataclass(frozen=True)
 class FieldUse:
     path: str
     line: int
@@ -304,6 +317,53 @@ class CFlowService:
                     node.children = self._upstream(project, index, caller, inner.spelling, depth - 1, visited | {(symbol.symbol_id, parameter)})
                 nodes.append(node)
         return nodes
+
+    # --- 関数をまたぐポインタの受け渡し（呼び出し元が、ポインタ引数に渡している先） ---
+
+    @_guarded
+    def pointer_destinations(self, project: Project, index: ProjectIndex, symbol: Symbol, parameter: str, depth: int = 2) -> list[PointerDestination]:
+        """ポインタ引数に、解決済みの呼び出しの呼び出し元が渡している先（グローバル・static変数のアドレス・配列、呼び出し元のローカルのポインタが指しうる先）。
+
+        呼び出し元が、自身の引数をそのまま渡している場合は、`depth` 段まで、その呼び出し元の呼び出し元へたどる。呼び出し元のローカル変数を指すものは
+        状態として示さない。流れ非依存・フィールド非依存の近似で、関数ポインタ経由・曖昧な呼び出しは含まれない。
+        """
+
+        return self._destinations(project, index, symbol, parameter, depth, set(), ())
+
+    def _destinations(self, project, index, symbol, parameter, depth, visited, chain) -> list[PointerDestination]:
+        names = [p.name for p in cf.parameters(self.load(project, index, symbol))]
+        if parameter not in names:
+            raise FlowAnalysisError(f"{symbol.qualified_name} に引数 '{parameter}' がありません。")
+        position = names.index(parameter)
+        results: list[PointerDestination] = []
+        for hit in self._navigation.callers(index, symbol):
+            caller = hit.source
+            source_file = index.files.get(caller.file_id)
+            if source_file is None or source_file.language not in C_FAMILY or caller.kind not in _CALLABLE:
+                continue
+            try:
+                caller_function = self.load(project, index, caller)
+            except FlowAnalysisError:
+                continue
+            line = hit.reference.source_location.start_line
+            analysis = cf.points_to(caller_function)
+            for call in caller_function.cursor.walk_preorder():
+                if call.kind != ci.CursorKind.CALL_EXPR or call.extent.start.line != line or cf.call_name(call) != symbol.name:
+                    continue
+                arguments = cf._call_arguments(call)
+                if position >= len(arguments):
+                    continue
+                argument = arguments[position]
+                targets, unknown = analysis.resolve(argument)
+                direct = tuple(sorted((n, s) for n, s in targets if s in ("global", "static")))
+                forwarded = [n for n, s in targets if s == "param"]
+                if direct or unknown:
+                    results.append(PointerDestination(caller, hit.path, line, cf.text(caller_function, argument, 60), direct, unknown, chain))
+                if depth > 0:
+                    for name in forwarded:
+                        if (caller.symbol_id, name) not in visited:
+                            results += self._destinations(project, index, caller, name, depth - 1, visited | {(symbol.symbol_id, parameter)}, (*chain, (caller, line)))
+        return results
 
     # --- 変数の追跡（引数を介した呼び出し先まで） ---
 

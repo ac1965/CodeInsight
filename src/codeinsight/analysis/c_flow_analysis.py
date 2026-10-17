@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import clang.cindex as ci
@@ -994,7 +995,19 @@ def _decl_key(declaration: ci.Cursor) -> tuple[str, int]:
     return declaration.spelling, declaration.extent.start.offset
 
 
+@dataclass
+class PointsTo:
+    """関数の中の、ポインタの指しうる先の解析結果。`aliases` はローカルのポインタ変数ごと、`resolve` は任意の式（実引数など）について。"""
+
+    aliases: dict[tuple[str, int], _Alias]
+    resolve: Callable[[ci.Cursor], tuple[set[tuple[str, str]], bool]]
+
+
 def _pointer_aliases(function: CFunction) -> dict[tuple[str, int], _Alias]:
+    return points_to(function).aliases
+
+
+def points_to(function: CFunction) -> PointsTo:
     """関数の中で、ローカルのポインタ変数が指しうる先の対応表（流れ非依存・フィールド非依存のポインタ解析）。
 
     代入の左辺・初期化のすべての値を集め、和集合にする（`T *p = &g; ... p = &h;` なら g と h のどちらか）。扱う値: グローバル・static変数の
@@ -1095,7 +1108,7 @@ def _pointer_aliases(function: CFunction) -> dict[tuple[str, int], _Alias]:
             unknown = unknown or found_unknown
         if targets:
             aliases[key] = _Alias(tuple(sorted(targets)), unknown)
-    return aliases
+    return PointsTo(aliases, lambda expression: resolve(expression, frozenset()))
 
 
 def _pointer_note(pointer: str, alias: _Alias) -> str:

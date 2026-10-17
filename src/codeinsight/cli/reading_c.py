@@ -255,8 +255,21 @@ def state(args: argparse.Namespace, project, index, navigation: NavigationServic
     except FlowAnalysisError as exc:
         raise CliError(str(exc)) from exc
     if args.format == "json":
-        emit_json({"symbol": symbol.qualified_name, "language": "c", "accesses": [vars(a) for a in result.accesses],
-                   "parameter_mutations": [vars(m) for m in result.parameter_mutations]})
+        def destinations_of(parameter: str) -> list[dict]:
+            if parameter == "this":
+                return []
+            try:
+                items = service.pointer_destinations(project, index, symbol, parameter, depth=2)
+            except FlowAnalysisError:
+                return []
+            return [
+                {"caller": i.caller.qualified_name, "path": i.path, "line": i.line, "argument": i.argument, "targets": [{"name": n, "scope": s} for n, s in i.targets],
+                 "unknown": i.unknown, "via": [{"function": c.qualified_name, "line": ln} for c, ln in i.chain]}
+                for i in items
+            ]
+
+        emit_json({"symbol": symbol.qualified_name, "language": index.files[symbol.file_id].language.value, "accesses": [vars(a) for a in result.accesses],
+                   "parameter_mutations": [{**vars(m), "caller_destinations": destinations_of(m.parameter)} for m in result.parameter_mutations]})
         return 0
     print(f"{safe(symbol.qualified_name)} の状態の変化（グローバル・静的変数と、引数のポインタを通じた書き込み）")
     modes = {"write": "書き込み", "mutate": "書き換えの可能性", "read": "読み取り"}
@@ -269,11 +282,27 @@ def state(args: argparse.Namespace, project, index, navigation: NavigationServic
             lines = [a for a in group if a.mode == mode]
             if lines:
                 print(f"    {modes[mode]}: " + ", ".join(f"L{a.line}" for a in lines[:10]) + (" …" if len(lines) > 10 else ""))
+    destinations: dict[str, list] = {}
     if result.parameter_mutations:
         print("\n  引数（C++ は this）を通じた呼び出し元のデータの変更:")
         for m in result.parameter_mutations:
             owner = "このオブジェクトのメンバ（this）" if m.parameter == "this" else f"引数 {safe(m.parameter)}"
             print(f"    L{m.line} {owner}  {safe(m.detail)}")
+        for name in dict.fromkeys(m.parameter for m in result.parameter_mutations if m.parameter != "this"):
+            try:
+                destinations[name] = service.pointer_destinations(project, index, symbol, name, depth=2)
+            except FlowAnalysisError:
+                continue
+        for name, items in destinations.items():
+            if items:
+                print(f"\n  引数 {safe(name)} に、呼び出し元が渡している先（解決済みの呼び出しのみ。引数の転送は2段まで）:")
+                for item in items[:10]:
+                    targets = ", ".join(f"{safe(n)}（{'グローバル' if s == 'global' else '静的'}変数）" for n, s in item.targets) or "（グローバル・静的変数は無し）"
+                    extra = "。ほかに、追えない値も渡されている" if item.unknown else ""
+                    via = "".join(f" ← {safe(c.qualified_name)}:L{ln}" for c, ln in item.chain)
+                    print(f"    {safe(item.path)}:{item.line}  {safe(item.caller.qualified_name)}  ← {safe(item.argument)}  → {targets}{extra}{via}")
+                if len(items) > 10:
+                    print(f"    …ほか{len(items) - 10}件")
     if not names and not result.parameter_mutations:
         print("  確認できませんでした")
     warn_if_stale(stale)
