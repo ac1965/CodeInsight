@@ -3,7 +3,7 @@ name: AI評価（実モデル）
 # 実際のLLMで、AI解説の評価セット（eval/ai_cases.toml）を回す。通常のCI（ci.yml）とは分け、push では動かさない。
 # GitHub の標準ランナー（メモリ約16GB・GPUなし）では、qwen3-coder（約18GB）は動かないため、小型のモデルを使う。
 # 目的は、Ollama の実際のAPIとの接続、プロンプト・引用の検証が実モデルの出力でも動くこと、の煙テスト。
-# 小型モデルの回答の質（合格率）は評価しない。質の評価は、手元で qwen3-coder などを使う（TESTING.md）。
+# 小型モデルの回答の質（合格率）は評価しない。質の評価は、手元で qwen3-coder などを使う（docs/TESTING.md）。
 
 on:
   schedule:

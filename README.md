@@ -28,10 +28,10 @@ C言語およびPythonを主要な対象言語とし(Goはシンボル・呼び�
 
 ## 開発状況
 
-**Phase 1〜4(解析基盤・コードナビゲーション・可視化・根拠つきのAI解説)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Python(ほか C++・Go・Emacs Lisp)のシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)も実装済みで(下記「AIで解説する」)、端末UI(`tui`)、コードリーディング資料の一括生成(`make reading`)、Cの関数単位の解析も使えます。C++・Go・Emacs Lispの解析、ローカルのWebビューアー(`serve`)、MCPサーバー(`mcp`)、外部ツール(SARIF・SCIP)の取り込み、Dockerでの実行も使えます。動的解析(実行観測)は、Pythonとc(gcov: 関数・行の実行回数)をコンテナで実行する範囲まで実装済みです([DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md))。実装状況の詳細と制約は [REQUIREMENTS.md](REQUIREMENTS.md) と [ANALYSIS.md](ANALYSIS.md) を参照してください。
+**Phase 1〜4(解析基盤・コードナビゲーション・可視化・根拠つきのAI解説)に加え、コードリーディングのための関数単位の解析(制御フロー・データフロー・状態・例外・設定値・境界・影響範囲・履歴など)を実装済みです。** C言語/Python(ほか C++・Go・Emacs Lisp)のシンボル・呼び出し・参照・依存の抽出と解決、検索、グラフ出力(Mermaid / DOT / JSON / ローカルHTML)、そして関数について「なぜ存在するか / 誰が呼ぶか / 入力 / 変更 / 戻り値 / 影響 / 失敗時 / なぜ今の実装か」の8つの問いに事実で答える読解カード(`understand`)が、CLIから使えます。AIによる解説(Phase 4)も実装済みで(下記「AIで解説する」)、端末UI(`tui`)、コードリーディング資料の一括生成(`make reading`)、Cの関数単位の解析も使えます。C++・Go・Emacs Lispの解析、ローカルのWebビューアー(`serve`)、MCPサーバー(`mcp`)、外部ツール(SARIF・SCIP)の取り込み、Dockerでの実行も使えます。動的解析(実行観測)は、Pythonとc(gcov: 関数・行の実行回数)をコンテナで実行する範囲まで実装済みです([DYNAMIC_ANALYSIS.md](docs/DYNAMIC_ANALYSIS.md))。実装状況の詳細と制約は [REQUIREMENTS.md](docs/REQUIREMENTS.md) と [ANALYSIS.md](docs/ANALYSIS.md) を参照してください。
 
 * 静的に確定できない関係(関数ポインタ、動的な呼び出し等)は推測で確定せず、**未解決**として明示します。候補を特定できるが実行時の挙動で変わりうるものは**推定**として、確定と区別します(AGENTS.md §3.5.1)。
-* 制御フロー・データフロー・状態・リスク・読解カードは**Python・C・Emacs Lisp**が対象です(Cは呼び出し先を経由した終了の連鎖も示します)。制御フロー図（`graph flow`）はPython・C・Emacs Lispが対象です。例外の伝播・呼び出し元の実引数・設定値・実行環境・境界の詳細は**Python**のみです。Emacs Lispも、制御フロー・エラー（シグナル）の経路・状態・データフロー・リスク・読解カードに対応します（呼び出し元の実引数・設定値・実行環境・境界の検出は未対応。解決は名前の一致による推定）。データフローは関数単位・流れ非依存の**近似**で、ポインタのエイリアス・関数ポインタ先・マクロの内部は追えないと明示します。言語ごとの対応範囲は [OPERATIONS.md](OPERATIONS.md) 10.2。
+* 制御フロー・データフロー・状態・リスク・読解カードは**Python・C・Emacs Lisp**が対象です(Cは呼び出し先を経由した終了の連鎖も示します)。制御フロー図（`graph flow`）はPython・C・Emacs Lispが対象です。例外の伝播・呼び出し元の実引数・設定値・実行環境・境界の詳細は**Python**のみです。Emacs Lispも、制御フロー・エラー（シグナル）の経路・状態・データフロー・リスク・読解カードに対応します（呼び出し元の実引数・設定値・実行環境・境界の検出は未対応。解決は名前の一致による推定）。データフローは関数単位・流れ非依存の**近似**で、ポインタのエイリアス・関数ポインタ先・マクロの内部は追えないと明示します。言語ごとの対応範囲は [OPERATIONS.md](docs/OPERATIONS.md) 10.2。
 * 設計判断の「理由」はコードから確認できないため推測せず、変更履歴・コメント・文書という手がかりを示します。
 * 対象リポジトリのソースは変更せず、プログラムも実行しません(Gitは読み取り専用)。
 * AIには**既定では何も送信しません**。送信は利用者の明示的な許可が必要で、ローカルLLM(Ollama等)ならこの計算機の中で完結します。AIの解説は、解析結果(事実)とは別に管理し、引用を機械的に検証したうえで、根拠を確認できない記述を「未確認」と示します。
@@ -51,7 +51,7 @@ CodeInsight
 └── Presentation    … プロジェクト/ソースコード/構造・依存関係/AI解説の各画面
 ```
 
-各層の詳細な責務分割は [AGENTS.md §5](AGENTS.md#5-システムアーキテクチャ)、実装のモジュール構成は [ARCHITECTURE.md](ARCHITECTURE.md) を参照してください。
+各層の詳細な責務分割は [AGENTS.md §5](AGENTS.md#5-システムアーキテクチャ)、実装のモジュール構成は [ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
 
 ## セットアップ
 
@@ -92,7 +92,7 @@ TARGET=/絶対パス/my-repo docker compose --profile reading run --rm reading  
 TARGET=/絶対パス/my-repo MODEL=qwen3-coder:latest AI_SEND=1 docker compose run --rm --entrypoint codeinsight codeinsight explain main --project /絶対パス/my-repo   # AI解説はホストの Ollama(host.docker.internal)
 ```
 
-詳細は [OPERATIONS.md](OPERATIONS.md) の「Docker で動かす」。
+詳細は [OPERATIONS.md](docs/OPERATIONS.md) の「Docker で動かす」。
 
 ### コードリーディング資料を一式作る(`make reading`)
 
@@ -167,7 +167,7 @@ uv run codeinsight dynamic-diff                                 # 観測と静�
 uv run codeinsight dynamic-runs                                 # 実行の履歴（実行後にソースが変わったものは古い観測）
 ```
 
-動的解析は、**許可（`--allow-run`）とコマンドの明示が揃った場合だけ**実行し、コンテナ（ネットワーク遮断・対象は読み取り専用）の中で動かします。値は記録しません（[DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md)）。
+動的解析は、**許可（`--allow-run`）とコマンドの明示が揃った場合だけ**実行し、コンテナ（ネットワーク遮断・対象は読み取り専用）の中で動かします。値は記録しません（[DYNAMIC_ANALYSIS.md](docs/DYNAMIC_ANALYSIS.md)）。
 
 ### 追う・探す
 
@@ -258,7 +258,7 @@ uv run codeinsight graph call --format html -o call.html                 # 自�
 
 名前が複数のシンボルに一致する場合は、候補を表示して終了します(修飾名・`--file`、または同名の定義が同じファイルにある場合は `名前@行番号` で絞り込みます)。静的な呼び出し関係は、実行順序や実際に通る経路を示すものではない点に注意してください。
 
-`compile_commands.json` が解析対象ディレクトリにある場合は自動的に利用されます(別の場所は `analyze --compile-commands <ディレクトリ>`)。無い場合は最小限のデフォルト引数で解析し、その旨を警告として表示します(詳細は [ANALYSIS.md](ANALYSIS.md))。
+`compile_commands.json` が解析対象ディレクトリにある場合は自動的に利用されます(別の場所は `analyze --compile-commands <ディレクトリ>`)。無い場合は最小限のデフォルト引数で解析し、その旨を警告として表示します(詳細は [ANALYSIS.md](docs/ANALYSIS.md))。
 
 ### autotools系のCのプロジェクトを解析する
 
@@ -273,7 +273,7 @@ uv run codeinsight analyze /path/to/project --compile-commands /tmp/build
 
 * 相対パス(`-I.`)の解決、システムヘッダーの探索、ファイルを書き出すオプション(`-MMD -MF` など)の除去を、CodeInsightが補います。
 * 記録に載っていないファイルやヘッダーは、近隣の設定・取り込む側のソースの設定を使って解析します。その場合は「推定」と警告に記録します。
-* 実測(gccのlibiberty: 解析できたファイル 10 → 131 / 139)は [TESTING.md](TESTING.md)。
+* 実測(gccのlibiberty: 解析できたファイル 10 → 131 / 139)は [TESTING.md](docs/TESTING.md)。
 
 ## テスト
 
@@ -282,18 +282,18 @@ uv run pytest -v   # または make test
 make lint          # ruff と mypy(CIと同じ)
 ```
 
-詳細は [TESTING.md](TESTING.md) を参照してください。
+詳細は [TESTING.md](docs/TESTING.md) を参照してください。
 
 ## ドキュメント
 
 * [AGENTS.md](AGENTS.md) — 開発目的・機能要件・非機能要件・アーキテクチャ・開発フェーズを含む開発指示書
-* [ARCHITECTURE.md](ARCHITECTURE.md) — 実装したモジュール構成と依存関係
-* [ANALYSIS.md](ANALYSIS.md) — 解析方式と既知の制約
-* [REQUIREMENTS.md](REQUIREMENTS.md) — 要件に対する実装状況の要約
-* [TESTING.md](TESTING.md) — テスト方法と実行結果
-* [DYNAMIC_ANALYSIS.md](DYNAMIC_ANALYSIS.md) — 動的解析の設計と現状（機能案・許可モデル・隔離・データモデル・段階的な導入。段階1のPython実行を実装済み）
-* [OPERATIONS.md](OPERATIONS.md) — 運用ガイド（導入・日常の運用・言語別の手順・資料の作成・AI解説の安全な運用・結果の読み方・トラブルシューティング・保守）
-* [CHANGELOG.md](CHANGELOG.md) — 変更履歴
+* [ARCHITECTURE.md](docs/ARCHITECTURE.md) — 実装したモジュール構成と依存関係
+* [ANALYSIS.md](docs/ANALYSIS.md) — 解析方式と既知の制約
+* [REQUIREMENTS.md](docs/REQUIREMENTS.md) — 要件に対する実装状況の要約
+* [TESTING.md](docs/TESTING.md) — テスト方法と実行結果
+* [DYNAMIC_ANALYSIS.md](docs/DYNAMIC_ANALYSIS.md) — 動的解析の設計と現状（機能案・許可モデル・隔離・データモデル・段階的な導入。段階1のPython実行を実装済み）
+* [OPERATIONS.md](docs/OPERATIONS.md) — 運用ガイド（導入・日常の運用・言語別の手順・資料の作成・AI解説の安全な運用・結果の読み方・トラブルシューティング・保守）
+* [CHANGELOG.md](docs/CHANGELOG.md) — 変更履歴
 
 ## ライセンス
 

@@ -893,11 +893,11 @@ Phaseの順序に従い、機能単位で実装する。
 以下の資料を整備する。
 
 * README.md：概要、インストール、起動方法
-* ARCHITECTURE.md：システム構成と依存関係
-* REQUIREMENTS.md：機能要件および非機能要件
-* ANALYSIS.md：解析方式と解析上の制約
-* TESTING.md：テスト方法と検証結果
-* CHANGELOG.md：変更履歴
+* docs/ARCHITECTURE.md：システム構成と依存関係
+* docs/REQUIREMENTS.md：機能要件および非機能要件
+* docs/ANALYSIS.md：解析方式と解析上の制約
+* docs/TESTING.md：テスト方法と検証結果
+* docs/CHANGELOG.md：変更履歴
 
 設計と実装に差異が生じた場合は、実装の実態を確認したうえで資料を更新する。
 

@@ -25,7 +25,7 @@
 #   make reading-pdf OUT=...                                   # 資料の成果物を、1ファイルのPDFにまとめ直す（PDF_NAME= でファイル名）
 #   make reading-clean TARGET=...                              # 成果物（OUT）を削除する（README.md のある場所だけ。対象には触れない）
 #
-# Docker は、このMakefileでは扱わない（docker compose を使う。OPERATIONS.md 10.1c2）。
+# Docker は、このMakefileでは扱わない（docker compose を使う。docs/OPERATIONS.md 10.1c2）。
 
 UV      ?= uv
 PYTEST  ?= $(UV) run pytest

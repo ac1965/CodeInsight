@@ -23,7 +23,7 @@ CodeInsight のビューアーは、解析結果を、ブラウザで読むた�
 * トークンは、**サーバーを起動するたびに変わります**（再起動・`docker compose up` のやり直しでも）。再読み込みや、履歴・ブックマークのURLにはトークンがないため、「開けません（401）」と出ます。そのときは、起動したターミナル（Docker は `docker compose logs codeinsight`）に出た**最新のURL**を開いてください。
 * 毎回同じURLで開きたい場合は、環境変数 `CODEINSIGHT_VIEWER_TOKEN`（16文字以上の英数字と `-` `_`。Docker は `.env` の `VIEWER_TOKEN`）で固定できます。
 * ポート 8765 が使用中の場合は、`PORT=` や `--port`（`0` で空きポート）で変えるか、古い `serve` を止めてください（Docker は、ホスト側とコンテナ側のポートを同じ値にします）。
-* Docker の詳細は、OPERATIONS.md の「Docker で動かす」を参照してください。
+* Docker の詳細は、docs/OPERATIONS.md の「Docker で動かす」を参照してください。
 
 ## 1. 上部の操作（グラフ）
 

@@ -2,7 +2,7 @@
 
 このガイドは、CodeInsight を**使い続ける人・保守する人**のための詳説です。インストールから日常の使い方、対象の追加、AI解説の安全な運用、成果物（コードリーディング資料）の作成、品質の読み方、トラブルシューティング、保守までを、運用の順に説明します。
 
-関連文書: 概要・使い方は [README.md](README.md)、解析方式と限界は [ANALYSIS.md](ANALYSIS.md)、構成は [ARCHITECTURE.md](ARCHITECTURE.md)、要件の充足状況と課題は [REQUIREMENTS.md](REQUIREMENTS.md)、検証結果は [TESTING.md](TESTING.md)、変更履歴は [CHANGELOG.md](CHANGELOG.md)。
+関連文書: 概要・使い方は [README.md](../README.md)、解析方式と限界は [ANALYSIS.md](ANALYSIS.md)、構成は [ARCHITECTURE.md](ARCHITECTURE.md)、要件の充足状況と課題は [REQUIREMENTS.md](REQUIREMENTS.md)、検証結果は [TESTING.md](TESTING.md)、変更履歴は [CHANGELOG.md](CHANGELOG.md)。
 
 ## 目次
 
@@ -27,7 +27,7 @@
 
 **目的**: 既存のソースコード（主にC言語・Python。C++・Go・Emacs Lispにも対応）を、静的解析で確認できる事実に基づいて読み解くことを支援します。構造・呼び出し関係・依存・データの流れ・失敗時の挙動を、根拠（ファイル・行）つきで示します。
 
-**守る原則**（[AGENTS.md](AGENTS.md) §1）:
+**守る原則**（[AGENTS.md](../AGENTS.md) §1）:
 
 | 原則 | 運用上の意味 |
 | --- | --- |
@@ -40,7 +40,7 @@
 
 ### 1.1 現時点では行わないことと将来の検討
 
-次の6項目は、今は提供していませんが、将来の対応を検討しています。いずれも [AGENTS.md](AGENTS.md) の原則（事実と推論の分離、根拠へのたどり着き、解析器とAIの責務分離、非侵襲）の範囲で行う必要があり、**項目ごとに守る条件が異なります**。
+次の6項目は、今は提供していませんが、将来の対応を検討しています。いずれも [AGENTS.md](../AGENTS.md) の原則（事実と推論の分離、根拠へのたどり着き、解析器とAIの責務分離、非侵襲）の範囲で行う必要があり、**項目ごとに守る条件が異なります**。
 
 | 項目 | 現状 | 将来やる場合に守る条件 | 位置づけ（AGENTS.md） |
 | --- | --- | --- | --- |
@@ -540,19 +540,19 @@ make reading-serve TARGET=../my-repo                         # 解析して、�
 * **ソースの取得**は、解析対象のファイル（プロジェクトのルートの中）に限ります。解析後にファイルが変更されている場合は、「古い」と表示します（`/api/refresh` 相当の「再読み込み」は、ページの再読み込みではなく、サーバーの再起動か `analyze` 後の再接続で）。
 * APIの一覧: `/api/project`・`/api/symbols`・`/api/graph`・`/api/source`・`/api/extract`・`/api/refresh`。入力は種類・長さ・範囲を検査し、内部のエラーの詳細は応答に出しません。
 
-**画面と操作**（ビューアーの「使い方」にも、同じ内容があります。[ビューアーの使い方](src/codeinsight/web/guide/VIEWER.md)）:
+**画面と操作**（ビューアーの「使い方」にも、同じ内容があります。[ビューアーの使い方](../src/codeinsight/web/guide/VIEWER.md)）:
 
-![上部の操作](src/codeinsight/web/guide/images/01-controls.png)
+![上部の操作](../src/codeinsight/web/guide/images/01-controls.png)
 
 1. 表示の切り替え（グラフ / 資料 / 使い方）、2. 起点にするシンボル、3. グラフの種類、4. 方向、5. 深さ、6. 描画。**種類・方向・深さを変えると、すぐに描き直します**。グラフでノードを選ぶと、下のパネルにソースが出ます。
 
-![起点を中心にした Depends On / Depended On By](src/codeinsight/web/guide/images/02-depends-on.png)
+![起点を中心にした Depends On / Depended On By](../src/codeinsight/web/guide/images/02-depends-on.png)
 
 左が Depended On By（起点に依存している側）、右が Depends On（起点が依存している側）です。
 
 **表示の切り替え**（画面左上の「グラフ / 資料 / 使い方」）:
 
-![資料](src/codeinsight/web/guide/images/06-reading.png)
+![資料](../src/codeinsight/web/guide/images/06-reading.png)
 
 * **資料**: `make reading` が作った資料（目次・全体像・アーキテクチャ・境界・設定・外部連携・リスク・主要な関数の読解カード・AI解説）を、左の一覧から選んで読みます。Markdownは整形して表示し、本文中の `ファイル:行`（例: `narou_dl/gui/worker.py:227`）は**リンク**になり、クリックすると下のパネルにそのソースが表示されます。資料の出力先がある場合（`make reading`）は、最初にこの画面を開きます。資料の出力先の外やログ・PDF・シンボリックリンクは、読めません。
 * **使い方**: ビューアーの操作説明（画像つき）。
